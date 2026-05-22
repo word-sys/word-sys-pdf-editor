@@ -5,7 +5,7 @@ word-sys-pdf-editor (1.9.1) bookworm; urgency=medium
   * Restructured top toolbar to be responsive with a two-line editing mode layout
   * Integrated native XDG file picker instead of the custom GTK one
   * Cleaned up obsolete icon assets and updated About dialog to use PNG internally
-  * Set minimal window size support down to ~500px
+  * Set minimal window size support down to ~600px
 
  -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Fri, 22 May 2026 12:58:00 +0300
 

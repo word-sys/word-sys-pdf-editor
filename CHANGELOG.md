@@ -6,7 +6,6 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **System Integration**: Integrated native XDG file picker via `Gtk.FileChooserNative`.
-- **Packaging automation**: Added AppImage and standalone ZIP binary build automation script and GitHub Action workflow.
 
 ### Fixed
 - **Oversized Layout**: Split the top toolbar into a two-line layout in Edit mode to reduce minimum window width to ~500px, resolving the PDF page centering issue when resizing.
