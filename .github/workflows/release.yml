@@ -29,11 +29,13 @@ jobs:
             gir1.2-gtk-4.0 \
             gir1.2-adw-1 \
             gir1.2-gtk-3.0 \
-            libglib2.0-dev \
             libgtk-4-dev \
             libadwaita-1-dev \
             libcairo2-dev \
             libgirepository1.0-dev \
+            libglib2.0-dev \
+            libglib2.0-dev-bin \
+            libgio2.0-cil-dev \
             pkg-config \
             patchelf \
             desktop-file-utils \
