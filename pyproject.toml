@@ -7,7 +7,7 @@ name = "word-sys-pdf-editor"
 description = "An open-source tool for editing content in PDF files on Linux"
 readme = "README.md"
 authors = [
-    { name = "Barın Güzeldemirci (word-sys) [word-sys]" },
+    { name = "Barın Güzeldemirci (word-sys)" },
 ]
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]

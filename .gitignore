@@ -24,8 +24,3 @@ obj-*/
 
 .vscode/
 .idea/
-
-appimagetool
-*.AppImage
-*.zip
-AppDir/

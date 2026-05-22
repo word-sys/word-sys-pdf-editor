@@ -10,3 +10,4 @@ Categories=Office;Graphics;GTK;
 Keywords=PDF;Editor;Text;word-sys;
 MimeType=application/pdf;
 StartupNotify=true
+StartupWMClass=org.word-sys.pdfeditor
