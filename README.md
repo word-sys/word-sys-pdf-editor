@@ -15,7 +15,6 @@ License: **GPL-3.0-or-later**
 
 <img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" width="1460" height="960"/>
 <img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" width="1460" height="960"/>
-<img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png" width="1460" height="960"/>
 
 
 ## Key Features
@@ -44,7 +43,7 @@ License: **GPL-3.0-or-later**
 
 ## Installation
 
-There are two ways to install word-sys's PDF Editor on your system:
+There are many ways to install word-sys's PDF Editor on your system:
 
 ### 1. Automatic Installation (Recommended Method)
 
@@ -70,7 +69,24 @@ This method is the easiest installation path for Linux distributions.
 
 ---
 
-### 2. Manual Installation (For Developers or Those Who Want to Build from Source)
+### 2. AppImage or Binary Release (Second Recommended Method)
+
+This method is one of the the easiest installation path for Linux distributions.
+
+1.  Download the latest `.AppImage` or binary release from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named something like `word-sys-pdf-editor-linux-x86_64.zip` or `word-sys-pdf-editor-x86_64.AppImage`.
+
+    > [!TIP]
+    > **Use version 1.9.1** for the most stable experience: look for `word-sys-pdf-editor-linux-x86_64.zip` or `word-sys-pdf-editor-x86_64.AppImage` on the release 1.9.1 page.
+
+2.  Open a file manager and go to your location which you installed the file
+
+3.  Unzip (For binary release only, if you using AppImage you can skip this step)
+
+4.  You can now run word-sys's PDF Editor
+
+---
+
+### 3. Manual Installation (For Developers or Those Who Want to Build from Source)
 
 This method is suitable for users who want to run the application directly from source code or contribute to development.
 
