@@ -28,6 +28,8 @@ jobs:
             python3-pip \
             gir1.2-gtk-4.0 \
             gir1.2-adw-1 \
+            gir1.2-gtk-3.0 \
+            libglib2.0-dev \
             libgtk-4-dev \
             libadwaita-1-dev \
             libcairo2-dev \
