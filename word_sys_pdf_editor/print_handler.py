@@ -12,6 +12,7 @@ from .i18n import _
 
 
 def print_document(parent_window, doc):
+    """Run GTK native print operation for a PDF document."""
     if not doc or doc.page_count == 0:
         return False, _("print_no_doc")
 
@@ -31,6 +32,7 @@ def print_document(parent_window, doc):
         print_op.set_current_page(parent_window.current_page_index)
 
     def on_draw_page(operation, print_context, page_nr):
+        """Draw the specified PDF page onto the print Cairo context."""
         try:
             cr = print_context.get_cairo_context()
 
@@ -96,6 +98,7 @@ def print_document(parent_window, doc):
             traceback.print_exc()
 
     def on_done(operation, result):
+        """Handle the done event."""
         if result == Gtk.PrintOperationResult.ERROR:
             print("PRINT ERROR")
         elif result == Gtk.PrintOperationResult.APPLY:

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.1] - 2026-05-22
+
+### Added
+- **System Integration**: Integrated native XDG file picker via `Gtk.FileChooserNative`.
+- **Packaging automation**: Added AppImage and standalone ZIP binary build automation script and GitHub Action workflow.
+
+### Fixed
+- **Oversized Layout**: Split the top toolbar into a two-line layout in Edit mode to reduce minimum window width to ~500px, resolving the PDF page centering issue when resizing.
+- **Context Menu Popover**: Corrected spawning coordinate calculations so the right-click context menu points directly to the mouse cursor.
+- **Localizations**: Localized all previously hardcoded Turkish error/status messages into English and Turkish using the `i18n` translation tables.
+- **Icon Assets**: Removed obsolete files (`icon.png`, `icon.svg`, `icon256.png`, `icon256.svg`) from the repository, while preserving `f-pv1.svg` for system integration.
+
+---
+
 ## [1.9.0] - 2026-05-06
 
 ### Added

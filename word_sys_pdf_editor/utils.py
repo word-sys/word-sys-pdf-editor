@@ -4,23 +4,26 @@ from pathlib import Path
 import re
 import threading
 from gi.repository import GLib
+from .i18n import _
 
 FONT_SCAN_COMPLETED = threading.Event()
 SYSTEM_FONTS = {}
 FONT_FAMILY_LIST_SORTED = []
 
 def _get_embedded_font_dir():
+    """Retrieve the embedded fonts directory within the package."""
     try:
         base_dir = Path(__file__).resolve().parent
         fonts_dir = base_dir / "fonts"
         if fonts_dir.is_dir():
-            print(f"DEBUG: Gömülü font klasörü bulundu: {fonts_dir}")
+            print(_("dbg_embedded_font_found", fonts_dir))
             return fonts_dir
     except Exception as e:
-        print(f"HATA: Gömülü font klasörü bulunamadı: {e}")
+        print(_("err_embedded_font_not_found", e))
     return None
 
 def _get_font_dirs():
+    """Get all potential directory paths that contain system fonts."""
     font_dirs = []
 
     embedded_dir = _get_embedded_font_dir()
@@ -52,6 +55,7 @@ def _get_font_dirs():
     return font_dirs
 
 def parse_font_name(filename):
+    """Parse font name and extract family name and weight/slant style."""
     name_part = filename.stem
 
     styles_map = {
@@ -89,7 +93,9 @@ def parse_font_name(filename):
     return display_family_name, detected_style_key
 
 def scan_system_fonts_async(callback_on_done=None):
+    """Scan system fonts async."""
     def _scan():
+        """Scan."""
         global SYSTEM_FONTS, FONT_FAMILY_LIST_SORTED, FONT_SCAN_COMPLETED
         print("Sistem ve gömülü font taraması başlıyor...")
         font_dirs = _get_font_dirs()
@@ -106,12 +112,12 @@ def scan_system_fonts_async(callback_on_done=None):
                             if style_key not in temp_fonts_data[family_name]:
                                 temp_fonts_data[family_name][style_key] = str(item)
             except Exception as e:
-                print(f"Uyarı: Klasör taranırken hata oluştu {directory}: {e}")
+                print(_("warn_scanning_dir", directory, e))
 
         SYSTEM_FONTS = temp_fonts_data
         FONT_FAMILY_LIST_SORTED = sorted(SYSTEM_FONTS.keys())
         FONT_SCAN_COMPLETED.set()
-        print(f"Font taraması tamamlandı. {len(FONT_FAMILY_LIST_SORTED)} font ailesi bulundu.")
+        print(_("font_scan_completed", len(FONT_FAMILY_LIST_SORTED)))
 
         if callback_on_done:
             GLib.idle_add(callback_on_done)
@@ -120,11 +126,12 @@ def scan_system_fonts_async(callback_on_done=None):
     thread.start()
 
 def find_specific_font_variant(family_name, is_bold=False, is_italic=False):
+    """Find specific font variant."""
     if not FONT_SCAN_COMPLETED.is_set():
-        print("Varyant bulmadan önce font taramasının bitmesi bekleniyor...")
+        print(_("wait_font_scan"))
         FONT_SCAN_COMPLETED.wait(timeout=5)
         if not FONT_SCAN_COMPLETED.is_set():
-            print("HATA: Font taraması zaman aşımına uğradı.")
+            print(_("err_font_scan_timeout"))
             return None
 
     normalized_family_name = family_name.replace(" ", "").lower() if family_name else ""
@@ -176,6 +183,7 @@ def find_specific_font_variant(family_name, is_bold=False, is_italic=False):
 UNICODE_FONT_PATH = None
 
 def get_default_unicode_font_path():
+    """Get the default unicode font path."""
     global UNICODE_FONT_PATH
     if UNICODE_FONT_PATH:
         return UNICODE_FONT_PATH
@@ -210,6 +218,7 @@ def get_default_unicode_font_path():
 
 
 def normalize_color(color_val):
+    """Normalize color."""
     if color_val is None:
         return (0.0, 0.0, 0.0)
 

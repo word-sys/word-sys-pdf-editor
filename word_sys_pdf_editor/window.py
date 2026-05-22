@@ -25,7 +25,9 @@ from .ui_components import PageThumbnailFactory, show_error_dialog, show_confirm
 from . import utils
 
 class PdfEditorWindow(Adw.ApplicationWindow):
+    """The PdfEditorWindow class."""
     def __init__(self, *args, **kwargs):
+        """Initialize the PdfEditorWindow."""
         super().__init__(*args, **kwargs)
         self.set_title(constants.APP_NAME)
         self.set_default_size(1200, 800)
@@ -102,6 +104,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         utils.scan_system_fonts_async(callback_on_done=self._on_font_scan_complete)
 
     def _on_font_scan_complete(self):
+        """Handle the font scan complete event."""
         self.font_scan_in_progress = False
         self.font_scan_in_progress = False
         print("DEBUG: _on_font_scan_complete triggered.")
@@ -119,6 +122,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_ui_state()
 
     def _populate_font_combo(self):
+        """Populate font combo."""
         print(f"DEBUG: Populating font combo. utils.FONT_SCAN_COMPLETED: {utils.FONT_SCAN_COMPLETED.is_set()}")
         print(f"DEBUG: utils.FONT_FAMILY_LIST_SORTED has {len(utils.FONT_FAMILY_LIST_SORTED)} items.")
 
@@ -139,6 +143,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_ui_state()
 
     def _apply_css(self):
+        """Apply CSS."""
         css_provider = Gtk.CssProvider()
         css_provider.load_from_data(b"""
             .toolbar { padding: 6px; }
@@ -173,6 +178,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         )
 
     def _build_ui(self):
+        """Build UI."""
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_content(self.main_box)
 
@@ -278,6 +284,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.main_box.append(status_bar_box)
 
     def _create_sidebar(self):
+        """Create sidebar."""
         sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
                             margin_start=6, margin_end=6, margin_top=10, margin_bottom=6)
         sidebar_box.set_size_request(190, -1)
@@ -363,8 +370,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.paned.set_start_child(sidebar_box)
 
     def _create_main_toolbar(self):
-        self.main_toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        """Create main toolbar."""
+        self.main_toolbar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.main_toolbar.add_css_class('toolbar')
+
+        self.toolbar_row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.toolbar_row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.main_toolbar.append(self.toolbar_row1)
+        self.main_toolbar.append(self.toolbar_row2)
 
         zoom_out = Gtk.Button.new_from_icon_name("zoom-out-symbolic")
         zoom_out.set_tooltip_text(_("zoom_out_tip"))
@@ -373,11 +386,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         zoom_in = Gtk.Button.new_from_icon_name("zoom-in-symbolic")
         zoom_in.set_tooltip_text(_("zoom_in_tip"))
         zoom_in.connect("clicked", self.on_zoom_in)
-        self.main_toolbar.append(zoom_out)
-        self.main_toolbar.append(self.zoom_label)
-        self.main_toolbar.append(zoom_in)
+        self.toolbar_row1.append(zoom_out)
+        self.toolbar_row1.append(self.zoom_label)
+        self.toolbar_row1.append(zoom_in)
 
-        self.main_toolbar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6))
+        self.toolbar_row1.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6))
 
         self.prev_button = Gtk.Button.new_from_icon_name("go-previous-symbolic")
         self.prev_button.set_tooltip_text(_("prev_page_tip"))
@@ -389,13 +402,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.add_page_button = Gtk.Button.new_from_icon_name("document-new-symbolic")
         self.add_page_button.set_tooltip_text(_("add_page_tip"))
         self.add_page_button.connect("clicked", self.on_add_page)
-        self.main_toolbar.append(self.prev_button)
-        self.main_toolbar.append(self.page_label)
-        self.main_toolbar.append(self.next_button)
-        self.main_toolbar.append(self.add_page_button)
+        self.toolbar_row1.append(self.prev_button)
+        self.toolbar_row1.append(self.page_label)
+        self.toolbar_row1.append(self.next_button)
+        self.toolbar_row1.append(self.add_page_button)
 
         self.text_format_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
-        self.main_toolbar.append(self.text_format_sep)
+        self.toolbar_row2.append(self.text_format_sep)
+        self.text_format_sep.set_visible(False)
 
         self.text_format_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.font_store = Gtk.ListStore(str, str)
@@ -438,10 +452,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.color_button.set_tooltip_text(_("color_tip"))
         self.color_button.connect("color-set", self.on_text_format_changed)
         self.text_format_box.append(self.color_button)
-        self.main_toolbar.append(self.text_format_box)
+        self.toolbar_row2.append(self.text_format_box)
 
         self.shape_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
-        self.main_toolbar.append(self.shape_toolbar_sep)
+        self.toolbar_row2.append(self.shape_toolbar_sep)
+        self.shape_toolbar_sep.set_visible(False)
 
         self.shape_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.shape_fill_button = Gtk.ColorButton()
@@ -473,12 +488,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.shape_stroke_width_spin.set_tooltip_text(_("shape_width_tip"))
         self.shape_stroke_width_spin.connect("value-changed", self.on_shape_format_changed)
         self.shape_toolbar_box.append(self.shape_stroke_width_spin)
-        self.main_toolbar.append(self.shape_toolbar_box)
+        self.toolbar_row2.append(self.shape_toolbar_box)
         self.shape_toolbar_box.set_visible(False)
-        self.shape_toolbar_sep.set_visible(False)
 
         self.view_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
-        self.main_toolbar.append(self.view_toolbar_sep)
+        self.toolbar_row1.append(self.view_toolbar_sep)
         self.view_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         
         self.highlight_color_button = Gtk.ColorButton()
@@ -498,11 +512,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.remove_highlight_button.connect("clicked", self.on_remove_highlight_clicked)
         self.view_toolbar_box.append(self.remove_highlight_button)
         
-        self.main_toolbar.append(self.view_toolbar_box)
+        self.toolbar_row1.append(self.view_toolbar_box)
         self.view_toolbar_box.set_visible(False)
         self.view_toolbar_sep.set_visible(False)
 
     def _setup_controllers(self):
+        """Setup controllers."""
         drop_target = Gtk.DropTarget.new(Gio.File, Gdk.DragAction.COPY)
         drop_target.connect('drop', self.on_drop)
         self.add_controller(drop_target)
@@ -541,6 +556,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.thumbnails_list.add_controller(thumbnail_drop)
 
     def _connect_actions(self):
+        """Connect actions."""
         action_save_as = Gio.SimpleAction.new('save_as', None)
         action_save_as.connect('activate', self.on_save_as)
         self.add_action(action_save_as)
@@ -576,6 +592,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             app.set_accels_for_action("win.print", ["<Control>p"])
 
     def _update_ui_state(self):
+        """Update UI state."""
         has_doc = self.doc is not None
         page_count = pdf_handler.get_page_count(self.doc) if self.doc else 0
         has_pages = page_count > 0
@@ -617,9 +634,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         format_enabled_base = in_edit and ((text_selected or self.tool_mode == "add_text") and
                                self.selected_image is None and not shape_selected)
 
+        if hasattr(self, 'toolbar_row2'):
+            self.toolbar_row2.set_visible(in_edit and has_doc)
+
         if hasattr(self, 'text_format_box'):
             self.text_format_box.set_visible(in_edit and not shape_controls_active)
-            self.text_format_sep.set_visible(in_edit and not shape_controls_active)
+            self.text_format_sep.set_visible(False)
 
         self.font_combo.set_sensitive(format_enabled_base and not self.font_scan_in_progress)
         self.font_size_spin.set_sensitive(format_enabled_base)
@@ -631,7 +651,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if hasattr(self, 'shape_toolbar_box'):
             self.shape_toolbar_box.set_visible(shape_controls_active)
-            self.shape_toolbar_sep.set_visible(shape_controls_active)
+            self.shape_toolbar_sep.set_visible(False)
 
         self.shape_fill_button.set_sensitive(shape_controls_active)
         self.shape_stroke_button.set_sensitive(shape_controls_active)
@@ -719,6 +739,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_undo_redo_buttons()
 
     def on_about_activated(self, action, param):
+        """Handle the about activated event."""
         about_dialog = Gtk.AboutDialog(transient_for=self, modal=True)
 
         about_dialog.set_program_name(constants.APP_NAME)
@@ -753,7 +774,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         about_dialog.set_comments(_("about_comments"))
 
         try:
-            app_icon_path = Path(__file__).resolve().parent / "img" / "f-pv1.svg"
+            app_icon_path = Path(__file__).resolve().parent / "img" / "f-pv1.png"
             if app_icon_path.exists():
                 texture = Gdk.Texture.new_from_filename(str(app_icon_path))
                 about_dialog.set_logo(texture)
@@ -768,6 +789,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
 
     def load_document(self, filepath, target_page=0):
+        """Load document."""
         if self.check_unsaved_changes():
             return
 
@@ -777,6 +799,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         GLib.idle_add(self._show_loading_state)
 
         def _load_async():
+            """Load async."""
             doc, error_msg = pdf_handler.load_pdf_document(filepath)
             GLib.idle_add(self._finish_loading, doc, error_msg, filepath, target_page)
 
@@ -785,6 +808,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         thread.start()
 
     def _show_loading_state(self):
+        """Show loading state."""
         self.open_button.set_sensitive(False)
         self.save_button.set_sensitive(False)
         self.lookup_action("save_as").set_enabled(False)
@@ -800,6 +824,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
 
     def _finish_loading(self, doc, error_msg, filepath, target_page=0):
+        """Finish loading."""
         if error_msg:
             show_error_dialog(self, error_msg)
             self.status_label.set_text(_("doc_load_failed"))
@@ -808,7 +833,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.doc = doc
             self.is_repaired_file = doc.is_repaired
             if self.is_repaired_file:
-                print("DEBUG: Bu PDF dosyası açılırken onarıldı.")
+                print(_("dbg_repaired_while_opening"))
             self.current_file_path = filepath
             self.original_file_path = filepath
             self.allow_incremental_save = True
@@ -827,6 +852,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_ui_state()
 
     def _load_thumbnails(self):
+        """Load thumbnails."""
         if not self.doc:
             return
 
@@ -835,6 +861,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.thumb_load_iter = 0
         def _load_next_thumb():
+            """Load next thumb."""
             if self.thumb_load_iter < page_count:
                 index = self.thumb_load_iter
                 
@@ -864,6 +891,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
 
     def _load_page(self, page_index, preserve_scroll=False):
+        """Load page."""
         current_v_scroll = 0
         current_h_scroll = 0
         if preserve_scroll:
@@ -936,6 +964,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         GLib.idle_add(lambda: pdf_handler.save_page_snapshot(self.doc, page_index) if self.doc else None)
 
     def close_document(self):
+        """Close document."""
         self.undo_manager.clear()
         self.is_repaired_file = False
         if self.doc:
@@ -959,6 +988,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_ui_state()
 
     def go_to_welcome(self):
+        """Go to welcome."""
         if self.doc and self.document_modified:
             response = show_save_changes_dialog(self)
             if response == "save":
@@ -989,6 +1019,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
 
     def save_document(self, save_path, incremental=False):
+        """Save document."""
         if not self.doc or self.is_saving:
             return
         page_to_restore = self.current_page_index
@@ -1001,17 +1032,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.is_saving = False
         
         if success:
-            print(f"DEBUG: Kayıt başarılı. Dosya yeniden yükleniyor: {save_path}")
+            print(_("dbg_save_success", save_path))
             self.document_modified = False 
             self.load_document(save_path, target_page=page_to_restore)
             self.status_label.set_text(_("saved").format(os.path.basename(save_path)))
         else:
-            show_error_dialog(self, f"PDF kaydedilirken hata oluştu: {error_msg}")
+            show_error_dialog(self, _("err_pdf_save", error_msg))
             self.status_label.set_text(_("save_failed"))
 
         self._update_ui_state()
 
     def draw_pdf_page(self, area, cr, width, height):
+        """Draw PDF page."""
         if not self.doc or self.current_pdf_page_width <= 0:
             cr.set_source_rgb(0.42, 0.42, 0.42)
             cr.paint()
@@ -1408,6 +1440,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.restore()
 
     def _find_text_at_pos(self, page_x, page_y):
+        """Find text at pos."""
         for text_obj in reversed(self.editable_texts):
             if not text_obj.bbox: continue
             x1, y1, x2, y2 = text_obj.bbox
@@ -1418,6 +1451,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return None
 
     def _find_image_at_pos(self, page_x, page_y):
+        """Find image at pos."""
         for img_obj in reversed(self.editable_images):
             if not img_obj.bbox: continue
             x1, y1, x2, y2 = img_obj.bbox
@@ -1426,6 +1460,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return None
 
     def _find_shape_at_pos(self, page_x, page_y):
+        """Find shape at pos."""
         for shape_obj in reversed(self.editable_shapes):
             if shape_obj.page_number != self.current_page_index:
                 continue
@@ -1439,6 +1474,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return None
 
     def _find_resize_handle_at_pos(self, drawn_x, drawn_y, selected_obj):
+        """Find resize handle at pos."""
         if not selected_obj or not selected_obj.bbox:
             return None
         
@@ -1476,18 +1512,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return None
 
     def _handle_add_image_action(self, page_x_unzoomed, page_y_unzoomed):
+        """Handle add image action."""
         dialog = Gtk.FileChooserDialog(
-            title="Lütfen bir resim dosyası seçin",
-            transient_for=self, modal=True, action=Gtk.FileChooserAction.OPEN
+            title=_("image_select_title"),
+            transient_for=self, action=Gtk.FileChooserAction.OPEN
         )
-        dialog.add_buttons("_İptal", Gtk.ResponseType.CANCEL, "_Aç", Gtk.ResponseType.ACCEPT)
+        dialog.add_buttons(
+            _("btn_cancel_label"), Gtk.ResponseType.CANCEL,
+            _("btn_open_label"), Gtk.ResponseType.ACCEPT
+        )
 
-        filter_img = Gtk.FileFilter(name="Resim dosyaları")
+        filter_img = Gtk.FileFilter(name=_("image_filter_label"))
         for mime in ["image/png", "image/jpeg", "image/gif", "image/bmp"]:
             filter_img.add_mime_type(mime)
         dialog.add_filter(filter_img)
 
         def on_response(d, response_id):
+            """Handle the dialog response event."""
             if response_id == Gtk.ResponseType.ACCEPT:
                 file = d.get_file()
                 if file:
@@ -1516,13 +1557,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self.undo_manager.add_command(command) 
 
                     except Exception as e:
-                        show_error_dialog(self, f"Resim dosyası işlenirken bir hata oluştu:\n{e}", "Resim Hatası")
+                        show_error_dialog(self, _("image_add_error", e), _("image_error_title"))
             d.destroy()
 
         dialog.connect("response", on_response)
-        dialog.present()
+        dialog.show()
 
     def _update_text_format_controls(self, text_obj):
+        """Update text format controls."""
         if not text_obj or self.font_scan_in_progress:
             if self.tool_mode == "add_text":
                 return
@@ -1594,7 +1636,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             elif len(self.font_store) > 0:
                  self.font_combo.set_active(0)
             
-            self.font_combo.set_tooltip_text(f"Yazı Tipi Ailesi (Orijinal PDF: {text_obj.font_family_original})")
+            self.font_combo.set_tooltip_text(_("font_tip_original", text_obj.font_family_original))
 
             self.font_size_spin.set_value(text_obj.font_size)
             rgba = Gdk.RGBA(); rgba.red, rgba.green, rgba.blue = text_obj.color; rgba.alpha = 1.0
@@ -1610,6 +1652,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     if widget: widget.handler_unblock_by_func(self.on_text_format_changed)
 
     def _get_current_format_settings(self):
+        """Get the current format settings."""
         font_family_display = "Sans"
         font_pdf_name = "helv"
         iter = self.font_combo.get_active_iter()
@@ -1629,6 +1672,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return font_family_display, font_pdf_name, font_size, color, is_bold, is_italic, is_underline
 
     def _update_shape_format_controls(self, shape_obj):
+        """Update shape format controls."""
         try:
             self.shape_fill_button.handler_block_by_func(self.on_shape_format_changed)
             self.shape_stroke_button.handler_block_by_func(self.on_shape_format_changed)
@@ -1665,6 +1709,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.shape_stroke_width_spin.handler_unblock_by_func(self.on_shape_format_changed)
 
     def _show_inline_editor(self, text_obj, click_x=None, click_y=None):
+        """Show inline editor."""
         self._hide_inline_editor()
         if not text_obj:
             return
@@ -1721,6 +1766,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         GLib.idle_add(tv.grab_focus)
 
     def _hide_inline_editor(self):
+        """Hide inline editor."""
         if self.inline_editor_widget:
             if hasattr(self, 'pdf_overlay') and self.pdf_overlay:
                 self.pdf_overlay.remove_overlay(self.inline_editor_widget)
@@ -1729,6 +1775,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.inline_editor_text_obj = None
 
     def _commit_inline_edit(self):
+        """Commit inline edit."""
         if not hasattr(self, 'inline_editor_tv') or not self.inline_editor_tv or not self.inline_editor_text_obj:
             self._hide_inline_editor()
             return
@@ -1742,6 +1789,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._hide_inline_editor()
 
         def _calc_bbox(obj, text):
+            """Calc bbox."""
             x1, y1 = obj.x, obj.y
             _surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
             _cr = cairo.Context(_surf)
@@ -1788,6 +1836,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
     def _on_inline_editor_focus_leave(self, controller):
+        """Handle the inline editor focus leave event."""
         focus_widget = self.get_focus()
         if focus_widget:
             curr = focus_widget
@@ -1799,6 +1848,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         GLib.idle_add(self._commit_inline_edit)
 
     def _on_inline_editor_key(self, controller, keyval, keycode, state):
+        """Handle the inline editor key event."""
         if keyval == Gdk.KEY_Escape:
             self._hide_inline_editor()
             self._update_ui_state()
@@ -1807,12 +1857,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def hide_text_editor(self):
+        """Hide text editor."""
         self._hide_inline_editor()
 
     def _apply_and_hide_editor(self, force_apply=False):
+        """Apply and hide editor."""
         self._commit_inline_edit()
 
     def check_unsaved_changes(self):
+        """Check unsaved changes."""
         if self.document_modified:
             response = show_save_changes_dialog(self)
             
@@ -1821,10 +1874,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                      self.save_document(self.current_file_path, incremental=False)
                      return False
                  else:
-                     self.on_save_as(None, None)
-                     return True
+                      self.on_save_as(None, None)
+                      return True
             elif response == Gtk.ResponseType.REJECT:
-                 print("Kaydedilmemiş değişiklikler siliniyor.")
+                 print(_("dbg_discarding_unsaved"))
                  return False
             else:
                  return True
@@ -1832,6 +1885,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def on_drop(self, drop_target, value, x, y):
+        """Handle the drop event."""
         if isinstance(value, Gio.File):
             filepath = value.get_path()
             if filepath and filepath.lower().endswith('.pdf'):
@@ -1843,13 +1897,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def _offer_merge_or_open(self, filepath):
+        """Offer merge or open."""
         dialog = Gtk.MessageDialog(
             transient_for=self,
             modal=True,
             message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.NONE,
-            text="PDF İçeri Aktar",
-            secondary_text=f"'{os.path.basename(filepath)}' dosyasını mevcut PDF'ye birleştirmek veya açmak istediğinizden emin misiniz?"
+            text=_("import_pdf_title"),
+            secondary_text=_("import_pdf_confirm", os.path.basename(filepath))
         )
         
         dialog.add_buttons(
@@ -1859,6 +1914,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
         
         def on_response(d, resp_id):
+            """Handle the dialog response event."""
             d.destroy()
             if resp_id == Gtk.ResponseType.ACCEPT:
                 self._merge_pdf_at_position(filepath, self.current_page_index + 1)
@@ -1871,6 +1927,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         dialog.present()
 
     def _merge_pdf_at_position(self, source_pdf_path, insert_position):
+        """Merge PDF at position."""
         success, message, pages_inserted = pdf_handler.merge_pdf_pages(
             self.doc, source_pdf_path, insert_position
         )
@@ -1882,9 +1939,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._load_page(insert_position)
             self._update_ui_state()
         else:
-            show_error_dialog(self, message, "PDF Birleştirme Hatası")
+            show_error_dialog(self, message, _("err_merge_title"))
 
     def on_thumbnail_drop(self, drop_target, value, x, y):
+        """Handle the thumbnail drop event."""
         if isinstance(value, Gio.File):
             filepath = value.get_path()
             if filepath and filepath.lower().endswith('.pdf'):
@@ -1895,12 +1953,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def on_open_clicked(self, button):
+        """Handle the open clicked event."""
         if self.check_unsaved_changes():
              return
 
-        dialog = Gtk.FileChooserDialog(title="PDF Dosyasını Aç", transient_for=self, modal=True,
-                                       action=Gtk.FileChooserAction.OPEN)
-        dialog.add_buttons("_Cancel", Gtk.ResponseType.CANCEL, "_Open", Gtk.ResponseType.ACCEPT)
+        dialog = Gtk.FileChooserDialog(
+            title=_("open_pdf_title"),
+            transient_for=self, action=Gtk.FileChooserAction.OPEN
+        )
+        dialog.add_buttons(
+            _("btn_cancel_label"), Gtk.ResponseType.CANCEL,
+            _("btn_open_label"), Gtk.ResponseType.ACCEPT
+        )
         filter_pdf = Gtk.FileFilter(name="PDF files (*.pdf)")
         filter_pdf.add_pattern("*.pdf")
         filter_pdf.add_mime_type("application/pdf")
@@ -1910,6 +1974,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         dialog.add_filter(filter_all)
 
         def on_response(d, response):
+            """Handle the dialog response event."""
             if response == Gtk.ResponseType.ACCEPT:
                 file = d.get_file()
                 if file:
@@ -1917,18 +1982,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             d.destroy()
 
         dialog.connect("response", on_response)
-        dialog.present()
+        dialog.show()
 
     def on_save_clicked(self, button):
+        """Handle the save clicked event."""
         self.on_save_as(None, None)
 
     def on_save_as(self, action, param):
+        """Handle the save as event."""
         self.commit_pending_format_change()
         if not self.doc: return
 
-        dialog = Gtk.FileChooserDialog(title="PDF'yi Farklı Kaydet...", transient_for=self, modal=True,
-                                       action=Gtk.FileChooserAction.SAVE)
-        dialog.add_buttons("_Cancel", Gtk.ResponseType.CANCEL, "_Save", Gtk.ResponseType.ACCEPT)
+        dialog = Gtk.FileChooserDialog(
+            title=_("save_as_title"),
+            transient_for=self, action=Gtk.FileChooserAction.SAVE
+        )
+        dialog.add_buttons(
+            _("btn_cancel") if _("btn_cancel") != "btn_cancel" else "Cancel", Gtk.ResponseType.CANCEL,
+            _("btn_save") if _("btn_save") != "btn_save" else "Save", Gtk.ResponseType.ACCEPT
+        )
         dialog.set_current_name(os.path.basename(self.current_file_path or "edited_document.pdf"))
         filter_pdf = Gtk.FileFilter(name="PDF files (*.pdf)")
         filter_pdf.add_pattern("*.pdf")
@@ -1936,6 +2008,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         dialog.add_filter(filter_pdf)
 
         def on_response(d, response):
+            """Handle the dialog response event."""
             if response == Gtk.ResponseType.ACCEPT:
                 file = d.get_file()
                 if file:
@@ -1945,18 +2018,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             d.destroy()
 
         dialog.connect("response", on_response)
-        dialog.present()
+        dialog.show()
 
     def on_export_as(self, action, param):
+        """Handle the export as event."""
         if not self.doc: return
 
-        dialog = Gtk.FileChooserDialog(title="Farklı Dışa Aktar...", transient_for=self, modal=True,
-                                       action=Gtk.FileChooserAction.SAVE)
+        dialog = Gtk.FileChooserDialog(
+            title=_("export_as_title"),
+            transient_for=self, action=Gtk.FileChooserAction.SAVE
+        )
         dialog.add_buttons(
             _("btn_cancel") if _("btn_cancel") != "btn_cancel" else "Cancel", Gtk.ResponseType.CANCEL,
             _("btn_confirm") if _("btn_confirm") != "btn_confirm" else "Confirm", Gtk.ResponseType.ACCEPT
         )
-        dialog.set_default_size(450, -1)
         base_name = Path(self.current_file_path).stem if self.current_file_path else "document"
         dialog.set_current_name(base_name)
 
@@ -1975,6 +2050,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             dialog.add_filter(ff)
 
         def on_response(d, response):
+            """Handle the dialog response event."""
             if response == Gtk.ResponseType.ACCEPT:
                 file = d.get_file()
                 chosen_filter = d.get_filter()
@@ -1985,13 +2061,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             d.destroy()
 
         dialog.connect("response", on_response)
-        dialog.present()
+        dialog.show()
 
     def _execute_export(self, format_name, output_path):
-        self.status_label.set_text(f"Farklı olarak dışa aktarılıyor {format_name}...")
+        """Execute export."""
+        self.status_label.set_text(_("status_exporting", format_name))
 
         success = False
-        error_msg = "Bilinmeyen dışa aktarma biçimi."
+        error_msg = _("err_unknown_export_format")
 
         try:
             if format_name == "DOCX":
@@ -2018,16 +2095,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                  success = False
 
             if success:
-                 self.status_label.set_text(f"Belge olarak dışa aktarıldı {format_name}: {os.path.basename(output_path)}")
+                 self.status_label.set_text(_("status_exported", format_name, os.path.basename(output_path)))
             else:
-                 show_error_dialog(self, f"Dışa Aktarma Başarısız: {error_msg}")
-                 self.status_label.set_text(f"Export as {format_name} failed.")
+                 show_error_dialog(self, _("err_export_failed_msg", error_msg))
+                 self.status_label.set_text(_("err_export_failed_msg", format_name))
 
         except Exception as e:
-             show_error_dialog(self, f"Dışa aktarma sırasında beklenmeyen hata: {e}")
-             self.status_label.set_text("Dışa aktarma başarısız oldu.")
+             show_error_dialog(self, _("err_export_unexpected", e))
+             self.status_label.set_text(_("status_export_failed"))
 
     def on_print_activated(self, action, param):
+        """Handle the print activated event."""
         if not self.doc:
             show_error_dialog(self, _("print_no_doc"), _("print_no_doc_title"))
             return
@@ -2045,18 +2123,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.status_label.set_text(_("print_cancelled"))
 
     def on_zoom_in(self, button=None):
+        """Handle the zoom in event."""
         if not self.doc: return
         self.zoom_level = min(8.0, self.zoom_level * 1.2)
         self.zoom_label.set_text(f"{int(self.zoom_level * 100)}%")
         self._load_page(self.current_page_index)
 
     def on_zoom_out(self, button=None):
+        """Handle the zoom out event."""
         if not self.doc: return
         self.zoom_level = max(0.1, self.zoom_level / 1.2)
         self.zoom_label.set_text(f"{int(self.zoom_level * 100)}%")
         self._load_page(self.current_page_index)
 
     def on_scroll_zoom(self, controller, dx, dy):
+        """Handle the scroll zoom event."""
         if controller.get_current_event_state() & Gdk.ModifierType.CONTROL_MASK:
             if dy < 0: self.on_zoom_in()
             elif dy > 0: self.on_zoom_out()
@@ -2064,16 +2145,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def on_prev_page(self, button):
+        """Handle the prev page event."""
         if self.doc and self.current_page_index > 0:
             self._load_page(self.current_page_index - 1)
 
     def on_next_page(self, button):
+        """Handle the next page event."""
         if self.doc and self.current_page_index < pdf_handler.get_page_count(self.doc) - 1:
             self._load_page(self.current_page_index + 1)
 
     def on_add_page(self, button):
+        """Handle the add page event."""
         if not self.doc:
-            show_error_dialog(self, "Lütfen önce bir belge açın veya oluşturun.", "Belge Yok")
+            show_error_dialog(self, _("err_no_doc_msg"), _("err_no_doc_title"))
             return
 
         current_page = self.doc.load_page(self.current_page_index)
@@ -2089,23 +2173,24 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._load_page(insert_position)
             self._update_ui_state()
         else:
-            show_error_dialog(self, message, "Sayfa Ekleme Hatası")
+            show_error_dialog(self, message, _("err_add_page_title"))
 
     def on_delete_page(self, button):
+        """Handle the delete page event."""
         if not self.doc:
-            show_error_dialog(self, "Lütfen önce bir belge açın.", "Belge Yok")
+            show_error_dialog(self, _("err_no_doc_open_msg"), _("err_no_doc_title"))
             return
 
         page_count = pdf_handler.get_page_count(self.doc)
         if page_count <= 1:
-            show_error_dialog(self, "Son sayfa silinemez. Belgede en az bir sayfa bulunmalıdır.", "Sayfa Silinemez")
+            show_error_dialog(self, _("err_cannot_delete_last_page"), _("err_cannot_delete_last_page_title"))
             return
 
         page_to_delete = self.current_page_index
         confirmed = show_confirm_dialog(
             self,
-            f"Sayfa {page_to_delete + 1} silinecek. Bu işlem geri alınamaz. Devam etmek istiyor musunuz?",
-            "Sayfayı Sil",
+            _("delete_page_warn_msg", page_to_delete + 1),
+            _("delete_page_warn_title"),
             destructive=True
         )
 
@@ -2124,41 +2209,46 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._load_page(new_page_index)
             self._update_ui_state()
         else:
-            show_error_dialog(self, message, "Sayfa Silme Hatası")
+            show_error_dialog(self, message, _("err_delete_page_title"))
 
     def update_page_label(self):
+        """Update page label."""
         count = pdf_handler.get_page_count(self.doc)
         self.page_label.set_text(_("page_info_count").format(self.current_page_index + 1, count) if count > 0 else _("page_info_count").format(0, 0))
 
     def on_thumbnail_selected(self, selection_model, position, n_items):
+         """Handle the thumbnail selected event."""
          selected_index = selection_model.get_selected()
          if selected_index != Gtk.INVALID_LIST_POSITION and selected_index != self.current_page_index:
               if hasattr(self, '_syncing_thumb') and self._syncing_thumb: return
               self._load_page(selected_index)
 
     def _sync_thumbnail_selection(self):
+         """Sync thumbnail selection."""
          if not self.doc or not self.thumbnail_selection_model: return
          self._syncing_thumb = True
          self.thumbnail_selection_model.set_selected(self.current_page_index)
          self._syncing_thumb = False
 
     def on_page_reorder(self, from_index, to_index):
-        if from_index == to_index or from_index < 0 or to_index < 0:
-            return
-        
-        success, message = pdf_handler.move_page(self.doc, from_index, to_index)
-        
-        if success:
-            self.document_modified = True
-            self.status_label.set_text(message)
-            self._load_thumbnails()
-            self._load_page(to_index)
-            self._update_ui_state()
-        else:
-            show_error_dialog(self, message, "Sayfa Taşıma Hatası")
+         """Handle the page reorder event."""
+         if from_index == to_index or from_index < 0 or to_index < 0:
+             return
+         
+         success, message = pdf_handler.move_page(self.doc, from_index, to_index)
+         
+         if success:
+             self.document_modified = True
+             self.status_label.set_text(message)
+             self._load_thumbnails()
+             self._load_page(to_index)
+             self._update_ui_state()
+         else:
+             show_error_dialog(self, message, _("err_move_page_title"))
 
 
     def on_pdf_view_pressed(self, gesture, n_press, x, y):
+        """Handle the pdf view pressed event."""
         if not self.doc or self.current_pdf_page_width == 0 or self.current_pdf_page_height == 0:
             return
 
@@ -2199,7 +2289,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
 
         if self.font_scan_in_progress:
-            show_error_dialog(self, "Fontlar hala taranıyor. Lütfen bekleyin.", "Font Tarama")
+            show_error_dialog(self, _("err_fonts_scanning_msg"), _("err_fonts_scanning_title"))
             return
 
         drawing_area_width = self.pdf_view.get_allocated_width()
@@ -2305,7 +2395,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 baseline=baseline_y_unzoomed
             )
             new_text_obj.font_family_base = target_family_key
-            new_text_obj.font_family_original = f"{target_family_key} (Kullanıcı Ekledi)"
+            new_text_obj.font_family_original = _("font_user_added", target_family_key)
             new_text_obj.is_bold = is_bold
             new_text_obj.is_italic = is_italic
             new_text_obj.is_underline = is_underline
@@ -2331,6 +2421,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             pass
 
     def on_text_format_changed(self, widget, *args):
+        """Handle the text format changed event."""
         if self.font_scan_in_progress:
             return
 
@@ -2512,6 +2603,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self._update_ui_state()
 
     def on_shape_format_changed(self, widget, *args):
+        """Handle the shape format changed event."""
         fill_rgba = self.shape_fill_button.get_rgba()
         fill_color = (fill_rgba.red, fill_rgba.green, fill_rgba.blue)
         stroke_rgba = self.shape_stroke_button.get_rgba()
@@ -2550,9 +2642,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_ui_state()
 
     def on_text_edit_done(self, button):
+        """Handle the text edit done event."""
         self._apply_and_hide_editor(force_apply=True)
 
     def on_key_pressed(self, controller, keyval, keycode, state):
+        """Handle the key pressed event."""
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
 
         if self.view_mode:
@@ -2596,7 +2690,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._handle_delete_with_confirmation(obj_to_delete, "delete_confirm_title")
                 return True
             elif self.selected_image:
-                confirm = show_confirm_dialog(self, "Seçilen resmi silmek istediğinizden emin misiniz?", "Resmi Sil")
+                confirm = show_confirm_dialog(self, _("image_delete_confirm_msg"), _("image_delete_confirm_title"))
                 if confirm:
                     self.status_label.set_text("Resim siliniyor...")
                     success, error_msg = pdf_handler.delete_image_from_page(self.doc, self.selected_image)
@@ -2605,15 +2699,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self._load_page(self.current_page_index)
                         self.status_label.set_text("Resim silindi.")
                     else:
-                        show_error_dialog(self, f"Resim silinemedi: {error_msg}", "Silme Hatası")
+                        show_error_dialog(self, _("err_image_delete_msg", error_msg), _("err_image_delete_title"))
                     self.selected_image = None
                     self._update_ui_state()
                 return True
         return False
 
     def on_tool_selected(self, button, tool_name):
+        """Handle the tool selected event."""
         if self.inline_editor_widget is not None:
-             print("Araç değiştirilmeden önce değişiklikler uygulanıyor...")
+             print(_("dbg_applying_changes_before_tool"))
              self._apply_and_hide_editor(force_apply=True)
 
         if self.selected_text:
@@ -2628,10 +2723,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
         self.tool_mode = tool_name
-        print(f"Araç şu şekilde değiştirildi: {self.tool_mode}")
+        print(_("dbg_tool_changed", self.tool_mode))
         self._update_ui_state() 
 
     def on_drag_begin(self, gesture, start_x, start_y):
+        """Handle the drag begin event."""
         if not self.doc:
             return
 
@@ -2727,6 +2823,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             gesture.set_state(Gtk.EventSequenceState.DENIED)
 
     def on_drag_update(self, gesture, offset_x, offset_y):
+        """Handle the drag update event."""
         if self.view_mode:
             if self.view_sel_start and self.view_drag_active:
                 sx, sy = self.view_sel_start
@@ -2830,6 +2927,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
     def _handle_resize_update(self, offset_x, offset_y):
+        """Handle resize update."""
         if not self.resize_handle or not self.resize_start_bbox or not self.dragged_object:
             return
 
@@ -2868,6 +2966,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
     def on_drag_end(self, gesture, offset_x, offset_y):
+        """Handle the drag end event."""
         if self.view_mode:
             self.view_drag_active = False
             if self.view_sel_rect:
@@ -2916,15 +3015,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 
                 dialog = Gtk.FileChooserDialog(
                     title=_("image_select_title"),
-                    transient_for=self, modal=True, action=Gtk.FileChooserAction.OPEN
+                    transient_for=self, action=Gtk.FileChooserAction.OPEN
                 )
-                dialog.add_buttons("_Cancel", Gtk.ResponseType.CANCEL, "_Open", Gtk.ResponseType.ACCEPT)
+                dialog.add_buttons(
+                    "_Cancel", Gtk.ResponseType.CANCEL,
+                    "_Open", Gtk.ResponseType.ACCEPT
+                )
                 filter_img = Gtk.FileFilter(name=_("image_filter_label"))
                 for mime in ["image/png", "image/jpeg", "image/gif", "image/bmp"]:
                     filter_img.add_mime_type(mime)
                 dialog.add_filter(filter_img)
                 
                 def on_image_selected(d, response_id):
+                    """Handle the image selected event."""
                     if response_id == Gtk.ResponseType.ACCEPT:
                         file = d.get_file()
                         if file:
@@ -2956,7 +3059,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     d.destroy()
                 
                 dialog.connect('response', on_image_selected)
-                dialog.present()
+                dialog.show()
             return
         
         if not self.dragged_object or not hasattr(self, 'drag_begin_state'):
@@ -2983,7 +3086,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
             return
 
-        print("DEBUG: Sürükleme işlemi için bir komut oluşturuluyor.")
+        print(_("dbg_creating_drag_command"))
         command = EditObjectCommand(self, dragged_obj_ref, old_properties, new_properties)
         
         command.execute()
@@ -3006,6 +3109,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
     def _on_quick_guide_activated(self, action, param):
+        """Handle the quick guide activated event."""
         dialog = Gtk.Dialog(transient_for=self, modal=True)
         dialog.set_default_size(500, 420)
         
@@ -3059,10 +3163,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         dialog.present()
 
     def _update_undo_redo_buttons(self, *args):
+        """Update undo redo buttons."""
         self.undo_button.set_sensitive(bool(self.undo_manager.undo_stack))
         self.redo_button.set_sensitive(bool(self.undo_manager.redo_stack))
 
     def _refresh_thumbnail(self, page_index):
+        """Refresh thumbnail."""
         if not self.doc or not (0 <= page_index < pdf_handler.get_page_count(self.doc)):
             return
         try:
@@ -3081,11 +3187,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             print(f"Warning: Could not refresh thumbnail for page {page_index + 1}: {e}")
     
     def commit_pending_format_change(self):
+        """Commit pending format change."""
         if self.pending_format_change_obj and self.before_format_change_state:
             current_state = copy.deepcopy(self.pending_format_change_obj.__dict__)
             
             if self.before_format_change_state != current_state:
-                print("DEBUG: Bekleyen format değişikliği bir komut olarak kaydediliyor.")
+                print(_("dbg_format_change_saved"))
                 command = EditObjectCommand(self, self.pending_format_change_obj, self.before_format_change_state, current_state)
                 command.execute()
                 self.undo_manager.add_command(command)
@@ -3094,6 +3201,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.before_format_change_state = None
 
     def on_new_clicked(self, widget=None):
+        """Handle the new clicked event."""
         if self.check_unsaved_changes():
             return
 
@@ -3113,15 +3221,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.document_modified = True
             
             self._load_thumbnails()
-            self.status_label.set_text("Yeni boş belge oluşturuldu. Değişiklikleri kaydetmeyi unutmayın.")
+            self.status_label.set_text(_("status_new_doc_created"))
 
     def do_close_request(self):
+        """Do close request."""
         if self.check_unsaved_changes():
             return True
         else:
             self.close_document()
             return False
     def on_stroke_width_scroll(self, controller, dx, dy):
+        """Handle the stroke width scroll event."""
         if not self.selected_shape:
             return False
         
@@ -3135,6 +3245,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return True
 
     def _toggle_view_edit_mode(self, button=None):
+        """Toggle view edit mode."""
         self.view_mode = not self.view_mode
         if self.view_mode:
             self._apply_and_hide_editor()
@@ -3150,6 +3261,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
     def on_highlight_clicked(self, button):
+        """Handle the highlight clicked event."""
         rgba = self.highlight_color_button.get_rgba()
         color = (rgba.red, rgba.green, rgba.blue)
         
@@ -3186,6 +3298,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             show_error_dialog(self, f"Highlight failed: {err}")
 
     def on_remove_highlight_clicked(self, button):
+        """Handle the remove highlight clicked event."""
         target_rect = None
         if self.view_mode and self.view_sel_rect:
             target_rect = self.view_sel_rect
@@ -3205,6 +3318,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._remove_highlight_at_region(target_rect)
 
     def _extract_word_at_position(self, text, click_pos_in_text):
+        """Extract word at position."""
         if not text or click_pos_in_text < 0 or click_pos_in_text > len(text):
             return None, 0, 0
         
@@ -3220,6 +3334,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return text[start:end], start, end
 
     def _on_middle_click(self, gesture, n_press, x, y):
+        """Handle the middle click event."""
         if not self.doc:
             return
         
@@ -3274,6 +3389,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self._update_ui_state()
 
     def _on_right_click(self, gesture, n_press, x, y):
+        """Handle the right click event."""
         if not self.doc:
             return
         
@@ -3322,7 +3438,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.context_popover = Gtk.Popover(autohide=True, has_arrow=True)
             self.context_popover.set_child(popover_box)
             self.context_popover.set_parent(self.pdf_view)
-            self.context_popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+            rect = Gdk.Rectangle()
+            rect.x = int(x)
+            rect.y = int(y)
+            rect.width = 1
+            rect.height = 1
+            self.context_popover.set_pointing_to(rect)
             self.context_popover.popup()
             return
 
@@ -3341,6 +3462,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             
             btn_copy = Gtk.Button(label=_("btn_copy"))
             def on_copy_clicked(b):
+                """Handle the copy clicked event."""
                 if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word'):
                     self.get_clipboard().set(self.selected_word)
                 else:
@@ -3359,10 +3481,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_italic = Gtk.Button(label=_("italic_tip"))
             btn_underline = Gtk.Button(label=_("underline_tip"))
             def on_bold_clicked(b):
+                """Handle the bold clicked event."""
                 self._toggle_text_bold(clicked_text)
             def on_italic_clicked(b):
+                """Handle the italic clicked event."""
                 self._toggle_text_italic(clicked_text)
             def on_underline_clicked(b):
+                """Handle the underline clicked event."""
                 self._toggle_text_underline(clicked_text)
             btn_bold.connect("clicked", on_bold_clicked)
             btn_italic.connect("clicked", on_italic_clicked)
@@ -3388,6 +3513,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("delete_confirm"))
             btn_del.add_css_class("destructive-action")
             def on_delete_text(b):
+                """Handle the delete text event."""
                 self._handle_delete_with_confirmation(clicked_text, "delete_text_confirm")
             btn_del.connect("clicked", on_delete_text)
             popover_box.append(btn_del)
@@ -3400,6 +3526,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("menu_delete_shape"))
             btn_del.add_css_class("destructive-action")
             def on_delete_shape(b):
+                """Handle the delete shape event."""
                 self._handle_delete_with_confirmation(clicked_shape, "delete_shape_confirm")
             btn_del.connect("clicked", on_delete_shape)
             popover_box.append(btn_del)
@@ -3412,6 +3539,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("menu_delete_image"))
             btn_del.add_css_class("destructive-action")
             def on_delete_image(b):
+                """Handle the delete image event."""
                 self._handle_delete_with_confirmation(clicked_image, "delete_image_confirm")
             btn_del.connect("clicked", on_delete_image)
             popover_box.append(btn_del)
@@ -3431,7 +3559,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.context_popover = Gtk.Popover(autohide=True, has_arrow=True)
             self.context_popover.set_child(popover_box_empty)
             self.context_popover.set_parent(self.pdf_view)
-            self.context_popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+            rect = Gdk.Rectangle()
+            rect.x = int(x)
+            rect.y = int(y)
+            rect.width = 1
+            rect.height = 1
+            self.context_popover.set_pointing_to(rect)
             self.context_popover.set_position(Gtk.PositionType.RIGHT)
             self.context_popover.popup()
             return
@@ -3442,11 +3575,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.context_popover = Gtk.Popover(autohide=True, has_arrow=True)
         self.context_popover.set_child(popover_box)
         self.context_popover.set_parent(self.pdf_view)
-        self.context_popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        rect = Gdk.Rectangle()
+        rect.x = int(x)
+        rect.y = int(y)
+        rect.width = 1
+        rect.height = 1
+        self.context_popover.set_pointing_to(rect)
         self.context_popover.set_position(Gtk.PositionType.RIGHT)
         self.context_popover.popup()
 
     def _handle_context_action(self, action, obj, x, y):
+        """Handle context action."""
         if hasattr(self, 'context_popover'):
             self.context_popover.popdown()
             
@@ -3478,6 +3617,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             page_x, page_y = obj
             clipboard = self.get_clipboard()
             def _on_paste_finished(cb, task):
+                """Handle the paste finished event."""
                 try:
                     text = cb.read_text_finish(task)
                     if text and text.strip():
@@ -3502,6 +3642,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._toggle_text_underline(self.selected_text)
 
     def _convert_view_selection_to_editable(self):
+        """Convert view selection to editable."""
         if not self.view_sel_rect or not self.view_selected_text:
             return
             
@@ -3523,6 +3664,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
     def _toggle_text_bold(self, text_obj):
+        """Toggle text bold."""
         if text_obj:
             self.selected_text = text_obj
             old_properties = {'is_bold': text_obj.is_bold, 'bbox': text_obj.bbox}
@@ -3536,6 +3678,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.context_popover.popdown()
 
     def _toggle_text_italic(self, text_obj):
+        """Toggle text italic."""
         if text_obj:
             self.selected_text = text_obj
             old_properties = {'is_italic': text_obj.is_italic, 'bbox': text_obj.bbox}
@@ -3549,6 +3692,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.context_popover.popdown()
 
     def _toggle_text_underline(self, text_obj):
+        """Toggle text underline."""
         if text_obj:
             self.selected_text = text_obj
             old_val = getattr(text_obj, 'is_underline', False)
@@ -3563,6 +3707,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.context_popover.popdown()
 
     def _handle_delete_with_confirmation(self, obj, confirmation_key):
+        """Handle delete with confirmation."""
         from .ui_components import show_confirm_dialog
         
         if isinstance(obj, EditableText):
@@ -3589,6 +3734,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.status_label.set_text(_("object_deleted"))
 
     def _remove_highlight_at_region(self, bbox):
+        """Remove highlight at region."""
         if not self.doc:
             return
         try:
@@ -3615,6 +3761,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             print(f"Error removing highlight: {e}")
 
     def _create_text_from_paste(self, page_x, page_y, text):
+        """Create text from paste."""
         if not self.doc or not text or not text.strip():
             return
         

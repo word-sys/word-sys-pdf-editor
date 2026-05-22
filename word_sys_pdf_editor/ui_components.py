@@ -6,13 +6,16 @@ from .i18n import _
 
 
 class PageThumbnailFactory(Gtk.SignalListItemFactory):
+    """Factory class to create and bind page thumbnail widgets in the sidebar."""
     def __init__(self, editor_window=None):
+        """Initialise the factory with setup and bind signal handlers."""
         super().__init__()
         self.editor_window = editor_window
         self.connect("setup", self._on_setup)
         self.connect("bind", self._on_bind)
 
     def _on_setup(self, factory, list_item):
+        """Set up initial layout for the thumbnail list item."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=6, margin_bottom=6)
         
         image = Gtk.Picture()
@@ -27,6 +30,7 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         list_item.set_child(box)
 
     def _on_bind(self, factory, list_item):
+        """Bind a PDF page object and its thumbnail image to the list item."""
         box = list_item.get_child()
         picture = box.get_first_child()
         label = box.get_last_child()
@@ -51,10 +55,12 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         drag_source.set_actions(Gdk.DragAction.MOVE)
 
         def on_prepare(source, x, y, idx=page_index):
+            """Handle the prepare event."""
             val = GObject.Value(GObject.TYPE_INT, idx)
             return Gdk.ContentProvider.new_for_value(val)
 
         def on_drag_begin(source, drag, idx=page_index, pic=picture):
+            """Handle the drag begin event."""
             pdf_pg = list_item.get_item()
             if pdf_pg and pdf_pg.thumbnail:
                 tex = Gdk.Texture.new_for_pixbuf(pdf_pg.thumbnail)
@@ -67,6 +73,7 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         drop_target = Gtk.DropTarget.new(GObject.TYPE_INT, Gdk.DragAction.MOVE)
 
         def on_drop(target, value, x, y, to_idx=page_index):
+            """Handle the drop event."""
             from_idx = value
             if from_idx == to_idx:
                 return False
@@ -79,6 +86,7 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
 
 
 def show_error_dialog(parent_window, message, title="Error"):
+    """Show a simple error modal dialog."""
     dialog = Gtk.MessageDialog(
         transient_for=parent_window,
         modal=True,
@@ -92,6 +100,7 @@ def show_error_dialog(parent_window, message, title="Error"):
     dialog.present()
 
 def show_confirm_dialog(parent_window, message, title="Confirm", destructive=True):
+    """Show a confirmation dialog with Accept and Cancel options."""
     message_type = Gtk.MessageType.QUESTION
     if destructive:
         message_type = Gtk.MessageType.WARNING
@@ -114,6 +123,7 @@ def show_confirm_dialog(parent_window, message, title="Confirm", destructive=Tru
 
     response = None
     def on_response(d, resp_id):
+        """Handle the dialog response event."""
         nonlocal response
         response = resp_id
         d.destroy()
@@ -129,6 +139,7 @@ def show_confirm_dialog(parent_window, message, title="Confirm", destructive=Tru
     return response == Gtk.ResponseType.ACCEPT
 
 def show_save_changes_dialog(parent_window):
+    """Show a prompt to save or discard changes before closing/opening another file."""
     dialog = Gtk.MessageDialog(
         transient_for=parent_window,
         modal=True,
@@ -147,6 +158,7 @@ def show_save_changes_dialog(parent_window):
 
     response = None
     def on_response(d, resp_id):
+        """Handle the dialog response event."""
         nonlocal response
         response = resp_id
         d.destroy()

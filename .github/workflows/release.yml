@@ -1,0 +1,64 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-dev \
+            python3-gi \
+            python3-gi-cairo \
+            python3-venv \
+            python3-pip \
+            gir1.2-gtk-4.0 \
+            gir1.2-adw-1 \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libcairo2-dev \
+            libgirepository1.0-dev \
+            pkg-config \
+            patchelf \
+            desktop-file-utils \
+            binutils \
+            zip \
+            wget \
+            debhelper \
+            devscripts \
+            build-essential \
+            fakeroot
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install wheel setuptools pyinstaller PyMuPDF numpy pygobject pycairo
+
+      - name: Build All Release Artifacts
+        run: |
+          chmod +x build_release.sh
+          ./build_release.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            word-sys-pdf-editor-linux-x86_64.zip
+            word-sys-pdf-editor-x86_64.AppImage
+            word-sys-pdf-editor_*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

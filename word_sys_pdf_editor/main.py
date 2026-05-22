@@ -7,7 +7,9 @@ from gi.repository import Gtk, Gio, GLib, Adw
 from .window import PdfEditorWindow
 
 class PdfEditorApplication(Adw.Application):
+    """The main GTK4/libadwaita application class for the PDF Editor."""
     def __init__(self):
+        """Initialise application and basic menu actions."""
         super().__init__(application_id='org.word-sys.pdfeditor',
                          flags=Gio.ApplicationFlags.HANDLES_OPEN)
         self.window = None
@@ -18,11 +20,13 @@ class PdfEditorApplication(Adw.Application):
         self.set_accels_for_action('app.quit', ['<Control>q'])
 
     def do_activate(self):
+        """Activate the main application window."""
         if not self.window:
             self.window = PdfEditorWindow(application=self)
         self.window.present()
 
     def do_open(self, files, n_files, hint):
+        """Handle opening PDF files passed via CLI or file manager."""
         if not self.window:
              self.activate()
 
@@ -35,6 +39,7 @@ class PdfEditorApplication(Adw.Application):
 
 
     def on_quit(self, action, param):
+        """Safely quit the application and prompt for unsaved changes."""
         if self.window:
              if self.window.check_unsaved_changes():
                   return
@@ -44,6 +49,7 @@ class PdfEditorApplication(Adw.Application):
         self.quit()
 
 def main():
+    """Run the Adw application."""
     Adw.init()
     app = PdfEditorApplication()
     return app.run(sys.argv)

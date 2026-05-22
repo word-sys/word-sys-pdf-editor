@@ -13,10 +13,12 @@ import re
 from gi.repository import GdkPixbuf, Gdk, Pango, PangoCairo
 from .models import EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape
 from .utils import find_specific_font_variant, get_default_unicode_font_path
+from .i18n import _
 
 _surface_cache = {"surface": None, "data_ref": None}
 
 def _get_font_args_for_pymupdf(text_obj):
+    """Get the font args for pymupdf."""
     font_arg = {}
     font_to_embed_path = find_specific_font_variant(
         text_obj.font_family_base,
@@ -55,6 +57,7 @@ def _get_font_args_for_pymupdf(text_obj):
             return font_arg, None
 
 def load_pdf_document(filepath):
+    """Load PDF document."""
     try:
         doc = fitz.open(filepath)
         if doc.needs_pass:
@@ -65,6 +68,7 @@ def load_pdf_document(filepath):
         return None, f"Error opening PDF: {e}\nPath: {filepath}"
 
 def close_pdf_document(doc):
+    """Close PDF document."""
     if doc:
         try:
             doc.close()
@@ -72,9 +76,11 @@ def close_pdf_document(doc):
             print(f"Error closing PDF document: {e}")
 
 def get_page_count(doc):
+    """Get the page count."""
     return doc.page_count if doc else 0
 
 def generate_thumbnail(doc, page_index, target_width=150):
+    """Generate thumbnail."""
     if not doc or not (0 <= page_index < doc.page_count):
         return None
     try:
@@ -100,6 +106,7 @@ def generate_thumbnail(doc, page_index, target_width=150):
         return placeholder_pixbuf
 
 def pixmap_to_cairo_surface(pix):
+    """Pixmap to cairo surface."""
     data = None
     fmt = None
     stride = 0
@@ -147,6 +154,7 @@ def pixmap_to_cairo_surface(pix):
 
 
 def draw_page_to_cairo(cr, doc, page_index, zoom_level):
+    """Draw page to cairo."""
     if not doc or not (0 <= page_index < doc.page_count):
         cr.set_source_rgb(0.7, 0.7, 0.7)
         cr.paint()
@@ -199,6 +207,7 @@ def draw_page_to_cairo(cr, doc, page_index, zoom_level):
 
 
 def extract_editable_text(doc, page_index):
+    """Extract editable text."""
     editable_texts = []
     if not doc or not (0 <= page_index < doc.page_count):
         return [], "Invalid document or page index for text extraction."
@@ -272,6 +281,7 @@ def extract_editable_text(doc, page_index):
         return [], error_msg
 
 def _get_base14_font_variant(base_name, is_bold, is_italic):
+    """Get the base14 font variant."""
     mapping = {'helv': 'Helvetica', 'timr': 'Times', 'cour': 'Courier'}
     pdf_base = mapping.get(base_name, 'Helvetica')
     if is_bold and is_italic:
@@ -293,6 +303,7 @@ def _get_base14_font_variant(base_name, is_bold, is_italic):
     return pdf_base
 
 def apply_text_edit(doc, text_obj: EditableText, new_text: str):
+    """Apply text edit."""
     if not doc or text_obj.page_number is None:
         return False, "Invalid document or page number."
 
@@ -340,6 +351,7 @@ def apply_text_edit(doc, text_obj: EditableText, new_text: str):
         return False, f"Error during text application: {e}"
 
 def save_document(doc, save_path, incremental=False):
+    """Save document."""
     if not doc:
         return False, "Kaydedilecek belge yok."
 
@@ -364,9 +376,10 @@ def save_document(doc, save_path, incremental=False):
             except OSError:
                 pass
         
-        return False, f"PDF kaydedilirken hata oluştu: {e}"
+        return False, _("err_pdf_save", e)
     
 def _export_via_libreoffice(doc, source_pdf_path, output_path, target_format):
+    """Export via libreoffice."""
     libreoffice_executable = shutil.which('libreoffice')
     if not libreoffice_executable:
         libreoffice_executable = shutil.which('soffice')
@@ -514,31 +527,37 @@ def _export_via_libreoffice(doc, source_pdf_path, output_path, target_format):
                 print(f"Warning: Could not delete temporary file {temp_pdf_path}: {unlink_e}")
 
 def export_pdf_as_odt(doc, source_pdf_path, output_odt_path):
+    """Export PDF as odt."""
     if not output_odt_path.lower().endswith('.odt'):
         output_odt_path += '.odt'
     return _export_via_libreoffice(doc, source_pdf_path, output_odt_path, 'odt')
 
 def export_pdf_as_docx(doc, source_pdf_path, output_docx_path):
+    """Export PDF as docx."""
     if not output_docx_path.lower().endswith('.docx'):
         output_docx_path += '.docx'
     return _export_via_libreoffice(doc, source_pdf_path, output_docx_path, 'docx')
 
 def export_pdf_as_pptx(doc, source_pdf_path, output_pptx_path):
+    """Export PDF as pptx."""
     if not output_pptx_path.lower().endswith('.pptx'):
         output_pptx_path += '.pptx'
     return _export_via_libreoffice(doc, source_pdf_path, output_pptx_path, 'pptx')
 
 def export_pdf_as_odp(doc, source_pdf_path, output_odp_path):
+    """Export PDF as odp."""
     if not output_odp_path.lower().endswith('.odp'):
         output_odp_path += '.odp'
     return _export_via_libreoffice(doc, source_pdf_path, output_odp_path, 'odp')
 
 
 def export_pdf_as_odt_alias(doc, source_pdf_path, output_odt_path):
+    """Export PDF as odt alias."""
     return export_pdf_as_odt(doc, source_pdf_path, output_odt_path)
 
 
 def _export_pdf_via_libreoffice(doc, output_path, target_format, format_label):
+    """Export PDF via libreoffice."""
     if target_format == 'docx':
         return export_pdf_as_docx(doc, None, output_path)
     elif target_format == 'odt':
@@ -547,6 +566,7 @@ def _export_pdf_via_libreoffice(doc, output_path, target_format, format_label):
 
 
 def export_pdf_as_text(doc, output_txt_path):
+    """Export PDF as text."""
     if not doc:
         return False, "No document to export."
     try:
@@ -562,9 +582,10 @@ def export_pdf_as_text(doc, output_txt_path):
         return False, f"Error exporting as text: {e}"
 
 def extract_editable_images(doc, page_index):
+    """Extract editable images."""
     editable_images = []
     if not doc or not (0 <= page_index < doc.page_count):
-        return [], "Görüntü çıkarma için geçersiz belge veya sayfa dizini."
+        return [], _("err_invalid_doc_page_extract")
     
     try:
         page = doc.load_page(page_index)
@@ -581,11 +602,11 @@ def extract_editable_images(doc, page_index):
                 
                 if not bbox or not xref:
                     continue
-
+ 
                 rect = fitz.Rect(bbox)
                 if rect.is_empty or not rect.is_valid:
                     continue
-
+ 
                 try:
                     image_data = doc.extract_image(xref)
                     if not image_data or 'image' not in image_data:
@@ -606,34 +627,36 @@ def extract_editable_images(doc, page_index):
                     continue
                     
             except (ValueError, TypeError) as e:
-                print(f"Uyarı: Sayfa {page_index+1} içindeki bir resim (xref={img_info.get('xref')}) atlandı: {e}")
+                print(_("warn_image_skipped", page_index+1, img_info.get('xref'), e))
                 continue
         
         print(f"DEBUG: Extracted {len(editable_images)} images from page {page_index}")
         return editable_images, None
     except Exception as e:
-        error_msg = f"Sayfa {page_index+1} içinden resimler çıkarılırken hata oluştu: {e}"
+        error_msg = _("err_image_extract_page", page_index+1, e)
         print(error_msg)
         traceback.print_exc()
         return [], error_msg
 
 def add_image_to_page(doc, page_number, image_path, rect):
+    """Add image to page."""
     if not doc or page_number is None:
-        return False, "Resim eklemek için geçersiz belge veya sayfa numarası."
+        return False, _("err_invalid_doc_page_add_image")
     try:
         page = doc.load_page(page_number)
         page.insert_image(rect, filename=image_path)
         return True, None
     except FileNotFoundError:
-        return False, f"Resim dosyası bulunamadı: {image_path}"
+        return False, _("err_image_file_not_found", image_path)
     except Exception as e:
-        print(f"HATA resim ekleniyor: {e}")
+        print(_("err_placing_image", e))
         traceback.print_exc()
-        return False, f"Resim yerleştirme sırasında hata: {e}"
+        return False, _("err_placing_image", e)
 
 def delete_image_from_page(doc, image_obj: EditableImage):
+    """Delete image from page."""
     if not doc or image_obj.page_number is None:
-        return False, "Resim silmek için geçersiz belge veya sayfa numarası."
+        return False, _("err_invalid_doc_page_delete_image")
     try:
         page = doc.load_page(image_obj.page_number)
 
@@ -644,15 +667,16 @@ def delete_image_from_page(doc, image_obj: EditableImage):
             doc.load_page(image_obj.page_number)
             return True, None
         else:
-            return False, "Resim sınırlayıcı kutusu geçersiz."
+            return False, _("err_invalid_image_bbox")
     except Exception as e:
-        print(f"HATA resim siliniyor: {e}")
+        print(_("err_deleting_image", e))
         traceback.print_exc()
-        return False, f"Resim silme sırasında hata: {e}"
+        return False, _("err_deleting_image", e)
 
 def delete_shape_from_page(doc, shape_obj: EditableShape):
+    """Delete shape from page."""
     if not doc or shape_obj.page_number is None:
-        return False, "Şekil silmek için geçersiz belge veya sayfa numarası."
+        return False, _("err_invalid_doc_page_delete_shape")
     try:
         page = doc.load_page(shape_obj.page_number)
 
@@ -667,14 +691,15 @@ def delete_shape_from_page(doc, shape_obj: EditableShape):
             doc.load_page(shape_obj.page_number)
             return True, None
         else:
-            return False, "Şekil sınırlayıcı kutusu geçersiz."
+            return False, _("err_invalid_shape_bbox")
     except Exception as e:
-        print(f"HATA şekil siliniyor: {e}")
+        print(_("err_deleting_shape", e))
         traceback.print_exc()
-        return False, f"Şekil silme sırasında hata: {e}"
+        return False, _("err_deleting_shape", e)
 
 
 def extract_editable_shapes(doc, page_index):
+    """Extract editable shapes."""
     editable_shapes = []
     if not doc or not (0 <= page_index < doc.page_count):
         return [], "Invalid document or page index for shape extraction."
@@ -737,6 +762,7 @@ def extract_editable_shapes(doc, page_index):
 _page_snapshots: dict = {}
 
 def save_page_snapshot(doc, page_num: int, force: bool = False):
+    """Save page snapshot."""
     key = (id(doc), page_num)
     if key in _page_snapshots and not force:
         return  
@@ -755,6 +781,7 @@ def save_page_snapshot(doc, page_num: int, force: bool = False):
 
 
 def restore_page_from_snapshot(doc, page_num: int) -> bool:
+    """Restore page from snapshot."""
     key = (id(doc), page_num)
     if key not in _page_snapshots:
         return False
@@ -779,12 +806,14 @@ def restore_page_from_snapshot(doc, page_num: int) -> bool:
         return False
 
 def release_page_snapshots(doc):
+    """Release page snapshots."""
     doc_id = id(doc)
     keys_to_remove = [k for k in _page_snapshots if k[0] == doc_id]
     for k in keys_to_remove:
         del _page_snapshots[k]
 
 def _apply_single_object_to_page(doc, page, obj):
+    """Apply single object to page."""
     if isinstance(obj, EditableText):
         if obj.text:
             font_arg, error_msg = _get_font_args_for_pymupdf(obj)
@@ -822,6 +851,7 @@ def _apply_single_object_to_page(doc, page, obj):
 
 def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
                  exclude_obj=None):
+    """Rebuild page."""
     if not restore_page_from_snapshot(doc, page_num):
         print(f"Warning: no snapshot for page {page_num}, skipping restore")
     try:
@@ -845,6 +875,7 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
         return False, str(e)
 
 def apply_object_edit(doc, obj):
+    """Apply object edit."""
     if not doc or not hasattr(obj, 'page_number') or obj.page_number is None:
         return False, "Invalid object or page number."
     try:
@@ -856,14 +887,16 @@ def apply_object_edit(doc, obj):
         return False, f"Error while applying object edit: {e}"
     
 def create_new_pdf():
+    """Create new PDF."""
     try:
         doc = fitz.open()
         doc.new_page(width=595, height=842)
         return doc, None
     except Exception as e:
-        return None, f"Yeni PDF oluşturulurken hata: {e}"
+        return None, _("err_creating_new_pdf", e)
 
 def insert_blank_page(doc, page_index=None, width=None, height=None):
+    """Insert blank page."""
     try:
         if width is None or height is None:
             if doc.page_count > 0:
@@ -880,64 +913,68 @@ def insert_blank_page(doc, page_index=None, width=None, height=None):
                 height = default_height
         
         doc.new_page(width=width, height=height)
-        return True, f"Sayfa sonuna eklendi (Sayfa {doc.page_count})"
+        return True, _("success_blank_page_added", doc.page_count)
     
     except Exception as e:
-        return False, f"Sayfa eklenirken hata: {e}"
+        return False, _("err_adding_page", e)
 
 def merge_pdf_pages(target_doc, source_pdf_path, insert_position=None):
+    """Merge PDF pages."""
     try:
         source_doc = fitz.open(source_pdf_path)
         source_page_count = source_doc.page_count
         
         if source_page_count == 0:
-            return False, "Kaynak PDF boş.", 0
+            return False, _("err_source_pdf_empty"), 0
         
         target_doc.insert_pdf(source_doc, from_page=0, to_page=source_page_count - 1)
         
         source_doc.close()
         
-        return True, f"{source_page_count} sayfa başarıyla birleştirildi.", source_page_count
+        return True, _("success_merged_pages", source_page_count), source_page_count
     
     except Exception as e:
-        return False, f"PDF birleştirme sırasında hata: {e}", 0
+        return False, _("err_merging_pdf", e), 0
 
 def move_page(doc, from_index, to_index):
+    """Move page."""
     try:
         if from_index < 0 or from_index >= doc.page_count:
-            return False, "Geçersiz sayfa indeksi."
+            return False, _("err_invalid_page_index")
         
         if to_index < 0 or to_index >= doc.page_count:
-            return False, "Geçersiz hedef indeksi."
+            return False, _("err_invalid_target_index")
         
         if from_index == to_index:
-            return True, "Sayfa zaten bu konumda."
+            return True, _("success_page_already_there")
         
         doc.move_page(from_index, to_index)
         
-        return True, f"Sayfa {from_index + 1} → {to_index + 1} konumuna taşındı."
+        return True, _("success_page_moved", from_index + 1, to_index + 1)
     
     except Exception as e:
-        return False, f"Sayfa taşıma sırasında hata: {e}"
+        return False, _("err_moving_page", e)
 
 def delete_page(doc, page_index):
+    """Delete page."""
     try:
         if not doc:
-            return False, "Belge yok."
+            return False, _("err_no_doc_msg_alt")
         
         if doc.page_count <= 1:
-            return False, "Son sayfa silinemez. Belgede en az bir sayfa bulunmalıdır."
+            return False, _("err_cannot_delete_last_page")
         
         if page_index < 0 or page_index >= doc.page_count:
-            return False, f"Geçersiz sayfa indeksi: {page_index + 1}"
+            return False, _("err_invalid_page_index_val", page_index + 1)
         
         doc.delete_page(page_index)
-        return True, f"Sayfa {page_index + 1} silindi."
+        return True, _("success_page_deleted", page_index + 1)
     
     except Exception as e:
-        return False, f"Sayfa silme sırasında hata: {e}"
+        return False, _("err_deleting_page", e)
 
 def add_highlight_annotation(doc, page_index, rect_unzoomed, color=(1, 0.93, 0)):
+    """Add highlight annotation."""
     if not doc or not (0 <= page_index < doc.page_count):
         return False, "Invalid document or page index."
     try:
@@ -954,6 +991,7 @@ def add_highlight_annotation(doc, page_index, rect_unzoomed, color=(1, 0.93, 0))
         return False, f"Highlight annotation error: {e}"
 
 def remove_highlight_annotations(doc, page_index, rect_unzoomed=None):
+    """Remove highlight annotations."""
     if not doc or not (0 <= page_index < doc.page_count):
         return False, "Invalid document or page index."
     try:
@@ -979,6 +1017,7 @@ def remove_highlight_annotations(doc, page_index, rect_unzoomed=None):
         return False, f"Error removing highlights: {e}"
 
 def get_text_in_rect(doc, page_index, rect_unzoomed):
+    """Get the text in rect."""
     if not doc or not (0 <= page_index < doc.page_count):
         return ""
     try:
@@ -991,6 +1030,7 @@ def get_text_in_rect(doc, page_index, rect_unzoomed):
         return ""
 
 def get_word_at_pos(doc, page_index, pos_unzoomed):
+    """Get the word at pos."""
     if not doc or not (0 <= page_index < doc.page_count):
         return None
     try:
@@ -1008,6 +1048,7 @@ def get_word_at_pos(doc, page_index, pos_unzoomed):
         return None
 
 def get_block_at_pos(doc, page_index, pos_unzoomed):
+    """Get the block at pos."""
     if not doc or not (0 <= page_index < doc.page_count):
         return None
     try:

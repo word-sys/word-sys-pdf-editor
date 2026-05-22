@@ -1,3 +1,14 @@
+word-sys-pdf-editor (1.9.1) bookworm; urgency=medium
+
+  * Wrapped hardcoded Turkish error/status messages with localization
+  * Fixed right-click context menu positioning coordinates
+  * Restructured top toolbar to be responsive with a two-line editing mode layout
+  * Integrated native XDG file picker instead of the custom GTK one
+  * Cleaned up obsolete icon assets and updated About dialog to use PNG internally
+  * Set minimal window size support down to ~500px
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Fri, 22 May 2026 12:58:00 +0300
+
 word-sys-pdf-editor (1.9.0) bookworm; urgency=medium
 
   * Added full Underline support (UI, context menu, and PDF export)

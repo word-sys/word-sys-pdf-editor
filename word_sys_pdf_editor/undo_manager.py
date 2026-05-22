@@ -4,16 +4,21 @@ from .models import EditableText, EditableShape
 from .i18n import _
 
 class Command:
+    """Base class for undoable/redoable actions."""
     def __init__(self, window):
+        """Initialise command with parent window context."""
         self.window = window
 
     def execute(self):
+        """Execute the command."""
         raise NotImplementedError
 
     def undo(self):
+        """Undo the command."""
         raise NotImplementedError
 
     def _erase_ghost_if_needed(self, target_object, page_num):
+        """Redact original object from snapshot if edited/moved."""
         if getattr(target_object, 'is_new', True) or getattr(target_object, '_ghost_redacted', False):
             return
             
@@ -50,18 +55,22 @@ class Command:
             print(f"Warning: could not erase ghost from snapshot for page {page_num}: {e}")
 
 class UndoManager:
+    """Manager class that stores undo and redo action stacks."""
     def __init__(self, window):
+        """Initialise undo and redo stacks."""
         self.window = window
         self.undo_stack = []
         self.redo_stack = []
         self._update_ui_callback = self.window._update_undo_redo_buttons
 
     def add_command(self, command):
+        """Add a command to the undo stack and clear redo stack."""
         self.undo_stack.append(command)
         self.redo_stack.clear()
         self._update_ui_callback()
 
     def undo(self):
+        """Undo the command."""
         if not self.undo_stack:
             return
         command = self.undo_stack.pop()
@@ -71,6 +80,7 @@ class UndoManager:
         self.window.pdf_view.queue_draw()
 
     def redo(self):
+        """Redo the command."""
         if not self.redo_stack:
             return
         command = self.redo_stack.pop()
@@ -80,18 +90,22 @@ class UndoManager:
         self.window.pdf_view.queue_draw()
 
     def clear(self):
+        """Clear the items."""
         self.undo_stack.clear()
         self.redo_stack.clear()
         self._update_ui_callback()
 
 class EditObjectCommand(Command):
+    """The EditObjectCommand class."""
     def __init__(self, window, target_object, old_properties, new_properties):
+        """Initialize the EditObjectCommand."""
         super().__init__(window)
         self.target_object = target_object
         self.old_properties = old_properties
         self.new_properties = new_properties
 
     def _erase_ghost_if_needed(self, page_num, properties_to_clear):
+        """Erase ghost if needed."""
         if getattr(self.target_object, 'is_new', True) or getattr(self.target_object, '_ghost_redacted', False):
             return
             
@@ -128,6 +142,7 @@ class EditObjectCommand(Command):
             print(f"Warning: could not erase ghost from snapshot for page {page_num}: {e}")
 
     def _apply_properties_to_pdf(self, properties_to_apply, properties_to_clear):
+        """Apply properties to PDF."""
         page_num = getattr(self.target_object, 'page_number', None)
         if page_num is not None:
             self._erase_ghost_if_needed(page_num, properties_to_clear)
@@ -151,7 +166,7 @@ class EditObjectCommand(Command):
                     self.window._refresh_thumbnail(page_num)
             else:
                 from .ui_components import show_error_dialog
-                show_error_dialog(self.window, f"Şekil taşınırken hata: {msg}")
+                show_error_dialog(self.window, _("err_moving_shape", msg))
             return success
             
         temp_obj_for_pdf = copy.deepcopy(self.target_object)
@@ -172,11 +187,12 @@ class EditObjectCommand(Command):
         
         if not success:
             from .ui_components import show_error_dialog
-            show_error_dialog(self.window, f"İşlem sırasında hata: {msg}")
+            show_error_dialog(self.window, _("err_during_op", msg))
         
         return success
 
     def _update_live_object(self, properties_to_apply):
+        """Update live object."""
         self.target_object.__dict__.update(copy.deepcopy(properties_to_apply))
         self.target_object.original_bbox = self.target_object.bbox
         self.target_object.modified = False
@@ -187,19 +203,23 @@ class EditObjectCommand(Command):
                 self.window._refresh_thumbnail(page_num)
 
     def execute(self):
+        """Execute the command."""
         if self._apply_properties_to_pdf(self.new_properties, self.old_properties):
             self._update_live_object(self.new_properties)
             self.window.status_label.set_text(_("change_applied"))
             self.window.pdf_view.queue_draw()
 
     def undo(self):
+        """Undo the command."""
         if self._apply_properties_to_pdf(self.old_properties, self.new_properties):
             self._update_live_object(self.old_properties)
             self.window.status_label.set_text(_("reverted"))
             self.window.pdf_view.queue_draw()
 
 class AddObjectCommand(Command):
+    """The AddObjectCommand class."""
     def __init__(self, window, new_object):
+        """Initialize the AddObjectCommand."""
         super().__init__(window)
         self.new_object = new_object
         self.is_text = isinstance(new_object, EditableText)
@@ -207,11 +227,13 @@ class AddObjectCommand(Command):
         self.is_image = not (self.is_text or self.is_shape)
 
     def _refresh_thumb(self):
+        """Refresh thumb."""
         page_num = getattr(self.new_object, 'page_number', None)
         if page_num is not None:
             self.window._refresh_thumbnail(page_num)
 
     def execute(self):
+        """Execute the command."""
         if self.is_text:
             if self.new_object not in self.window.editable_texts:
                 self.window.editable_texts.append(self.new_object)
@@ -238,6 +260,7 @@ class AddObjectCommand(Command):
         self.window.pdf_view.queue_draw()
 
     def undo(self):
+        """Undo the command."""
         if self.is_text and self.new_object in self.window.editable_texts:
             self.window.editable_texts.remove(self.new_object)
         elif self.is_shape and self.new_object in self.window.editable_shapes:
@@ -261,13 +284,16 @@ class AddObjectCommand(Command):
 
 
 class DeleteObjectCommand(Command):
+    """The DeleteObjectCommand class."""
     def __init__(self, window, deleted_object):
+        """Initialize the DeleteObjectCommand."""
         super().__init__(window)
         self.deleted_object = deleted_object
         self.is_text = isinstance(deleted_object, EditableText)
         self.is_shape = isinstance(deleted_object, EditableShape)
 
     def execute(self):
+        """Execute the command."""
         if self.is_text and self.deleted_object in self.window.editable_texts:
             self.window.editable_texts.remove(self.deleted_object)
         elif self.is_shape and self.deleted_object in self.window.editable_shapes:
@@ -292,6 +318,7 @@ class DeleteObjectCommand(Command):
         self.window.pdf_view.queue_draw()
 
     def undo(self):
+        """Undo the command."""
         if self.is_text and self.deleted_object not in self.window.editable_texts:
             self.window.editable_texts.append(self.deleted_object)
         elif self.is_shape and self.deleted_object not in self.window.editable_shapes:
@@ -313,14 +340,18 @@ class DeleteObjectCommand(Command):
         self.window.pdf_view.queue_draw()
 
 class CompositeCommand(Command):
+    """The CompositeCommand class."""
     def __init__(self, window, commands):
+        """Initialize the CompositeCommand."""
         super().__init__(window)
         self.commands = commands
         
     def execute(self):
+        """Execute the command."""
         for command in self.commands:
             command.execute()
             
     def undo(self):
+        """Undo the command."""
         for command in reversed(self.commands):
             command.undo()

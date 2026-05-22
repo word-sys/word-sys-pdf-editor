@@ -16,9 +16,11 @@ BASE14_FALLBACK_MAP = {
 }
 
 class EditableText:
+    """The EditableText class."""
     def __init__(self, x, y, text, font_size=11, font_family="Liberation Sans",
                  color=(0, 0, 0), span_data=None, is_new=False, baseline=None):
         
+        """Initialize the EditableText."""
         self.x = x
         self.y = y
         self.text = text
@@ -150,9 +152,11 @@ class EditableText:
 
     @property
     def is_link(self):
+        """Check if link."""
         return bool(self.text and re.search(r'https?://', self.text))
 
     def split_at_range(self, start_char, end_char):
+        """Split at range."""
         text = self.text
         if start_char < 0: start_char = 0
         if end_char > len(text): end_char = len(text)
@@ -195,7 +199,9 @@ class EditableText:
         return parts
 
 class EditableImage:
+    """The EditableImage class."""
     def __init__(self, bbox, page_number, xref, image_bytes, is_new=False):
+        """Initialize the EditableImage."""
         self.bbox = bbox
         self.original_bbox = bbox
         self.page_number = page_number
@@ -206,6 +212,7 @@ class EditableImage:
         self.modified = False
 
 class EditableShape:
+    """The EditableShape class."""
     SHAPE_ELLIPSE = "circle"
     SHAPE_RECTANGLE = "rectangle"
     SHAPE_ELLIPSE = "ellipse"
@@ -213,6 +220,7 @@ class EditableShape:
     
     def __init__(self, shape_type, bbox, fill_color=(255, 255, 255), 
                  stroke_color=(0, 0, 0), stroke_width=1.0, page_number=None, is_new=False, is_transparent=True):
+        """Initialize the EditableShape."""
         self.shape_type = shape_type
         self.bbox = bbox
         self.original_bbox = bbox
@@ -239,16 +247,20 @@ class EditableShape:
         self.y = bbox[1]
     
     def get_width(self):
+        """Get the width."""
         return self.bbox[2] - self.bbox[0]
     
     def get_height(self):
+        """Get the height."""
         return self.bbox[3] - self.bbox[1]
     
     def set_size(self, width, height):
+        """Set the size."""
         x1, y1, _, _ = self.bbox
         self.bbox = (x1, y1, x1 + width, y1 + height)
     
     def set_position(self, x, y):
+        """Set the position."""
         width = self.get_width()
         height = self.get_height()
         self.bbox = (x, y, x + width, y + height)
@@ -256,9 +268,11 @@ class EditableShape:
         self.y = y
 
 class PdfPage(GObject.GObject):
+    """The PdfPage class."""
     __gtype_name__ = 'PdfPage'
     index = GObject.Property(type=int)
     thumbnail = GObject.Property(type=GdkPixbuf.Pixbuf)
 
     def __init__(self, index, thumbnail):
+        """Initialize the PdfPage."""
         super().__init__(index=index, thumbnail=thumbnail)

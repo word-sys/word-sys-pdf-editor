@@ -11,7 +11,9 @@ from .i18n import _, get_language, set_language
 
 
 class WelcomeView(Adw.Bin):
+    """The start screen view showing recent files, quick guide, and language settings."""
     def __init__(self, parent_window, **kwargs):
+        """Initialise the WelcomeView and load recent files."""
         super().__init__(**kwargs)
         self.parent_window = parent_window
 
@@ -21,6 +23,7 @@ class WelcomeView(Adw.Bin):
         self.recent_manager.connect("changed", self._populate_recent_files)
 
     def _build_ui(self):
+        """Build widgets for the welcome screen layout."""
         clamp = Adw.Clamp(maximum_size=800, tightening_threshold=300)
         self.set_child(clamp)
 
@@ -121,6 +124,7 @@ class WelcomeView(Adw.Bin):
         main_box.append(tip_label)
 
     def _on_lang_toggled(self, button, lang_code):
+        """Handle the lang toggled event."""
         if not button.get_active():
             return
         if lang_code == get_language():
@@ -128,6 +132,7 @@ class WelcomeView(Adw.Bin):
         self._confirm_language_switch(lang_code)
 
     def _confirm_language_switch(self, lang_code):
+        """Confirm language switch."""
         from gi.repository import Gtk
         from .ui_components import show_confirm_dialog
 
@@ -156,6 +161,7 @@ class WelcomeView(Adw.Bin):
         )
 
         def on_response(d, response_id):
+            """Handle the dialog response event."""
             d.destroy()
             if response_id == Gtk.ResponseType.OK:
                 set_language(lang_code)
@@ -172,6 +178,7 @@ class WelcomeView(Adw.Bin):
         dialog.present()
 
     def _populate_recent_files(self, *args):
+        """Populate the list of recently opened PDF files."""
         child = self.recent_list_box.get_first_child()
         while child:
             self.recent_list_box.remove(child)
@@ -188,6 +195,7 @@ class WelcomeView(Adw.Bin):
         self.recent_list_box.set_visible(pdf_files_found > 0)
 
     def _create_recent_file_row(self, item):
+        """Create a list row widget for a recent file entry."""
         action_row = Adw.ActionRow()
         action_row.set_title(item.get_display_name())
         try:
@@ -202,10 +210,12 @@ class WelcomeView(Adw.Bin):
         return action_row
 
     def on_open_clicked(self, button):
+        """Handle open button clicks by delegating to parent window."""
         if self.parent_window:
             self.parent_window.on_open_clicked(button)
 
     def on_recent_file_activated(self, row, uri):
+        """Open a recent file when its row is activated."""
         if self.parent_window:
             gfile = Gio.File.new_for_uri(uri)
             self.parent_window.load_document(gfile.get_path())
