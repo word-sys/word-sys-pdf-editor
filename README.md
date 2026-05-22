@@ -13,8 +13,8 @@ License: **GPL-3.0-or-later**
 
 ---
 
-<img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" width="1460" height="960"/>
-<img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" width="1460" height="960"/>
+<img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" width="800" height="600"/>
+<img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" width="800" height="600"/>
 
 
 ## Key Features
