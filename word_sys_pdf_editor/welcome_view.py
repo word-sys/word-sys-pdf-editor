@@ -112,7 +112,15 @@ class WelcomeView(Adw.Bin):
         self.recent_list_box = Gtk.ListBox()
         self.recent_list_box.set_selection_mode(Gtk.SelectionMode.NONE)
         self.recent_list_box.add_css_class("boxed-list")
-        recent_box.append(self.recent_list_box)
+
+        self.recent_scroll = Gtk.ScrolledWindow()
+        self.recent_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.recent_scroll.set_max_content_height(180)
+        self.recent_scroll.set_propagate_natural_height(True)
+        self.recent_scroll.set_child(self.recent_list_box)
+        
+        recent_box.append(self.recent_scroll)
+        self.recent_box = recent_box
 
         tips = _("tips")
         tip_text = random.choice(tips) if isinstance(tips, list) else str(tips)
@@ -187,12 +195,12 @@ class WelcomeView(Adw.Bin):
         items = self.recent_manager.get_items()
         pdf_files_found = 0
         for item in items:
-            if item.get_mime_type() == "application/pdf" and pdf_files_found < 5:
+            if item.get_mime_type() == "application/pdf":
                 row = self._create_recent_file_row(item)
                 self.recent_list_box.append(row)
                 pdf_files_found += 1
 
-        self.recent_list_box.set_visible(pdf_files_found > 0)
+        self.recent_box.set_visible(pdf_files_found > 0)
 
     def _create_recent_file_row(self, item):
         """Create a list row widget for a recent file entry."""

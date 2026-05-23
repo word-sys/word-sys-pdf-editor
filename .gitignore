@@ -24,3 +24,6 @@ obj-*/
 
 .vscode/
 .idea/
+AppDir/
+build_tmp/
+*.AppImage

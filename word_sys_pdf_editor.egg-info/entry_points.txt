@@ -1,0 +1,2 @@
+[gui_scripts]
+word-sys-pdf-editor = word_sys_pdf_editor.main:main

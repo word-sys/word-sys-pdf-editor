@@ -50,6 +50,9 @@ class PdfEditorApplication(Adw.Application):
 
 def main():
     """Run the Adw application."""
+    GLib.set_prgname("word-sys-pdf-editor")
+    GLib.set_application_name("word-sys's PDF Editor")
+    Gtk.Window.set_default_icon_name("f-pv1")
     Adw.init()
     app = PdfEditorApplication()
     return app.run(sys.argv)
