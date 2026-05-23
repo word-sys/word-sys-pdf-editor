@@ -774,12 +774,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         about_dialog.set_comments(_("about_comments"))
 
         try:
-            app_icon_path = Path(__file__).resolve().parent / "img" / "f-pv1.png"
-            if app_icon_path.exists():
-                texture = Gdk.Texture.new_from_filename(str(app_icon_path))
-                about_dialog.set_logo(texture)
-            else:
-                about_dialog.set_logo_icon_name("application-x-executable")
+            about_dialog.set_logo_icon_name("f-pv1")
         except Exception as e:
             print(f"Warning: Could not load application icon for About dialog: {e}")
             about_dialog.set_logo_icon_name("application-x-executable")

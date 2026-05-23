@@ -42,4 +42,11 @@ cp AppDir/usr/lib/librsvg-2.so* AppDir/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders/
 build_tmp/linuxdeploy --appdir AppDir --output appimage --desktop-file=word-sys-pdf-editor.desktop --icon-file=word_sys_pdf_editor/img/f-pv1.png
 mv *x86_64.AppImage word-sys-pdf-editor.AppImage
 tar -czf word-sys-pdf-editor-linux-x64.tar.gz AppDir
-rm -rf build_tmp
+
+mkdir -p debian_build
+rsync -a --exclude=debian_build --exclude=AppDir --exclude=build_tmp . debian_build/
+cd debian_build
+dpkg-buildpackage -us -uc 2>&1 || true
+cd ..
+mv word-sys-pdf-editor_* ./ 2>/dev/null || true
+rm -rf debian_build build_tmp

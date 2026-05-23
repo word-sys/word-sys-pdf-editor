@@ -34,9 +34,8 @@ class WelcomeView(Adw.Bin):
         main_box.set_margin_bottom(40)
 
         try:
-            icon_path = Path(__file__).resolve().parent / "img" / "f-pv1.png"
-            app_icon = Gtk.Picture.new_for_filename(str(icon_path))
-            app_icon.set_size_request(200, 200)
+            app_icon = Gtk.Image.new_from_icon_name("f-pv1")
+            app_icon.set_pixel_size(200)
             app_icon.set_valign(Gtk.Align.END)
             app_icon.set_halign(Gtk.Align.CENTER)
             app_icon.set_margin_bottom(20)

@@ -1,3 +1,13 @@
+word-sys-pdf-editor (1.9.2) bookworm; urgency=medium
+
+  * Added scrool wheel to PDF's that on Welcome Page to see all of them at same time while fixing the "Oversized Unsizable Screen Issue"
+  * Added universal appimage and binary releases that works on old and bleeding edge distros without installing any depency, easy use for last-user
+  * Fixed by adding "Scroll Wheel to Welcome Page" update that fixes PDF file directory listings getting stuck top to top that blocks screen to be resized again, fixed issue.
+  * Welcome page screen PDF's thats now shows "PDF's on System" that scans places to find PDF Files for easy access
+  * Fixed icon issue on AppImage and Binary Release
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Sat, 23 May 2026 17:27:00 +0300
+
 word-sys-pdf-editor (1.9.1) bookworm; urgency=medium
 
   * Wrapped hardcoded Turkish error/status messages with localization

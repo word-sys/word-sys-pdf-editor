@@ -2,16 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.2] - 2026-05-23
+
+### Added
+- **Scroll Wheel to Welcome Page**: Added scrool wheel to PDF's that on Welcome Page to see all of them at same time while fixing the "Oversized Unsizable Screen Issue"
+- **AppImage and Binary Release**: Added universal appimage and binary releases that works on old and bleeding edge distros without installing any depency, easy use for last-user
+
+### Fixed
+- **Oversized Unsizable Screen Issue**: Fixed by adding "Scroll Wheel to Welcome Page" update that fixes PDF file directory listings getting stuck top to top that blocks screen to be resized again, fixed issue.
+- **Localizations**: Welcome page screen PDF's thats now shows "PDF's on System" that scans places to find PDF Files for easy access
+- **Icon Assets**: Fixed icon issue on AppImage and Binary Release
+
+---
+
 ## [1.9.1] - 2026-05-22
 
 ### Added
 - **System Integration**: Integrated native XDG file picker via `Gtk.FileChooserNative`.
 
 ### Fixed
-- **Oversized Layout**: Split the top toolbar into a two-line layout in Edit mode to reduce minimum window width to ~500px, resolving the PDF page centering issue when resizing.
-- **Context Menu Popover**: Corrected spawning coordinate calculations so the right-click context menu points directly to the mouse cursor.
-- **Localizations**: Localized all previously hardcoded Turkish error/status messages into English and Turkish using the `i18n` translation tables.
-- **Icon Assets**: Removed obsolete files (`icon.png`, `icon.svg`, `icon256.png`, `icon256.svg`) from the repository, while preserving `f-pv1.svg` for system integration.
+- **Oversized Layout**: Split the top toolbar into a two-line layout in Edit mode to reduce minimum window width to ~500px, resolving the PDF page centering issue when resizing
+- **Context Menu Popover**: Corrected spawning coordinate calculations so the right-click context menu points directly to the mouse cursor
+- **Localizations**: Localized all previously hardcoded Turkish error/status messages into English and Turkish using the `i18n` translation tables
+- **Icon Assets**: Removed obsolete files (`icon.png`, `icon.svg`, `icon256.png`, `icon256.svg`) from the repository, while preserving `f-pv1.svg` for system integration
 
 ---
 
