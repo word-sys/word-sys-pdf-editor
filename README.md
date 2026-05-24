@@ -272,6 +272,8 @@ This method is suitable for users who want to run the application directly from 
 
 #### Arch Linux and Derivatives — From AUR
 
+## THIS PACKAGES ARENT CREATED OR MAINTAINED BY ME, CONSIDER CHECKING THEM ON AUR TO MAKE SURE, I AM NOT RESPONSIBLE FOR ANYTHING THAT HAPPENS OR GONNA HAPPENS AFTER INSTALLING FROM AUR CAUSE IM NOT THE CREATER OR MAINTAINER OF THAT PACKAGES, BE CAREFULL!
+
 1.  **Download, build and install:**
 
     ```bash
@@ -289,6 +291,17 @@ This method is suitable for users who want to run the application directly from 
     
     ```bash
     paru -S word-sys-pdf-editor
+    ```
+    Or you can use -bin package on AUR:
+    
+    ```bash
+    yay -S word-sys-pdf-editor-bin
+    ```
+    
+    or if you prefer to use paru:
+    
+    ```bash
+    paru -S word-sys-pdf-editor-bin
     ```
 
     *Optional (for DOCX export):*
