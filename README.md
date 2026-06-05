@@ -9,7 +9,7 @@ License: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Recommended Stable Release: v1.9.2** — For the most stable experience, it is strongly recommended to use version **1.9.2**. See the installation sections below for details on how to install this version.
+> **Recommended Stable Release: v1.9.3** — For the most stable experience, it is strongly recommended to use version **1.9.3**. See the installation sections below for details on how to install this version.
 
 ---
 
@@ -49,16 +49,16 @@ There are many ways to install word-sys's PDF Editor on your system:
 
 This method is the easiest installation path for Linux distributions.
 
-1.  Download the latest `.deb` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named something like `word-sys-pdf-editor_1.9.2_all.deb`.
+1.  Download the latest `.deb` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named something like `word-sys-pdf-editor_1.9.3_all.deb`.
 
     > [!TIP]
-    > **Use version 1.9.2** for the most stable experience: look for `word-sys-pdf-editor_1.9.2_all.deb` on the releases page.
+    > **Use version 1.9.3** for the most stable experience: look for `word-sys-pdf-editor_1.9.3_all.deb` on the releases page.
 
 2.  Open a terminal in the directory where you downloaded the `.deb` file.
 3.  Run the following command to install the package:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.9.2_all.deb
+    sudo apt install ./word-sys-pdf-editor_1.9.3_all.deb
     ```
     *(Note: Replace `word-sys-pdf-editor_1.9.2_all.deb` with the exact filename you downloaded if different.)*
 4.  If you encounter a dependency error during installation, try running the following command to fix missing dependencies:
@@ -75,7 +75,7 @@ This method is the easiest usable path for all Linux distributions.
 
 1.  Download the latest `.AppImage` or `*-linux-x64.tar.gz` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named something like `word-sys-pdf-editor.AppImage` or `word-sys-pdf-editor-linux-x64.tar.gz`.
 
-    > **Use version 1.9.2** for the most stable experience: look for `v1.9.2` tag on the releases page.
+    > **Use version 1.9.3** for the most stable experience: look for `v1.9.3` tag on the releases page.
 
 #### A. AppImage Installation
 
@@ -122,7 +122,7 @@ This method is the easiest usable path for all Linux distributions.
 This method is suitable for users who want to run the application directly from source code or contribute to development.
 
 > [!TIP]
-> For a stable experience, use the **v1.9.2** tag when cloning. If you want to test the latest development changes, you can clone the `main` branch directly — but note that it may be less stable.
+> For a stable experience, use the **v1.9.3** tag when cloning. If you want to test the latest development changes, you can clone the `main` branch directly — but note that it may be less stable.
 
 ---
 
@@ -145,9 +145,9 @@ This method is suitable for users who want to run the application directly from 
 
 2.  **Download the Source Code:**
 
-    **Recommended (stable v1.9.2):**
+    **Recommended (stable v1.9.3):**
     ```bash
-    git clone --branch 1.9.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch 1.9.3 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -197,9 +197,9 @@ This method is suitable for users who want to run the application directly from 
 
 2.  **Download the Source Code:**
 
-    **Recommended (stable v1.9.2):**
+    **Recommended (stable v1.9.3):**
     ```bash
-    git clone --branch 1.9.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch 1.9.3 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -232,9 +232,9 @@ This method is suitable for users who want to run the application directly from 
 
 1.  **Download the Source Code:**
 
-    **Recommended (stable v1.9.2):**
+    **Recommended (stable v1.9.3):**
     ```bash
-    git clone --branch 1.9.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch 1.9.3 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
