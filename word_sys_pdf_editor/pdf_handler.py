@@ -760,6 +760,7 @@ def extract_editable_shapes(doc, page_index):
         return [], error_msg
 
 _page_snapshots: dict = {}
+_page_original_links: dict = {}
 
 def save_page_snapshot(doc, page_num: int, force: bool = False):
     """Save page snapshot."""
@@ -776,6 +777,7 @@ def save_page_snapshot(doc, page_num: int, force: bool = False):
             if raw:
                 content += raw
         _page_snapshots[key] = content
+        _page_original_links[key] = page.get_links()
     except Exception as e:
         print(f"Warning: could not save snapshot for page {page_num}: {e}")
 
@@ -800,6 +802,23 @@ def restore_page_from_snapshot(doc, page_num: int) -> bool:
         else:
             xref = doc._newXref()
             doc.update_stream(xref, content)
+            
+        original_links = _page_original_links.get(key, [])
+        original_signatures = set()
+        for link in original_links:
+            rect = link.get("from")
+            rect_tuple = (rect.x0, rect.y0, rect.x1, rect.y1) if rect else (0, 0, 0, 0)
+            sig = (link.get("kind"), rect_tuple, link.get("uri"))
+            original_signatures.add(sig)
+            
+        current_links = page.get_links()
+        for link in current_links:
+            rect = link.get("from")
+            rect_tuple = (rect.x0, rect.y0, rect.x1, rect.y1) if rect else (0, 0, 0, 0)
+            sig = (link.get("kind"), rect_tuple, link.get("uri"))
+            if sig not in original_signatures:
+                page.delete_link(link)
+                
         return True
     except Exception as e:
         print(f"Warning: could not restore snapshot for page {page_num}: {e}")
@@ -811,6 +830,8 @@ def release_page_snapshots(doc):
     keys_to_remove = [k for k in _page_snapshots if k[0] == doc_id]
     for k in keys_to_remove:
         del _page_snapshots[k]
+        if k in _page_original_links:
+            del _page_original_links[k]
 
 def _apply_single_object_to_page(doc, page, obj):
     """Apply single object to page."""
@@ -821,19 +842,89 @@ def _apply_single_object_to_page(doc, page, obj):
                 return False, error_msg
             lines = obj.text.split('\n')
             line_height = obj.font_size * 1.2
+            
+            base_name = getattr(obj, "pdf_fontname_base14", "helv")
+            is_bold = getattr(obj, "is_bold", False)
+            is_italic = getattr(obj, "is_italic", False)
+            calc_font = _get_base14_font_variant(base_name, is_bold, is_italic)
+            
+            fontname = font_arg.get("fontname", "helv")
+            fontfile = font_arg.get("fontfile", None)
+            font_obj = None
+            try:
+                font_obj = fitz.Font(fontname=fontname, fontfile=fontfile)
+            except Exception:
+                pass
+
             for i, line in enumerate(lines):
-                pos = fitz.Point(obj.x, obj.baseline + (i * line_height))
-                page.insert_text(pos, line, fontsize=obj.font_size,
-                                 color=obj.color, overlay=True, **font_arg)
+                links = list(re.finditer(r'(https?://[^\s]+|www\.[^\s]+)', line))
                 
-                if getattr(obj, 'is_underline', False):
-                    calc_font = font_arg.get("fontname", "helv")
-                    if calc_font.startswith("word-sys"):
-                        calc_font = "helv"
-                    text_len = fitz.get_text_length(line, fontname=calc_font, fontsize=obj.font_size)
-                    p1 = fitz.Point(obj.x, obj.baseline + (i * line_height) + 1.5)
-                    p2 = fitz.Point(obj.x + text_len, obj.baseline + (i * line_height) + 1.5)
-                    page.draw_line(p1, p2, color=obj.color, width=0.8)
+                if not links:
+                    pos = fitz.Point(obj.x, obj.baseline + (i * line_height))
+                    page.insert_text(pos, line, fontsize=obj.font_size,
+                                     color=obj.color, overlay=True, **font_arg)
+                    
+                    if font_obj:
+                        try:
+                            text_len = font_obj.text_length(line, fontsize=obj.font_size)
+                        except Exception:
+                            text_len = fitz.get_text_length(line, fontname=calc_font, fontsize=obj.font_size)
+                    else:
+                        text_len = fitz.get_text_length(line, fontname=calc_font, fontsize=obj.font_size)
+                    
+                    if getattr(obj, 'is_underline', False):
+                        p1 = fitz.Point(obj.x, obj.baseline + (i * line_height) + 1.5)
+                        p2 = fitz.Point(obj.x + text_len, obj.baseline + (i * line_height) + 1.5)
+                        page.draw_line(p1, p2, color=obj.color, width=0.8)
+                else:
+                    segments = []
+                    last_idx = 0
+                    for match in links:
+                        start, end = match.start(), match.end()
+                        if start > last_idx:
+                            segments.append((line[last_idx:start], False))
+                        segments.append((line[start:end], True))
+                        last_idx = end
+                    if last_idx < len(line):
+                        segments.append((line[last_idx:], False))
+                        
+                    current_x = obj.x
+                    for seg_text, is_seg_link in segments:
+                        if not seg_text:
+                            continue
+                        
+                        seg_color = (0.0, 0.33, 0.8) if is_seg_link else obj.color
+                        pos = fitz.Point(current_x, obj.baseline + (i * line_height))
+                        page.insert_text(pos, seg_text, fontsize=obj.font_size,
+                                         color=seg_color, overlay=True, **font_arg)
+                        
+                        if font_obj:
+                            try:
+                                seg_len = font_obj.text_length(seg_text, fontsize=obj.font_size)
+                            except Exception:
+                                seg_len = fitz.get_text_length(seg_text, fontname=calc_font, fontsize=obj.font_size)
+                        else:
+                            seg_len = fitz.get_text_length(seg_text, fontname=calc_font, fontsize=obj.font_size)
+                        
+                        if is_seg_link or getattr(obj, 'is_underline', False):
+                            p1 = fitz.Point(current_x, obj.baseline + (i * line_height) + 1.5)
+                            p2 = fitz.Point(current_x + seg_len, obj.baseline + (i * line_height) + 1.5)
+                            page.draw_line(p1, p2, color=seg_color, width=0.8)
+                            
+                        if is_seg_link:
+                            y0 = obj.baseline + (i * line_height) - obj.font_size
+                            y1 = obj.baseline + (i * line_height) + (obj.font_size * 0.2)
+                            link_rect = fitz.Rect(current_x, y0, current_x + seg_len, y1)
+                            
+                            uri = seg_text
+                            if not uri.startswith(("http://", "https://")):
+                                uri = "https://" + uri
+                                
+                            link_data = {"kind": fitz.LINK_URI, "from": link_rect, "uri": uri}
+                            page.insert_link(link_data)
+                            
+                        current_x += seg_len
+                        
     elif isinstance(obj, EditableImage):
         page.insert_image(obj.bbox, stream=obj.image_bytes, keep_proportion=False)
     elif isinstance(obj, EditableShape):

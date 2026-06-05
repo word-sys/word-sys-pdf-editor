@@ -226,8 +226,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.print_button.connect("clicked", lambda w: self.on_print_activated(None, None))
         header.pack_end(self.print_button)
 
-        self.mode_toggle_button = Gtk.Button(label="Edit")
-        self.mode_toggle_button.set_tooltip_text("Switch between View and Edit mode")
+        self.mode_toggle_button = Gtk.Button(label=_("mode_edit"))
+        self.mode_toggle_button.set_tooltip_text(_("mode_toggle_tip"))
         self.mode_toggle_button.get_style_context().add_class("suggested-action")
         self.mode_toggle_button.connect("clicked", self._toggle_view_edit_mode)
         header.pack_end(self.mode_toggle_button)
@@ -289,7 +289,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             margin_start=6, margin_end=6, margin_top=10, margin_bottom=6)
         sidebar_box.set_size_request(190, -1)
 
-        tools_label = Gtk.Label(label="Tools", xalign=0.0)
+        tools_label = Gtk.Label(label=_("tools"), xalign=0.0)
         tools_label.add_css_class('title-4')
         sidebar_box.append(tools_label)
 
@@ -499,16 +499,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         hl_rgba = Gdk.RGBA()
         hl_rgba.parse("yellow")
         self.highlight_color_button.set_rgba(hl_rgba)
-        self.highlight_color_button.set_tooltip_text("Highlight Color")
+        self.highlight_color_button.set_tooltip_text(_("highlight_color_tip"))
         self.view_toolbar_box.append(self.highlight_color_button)
         
-        self.highlight_button = Gtk.Button(icon_name="format-text-highlight-symbolic", label="Highlight")
-        self.highlight_button.set_tooltip_text("Highlight selected text")
+        self.highlight_button = Gtk.Button(icon_name="format-text-highlight-symbolic", label=_("highlight"))
+        self.highlight_button.set_tooltip_text(_("highlight_tip"))
         self.highlight_button.connect("clicked", self.on_highlight_clicked)
         self.view_toolbar_box.append(self.highlight_button)
         
-        self.remove_highlight_button = Gtk.Button(icon_name="edit-clear-symbolic", label="Remove Highlight")
-        self.remove_highlight_button.set_tooltip_text("Remove highlight from selected text")
+        self.remove_highlight_button = Gtk.Button(icon_name="edit-clear-symbolic", label=_("remove_highlight"))
+        self.remove_highlight_button.set_tooltip_text(_("remove_highlight_tip"))
         self.remove_highlight_button.connect("clicked", self.on_remove_highlight_clicked)
         self.view_toolbar_box.append(self.remove_highlight_button)
         
@@ -611,9 +611,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, 'mode_toggle_button'):
             self.mode_toggle_button.set_sensitive(has_doc)
             if self.view_mode:
-                self.mode_toggle_button.set_label("Edit")
+                self.mode_toggle_button.set_label(_("mode_edit"))
             else:
-                self.mode_toggle_button.set_label("View")
+                self.mode_toggle_button.set_label(_("mode_view"))
 
         sidebar_tools = [self.select_tool_button, self.add_text_tool_button,
                          self.add_image_tool_button, self.drag_tool_button,
@@ -912,7 +912,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
         if error:
-            show_error_dialog(self, f"Could not extract text structure from page {page_index + 1}.\n{error}")
+            show_error_dialog(self, _("text_extract_error", page_index + 1, error))
             self.editable_texts = []
         else:
             self.editable_texts = texts
@@ -992,7 +992,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self._apply_and_hide_editor(force_apply=True)
                     success, err = pdf_handler.save_document(self.doc, self.current_file_path)
                     if not success:
-                        show_error_dialog(self, f"Save failed: {err}", "Save Error")
+                        show_error_dialog(self, _("err_pdf_save", err), _("save_error_title"))
                         return
                 else:
                     self.on_save_as(None, None)
@@ -1903,8 +1903,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         )
         
         dialog.add_buttons(
-            _("btn_cancel") if _("btn_cancel") != "btn_cancel" else "Cancel", Gtk.ResponseType.CANCEL,
-            _("btn_confirm") if _("btn_confirm") != "btn_confirm" else "Confirm", Gtk.ResponseType.ACCEPT
+            _("btn_cancel"), Gtk.ResponseType.CANCEL,
+            _("btn_confirm"), Gtk.ResponseType.ACCEPT
         )
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
         
@@ -1960,11 +1960,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             _("btn_cancel_label"), Gtk.ResponseType.CANCEL,
             _("btn_open_label"), Gtk.ResponseType.ACCEPT
         )
-        filter_pdf = Gtk.FileFilter(name="PDF files (*.pdf)")
+        filter_pdf = Gtk.FileFilter(name=_("filter_pdf"))
         filter_pdf.add_pattern("*.pdf")
         filter_pdf.add_mime_type("application/pdf")
         dialog.add_filter(filter_pdf)
-        filter_all = Gtk.FileFilter(name="All files")
+        filter_all = Gtk.FileFilter(name=_("filter_all"))
         filter_all.add_pattern("*")
         dialog.add_filter(filter_all)
 
@@ -1993,11 +1993,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             transient_for=self, action=Gtk.FileChooserAction.SAVE
         )
         dialog.add_buttons(
-            _("btn_cancel") if _("btn_cancel") != "btn_cancel" else "Cancel", Gtk.ResponseType.CANCEL,
-            _("btn_save") if _("btn_save") != "btn_save" else "Save", Gtk.ResponseType.ACCEPT
+            _("btn_cancel"), Gtk.ResponseType.CANCEL,
+            _("btn_save"), Gtk.ResponseType.ACCEPT
         )
         dialog.set_current_name(os.path.basename(self.current_file_path or "edited_document.pdf"))
-        filter_pdf = Gtk.FileFilter(name="PDF files (*.pdf)")
+        filter_pdf = Gtk.FileFilter(name=_("filter_pdf"))
         filter_pdf.add_pattern("*.pdf")
         filter_pdf.add_mime_type("application/pdf")
         dialog.add_filter(filter_pdf)
@@ -2024,19 +2024,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             transient_for=self, action=Gtk.FileChooserAction.SAVE
         )
         dialog.add_buttons(
-            _("btn_cancel") if _("btn_cancel") != "btn_cancel" else "Cancel", Gtk.ResponseType.CANCEL,
-            _("btn_confirm") if _("btn_confirm") != "btn_confirm" else "Confirm", Gtk.ResponseType.ACCEPT
+            _("btn_cancel"), Gtk.ResponseType.CANCEL,
+            _("btn_confirm"), Gtk.ResponseType.ACCEPT
         )
         base_name = Path(self.current_file_path).stem if self.current_file_path else "document"
         dialog.set_current_name(base_name)
 
         filters = {
-            "PDF": ("PDF files (*.pdf)", "*.pdf", "application/pdf"),
-            "DOCX": ("Word Document (*.docx)", "*.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-            "ODT": ("OpenDocument Text (*.odt)", "*.odt", "application/vnd.oasis.opendocument.text"),
-            "PPTX": ("PowerPoint Presentation (*.pptx)", "*.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
-            "ODP": ("OpenDocument Presentation (*.odp)", "*.odp", "application/vnd.oasis.opendocument.presentation"),
-            "TXT": ("Text File (*.txt)", "*.txt", "text/plain"),
+            "PDF": (_("filter_pdf"), "*.pdf", "application/pdf"),
+            "DOCX": (_("filter_word"), "*.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            "ODT": (_("filter_odt"), "*.odt", "application/vnd.oasis.opendocument.text"),
+            "PPTX": (_("filter_pptx"), "*.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+            "ODP": (_("filter_odp"), "*.odp", "application/vnd.oasis.opendocument.presentation"),
+            "TXT": (_("filter_txt"), "*.txt", "text/plain"),
         }
         for name, (pattern_name, pattern, mime) in filters.items():
             ff = Gtk.FileFilter(name=f"{name} - {pattern_name}")
@@ -3048,7 +3048,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                 self.pdf_view.queue_draw()
                                 self._update_ui_state()
                             except Exception as e:
-                                show_error_dialog(self, f"Resim eklenirken hata: {e}", "Hata")
+                                show_error_dialog(self, _("err_adding_image_dialog", e), _("err_title"))
                     
                     self.temp_image_bbox = None
                     d.destroy()
@@ -3290,7 +3290,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
         else:
             from .ui_components import show_error_dialog
-            show_error_dialog(self, f"Highlight failed: {err}")
+            show_error_dialog(self, _("highlight_failed", err))
 
     def on_remove_highlight_clicked(self, button):
         """Handle the remove highlight clicked event."""

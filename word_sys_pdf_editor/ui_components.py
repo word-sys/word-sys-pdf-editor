@@ -115,8 +115,8 @@ def show_confirm_dialog(parent_window, message, title="Confirm", destructive=Tru
     )
 
     dialog.add_buttons(
-        _("btn_cancel") if _("btn_cancel") != "btn_cancel" else "Cancel", Gtk.ResponseType.CANCEL,
-        _("btn_confirm") if _("btn_confirm") != "btn_confirm" else "Confirm", Gtk.ResponseType.ACCEPT
+        _("btn_cancel"), Gtk.ResponseType.CANCEL,
+        _("btn_confirm"), Gtk.ResponseType.ACCEPT
     )
     dialog.set_default_size(450, -1)
     dialog.set_default_response(Gtk.ResponseType.CANCEL)
@@ -150,9 +150,9 @@ def show_save_changes_dialog(parent_window):
     )
 
     dialog.add_buttons(
-        _("btn_cancel") if _("btn_cancel") != "btn_cancel" else "İptal", Gtk.ResponseType.CANCEL,
-        _("btn_dont_save") if _("btn_dont_save") != "btn_dont_save" else "Kaydetme", Gtk.ResponseType.REJECT,
-        _("btn_save") if _("btn_save") != "btn_save" else "Kaydet", Gtk.ResponseType.ACCEPT
+        _("btn_cancel"), Gtk.ResponseType.CANCEL,
+        _("btn_dont_save"), Gtk.ResponseType.REJECT,
+        _("btn_save"), Gtk.ResponseType.ACCEPT
     )
     dialog.set_default_response(Gtk.ResponseType.ACCEPT)
 

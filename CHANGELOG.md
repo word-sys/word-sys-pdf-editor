@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.3] - 2026-06-05
+
+### Added
+- **Hyperlink Annotation Support**: Blue styling and underlines for URL text. Clickable link annotations are embedded in the PDF page and saved natively.
+- **Link De-duplication**: Tracks original page links to prevent annotations from multiplying during page rebuilds or undo/redo actions.
+
+### Fixed
+- **Localizations**: Localized hardcoded strings for View/Edit modes, sidebar "Tools" title, Highlight button tooltips, and file chooser filters.
+- **Bold Underline Length**: Resolved the bold underline bug by dynamically resolving the styled Base 14 font variant (e.g. `Helvetica-Bold`) for accurate text length calculation during PDF rendering.
+
+---
+
 ## [1.9.2] - 2026-05-23
 
 ### Added
