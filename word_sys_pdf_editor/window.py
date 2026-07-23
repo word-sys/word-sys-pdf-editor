@@ -1508,55 +1508,50 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _handle_add_image_action(self, page_x_unzoomed, page_y_unzoomed):
         """Handle add image action."""
-        dialog = Gtk.FileChooserDialog(
-            title=_("image_select_title"),
-            transient_for=self, action=Gtk.FileChooserAction.OPEN
-        )
-        dialog.add_buttons(
-            _("btn_cancel_label"), Gtk.ResponseType.CANCEL,
-            _("btn_open_label"), Gtk.ResponseType.ACCEPT
-        )
+        dialog = Gtk.FileDialog(title=_("image_select_title"))
 
         filter_img = Gtk.FileFilter(name=_("image_filter_label"))
         for mime in ["image/png", "image/jpeg", "image/gif", "image/bmp"]:
             filter_img.add_mime_type(mime)
-        dialog.add_filter(filter_img)
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(filter_img)
+        dialog.set_filters(filters)
 
-        def on_response(d, response_id):
-            """Handle the dialog response event."""
-            if response_id == Gtk.ResponseType.ACCEPT:
-                file = d.get_file()
-                if file:
-                    image_path = file.get_path()
-                    try:
-                        with open(image_path, 'rb') as f:
-                            image_bytes = f.read()
-                        
-                        pixbuf = GdkPixbuf.Pixbuf.new_from_file(image_path)
-                        img_w, img_h = pixbuf.get_width(), pixbuf.get_height()
+        def on_open_finish(d, result):
+            """Handle the open dialog result."""
+            try:
+                file = d.open_finish(result)
+            except GLib.Error:
+                return
+            if file:
+                image_path = file.get_path()
+                try:
+                    with open(image_path, 'rb') as f:
+                        image_bytes = f.read()
 
-                        target_w = 150.0 
-                        target_h = (img_h / img_w) * target_w if img_w > 0 else 150.0
-                        rect = (page_x_unzoomed, page_y_unzoomed, 
-                                page_x_unzoomed + target_w, page_y_unzoomed + target_h)
+                    pixbuf = GdkPixbuf.Pixbuf.new_from_file(image_path)
+                    img_w, img_h = pixbuf.get_width(), pixbuf.get_height()
 
-                        new_image_obj = EditableImage(
-                            bbox=rect,
-                            page_number=self.current_page_index,
-                            xref=None, 
-                            image_bytes=image_bytes
-                        )
+                    target_w = 150.0
+                    target_h = (img_h / img_w) * target_w if img_w > 0 else 150.0
+                    rect = (page_x_unzoomed, page_y_unzoomed,
+                            page_x_unzoomed + target_w, page_y_unzoomed + target_h)
 
-                        command = AddObjectCommand(self, new_image_obj)
-                        command.execute()  
-                        self.undo_manager.add_command(command) 
+                    new_image_obj = EditableImage(
+                        bbox=rect,
+                        page_number=self.current_page_index,
+                        xref=None,
+                        image_bytes=image_bytes
+                    )
 
-                    except Exception as e:
-                        show_error_dialog(self, _("image_add_error", e), _("image_error_title"))
-            d.destroy()
+                    command = AddObjectCommand(self, new_image_obj)
+                    command.execute()
+                    self.undo_manager.add_command(command)
 
-        dialog.connect("response", on_response)
-        dialog.show()
+                except Exception as e:
+                    show_error_dialog(self, _("image_add_error", e), _("image_error_title"))
+
+        dialog.open(self, None, on_open_finish)
 
     def _update_text_format_controls(self, text_obj):
         """Update text format controls."""
@@ -1952,32 +1947,28 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.check_unsaved_changes():
              return
 
-        dialog = Gtk.FileChooserDialog(
-            title=_("open_pdf_title"),
-            transient_for=self, action=Gtk.FileChooserAction.OPEN
-        )
-        dialog.add_buttons(
-            _("btn_cancel_label"), Gtk.ResponseType.CANCEL,
-            _("btn_open_label"), Gtk.ResponseType.ACCEPT
-        )
+        dialog = Gtk.FileDialog(title=_("open_pdf_title"))
         filter_pdf = Gtk.FileFilter(name=_("filter_pdf"))
         filter_pdf.add_pattern("*.pdf")
         filter_pdf.add_mime_type("application/pdf")
-        dialog.add_filter(filter_pdf)
         filter_all = Gtk.FileFilter(name=_("filter_all"))
         filter_all.add_pattern("*")
-        dialog.add_filter(filter_all)
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(filter_pdf)
+        filters.append(filter_all)
+        dialog.set_filters(filters)
+        dialog.set_default_filter(filter_pdf)
 
-        def on_response(d, response):
-            """Handle the dialog response event."""
-            if response == Gtk.ResponseType.ACCEPT:
-                file = d.get_file()
-                if file:
-                    GLib.idle_add(self.load_document, file.get_path())
-            d.destroy()
+        def on_open_finish(d, result):
+            """Handle the open dialog result."""
+            try:
+                file = d.open_finish(result)
+            except GLib.Error:
+                return
+            if file:
+                GLib.idle_add(self.load_document, file.get_path())
 
-        dialog.connect("response", on_response)
-        dialog.show()
+        dialog.open(self, None, on_open_finish)
 
     def on_save_clicked(self, button):
         """Handle the save clicked event."""
@@ -1988,49 +1979,38 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.commit_pending_format_change()
         if not self.doc: return
 
-        dialog = Gtk.FileChooserDialog(
-            title=_("save_as_title"),
-            transient_for=self, action=Gtk.FileChooserAction.SAVE
-        )
-        dialog.add_buttons(
-            _("btn_cancel"), Gtk.ResponseType.CANCEL,
-            _("btn_save"), Gtk.ResponseType.ACCEPT
-        )
-        dialog.set_current_name(os.path.basename(self.current_file_path or "edited_document.pdf"))
+        dialog = Gtk.FileDialog(title=_("save_as_title"))
+        dialog.set_initial_name(os.path.basename(self.current_file_path or "edited_document.pdf"))
         filter_pdf = Gtk.FileFilter(name=_("filter_pdf"))
         filter_pdf.add_pattern("*.pdf")
         filter_pdf.add_mime_type("application/pdf")
-        dialog.add_filter(filter_pdf)
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(filter_pdf)
+        dialog.set_filters(filters)
+        dialog.set_default_filter(filter_pdf)
 
-        def on_response(d, response):
-            """Handle the dialog response event."""
-            if response == Gtk.ResponseType.ACCEPT:
-                file = d.get_file()
-                if file:
-                    path = file.get_path()
-                    if not path.lower().endswith('.pdf'): path += '.pdf'
-                    self.save_document(path, incremental=False)
-            d.destroy()
+        def on_save_finish(d, result):
+            """Handle the save dialog result."""
+            try:
+                file = d.save_finish(result)
+            except GLib.Error:
+                return
+            if file:
+                path = file.get_path()
+                if not path.lower().endswith('.pdf'): path += '.pdf'
+                self.save_document(path, incremental=False)
 
-        dialog.connect("response", on_response)
-        dialog.show()
+        dialog.save(self, None, on_save_finish)
 
     def on_export_as(self, action, param):
         """Handle the export as event."""
         if not self.doc: return
 
-        dialog = Gtk.FileChooserDialog(
-            title=_("export_as_title"),
-            transient_for=self, action=Gtk.FileChooserAction.SAVE
-        )
-        dialog.add_buttons(
-            _("btn_cancel"), Gtk.ResponseType.CANCEL,
-            _("btn_confirm"), Gtk.ResponseType.ACCEPT
-        )
+        dialog = Gtk.FileDialog(title=_("export_as_title"))
         base_name = Path(self.current_file_path).stem if self.current_file_path else "document"
-        dialog.set_current_name(base_name)
+        dialog.set_initial_name(base_name)
 
-        filters = {
+        export_filters = {
             "PDF": (_("filter_pdf"), "*.pdf", "application/pdf"),
             "DOCX": (_("filter_word"), "*.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
             "ODT": (_("filter_odt"), "*.odt", "application/vnd.oasis.opendocument.text"),
@@ -2038,25 +2018,31 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             "ODP": (_("filter_odp"), "*.odp", "application/vnd.oasis.opendocument.presentation"),
             "TXT": (_("filter_txt"), "*.txt", "text/plain"),
         }
-        for name, (pattern_name, pattern, mime) in filters.items():
+        ext_to_format = {
+            "pdf": "PDF", "docx": "DOCX", "odt": "ODT",
+            "pptx": "PPTX", "odp": "ODP", "txt": "TXT",
+        }
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        for name, (pattern_name, pattern, mime) in export_filters.items():
             ff = Gtk.FileFilter(name=f"{name} - {pattern_name}")
             ff.add_pattern(pattern)
             if mime: ff.add_mime_type(mime)
-            dialog.add_filter(ff)
+            filters.append(ff)
+        dialog.set_filters(filters)
 
-        def on_response(d, response):
-            """Handle the dialog response event."""
-            if response == Gtk.ResponseType.ACCEPT:
-                file = d.get_file()
-                chosen_filter = d.get_filter()
-                if file and chosen_filter:
-                    path = file.get_path()
-                    filter_name = chosen_filter.get_name().split(" - ")[0]
-                    self._execute_export(filter_name, path)
-            d.destroy()
+        def on_export_finish(d, result):
+            """Handle the export dialog result."""
+            try:
+                file = d.save_finish(result)
+            except GLib.Error:
+                return
+            if file:
+                path = file.get_path()
+                ext = Path(path).suffix.lstrip(".").lower()
+                filter_name = ext_to_format.get(ext, "PDF")
+                self._execute_export(filter_name, path)
 
-        dialog.connect("response", on_response)
-        dialog.show()
+        dialog.save(self, None, on_export_finish)
 
     def _execute_export(self, format_name, output_path):
         """Execute export."""
@@ -3008,53 +2994,48 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.pdf_view.queue_draw()
                     return
                 
-                dialog = Gtk.FileChooserDialog(
-                    title=_("image_select_title"),
-                    transient_for=self, action=Gtk.FileChooserAction.OPEN
-                )
-                dialog.add_buttons(
-                    "_Cancel", Gtk.ResponseType.CANCEL,
-                    "_Open", Gtk.ResponseType.ACCEPT
-                )
+                dialog = Gtk.FileDialog(title=_("image_select_title"))
                 filter_img = Gtk.FileFilter(name=_("image_filter_label"))
                 for mime in ["image/png", "image/jpeg", "image/gif", "image/bmp"]:
                     filter_img.add_mime_type(mime)
-                dialog.add_filter(filter_img)
-                
-                def on_image_selected(d, response_id):
+                filters = Gio.ListStore.new(Gtk.FileFilter)
+                filters.append(filter_img)
+                dialog.set_filters(filters)
+
+                def on_image_selected(d, result):
                     """Handle the image selected event."""
-                    if response_id == Gtk.ResponseType.ACCEPT:
-                        file = d.get_file()
-                        if file:
-                            try:
-                                with open(file.get_path(), 'rb') as f:
-                                    image_bytes = f.read()
-                                
-                                image_obj = EditableImage(
-                                    bbox=self.temp_image_bbox,
-                                    page_number=self.current_page_index,
-                                    xref=None,
-                                    image_bytes=image_bytes,
-                                    is_new=True
-                                )
-                                
-                                self.selected_image = image_obj
-                                self.selected_text = None
-                                self.selected_shape = None
-                                command = AddObjectCommand(self, image_obj)
-                                command.execute()
-                                self.undo_manager.add_command(command)
-                                self.document_modified = True
-                                self.pdf_view.queue_draw()
-                                self._update_ui_state()
-                            except Exception as e:
-                                show_error_dialog(self, _("err_adding_image_dialog", e), _("err_title"))
-                    
+                    try:
+                        file = d.open_finish(result)
+                    except GLib.Error:
+                        file = None
+                    if file:
+                        try:
+                            with open(file.get_path(), 'rb') as f:
+                                image_bytes = f.read()
+
+                            image_obj = EditableImage(
+                                bbox=self.temp_image_bbox,
+                                page_number=self.current_page_index,
+                                xref=None,
+                                image_bytes=image_bytes,
+                                is_new=True
+                            )
+
+                            self.selected_image = image_obj
+                            self.selected_text = None
+                            self.selected_shape = None
+                            command = AddObjectCommand(self, image_obj)
+                            command.execute()
+                            self.undo_manager.add_command(command)
+                            self.document_modified = True
+                            self.pdf_view.queue_draw()
+                            self._update_ui_state()
+                        except Exception as e:
+                            show_error_dialog(self, _("err_adding_image_dialog", e), _("err_title"))
+
                     self.temp_image_bbox = None
-                    d.destroy()
-                
-                dialog.connect('response', on_image_selected)
-                dialog.show()
+
+                dialog.open(self, None, on_image_selected)
             return
         
         if not self.dragged_object or not hasattr(self, 'drag_begin_state'):

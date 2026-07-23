@@ -37,6 +37,8 @@ def _get_font_dirs():
             "/usr/local/share/fonts",
             os.path.expanduser("~/.local/share/fonts"),
             os.path.expanduser("~/.fonts"),
+            "/run/host/fonts",
+            "/run/host/user-fonts",
         ]
     elif system == "Windows":
         system_font_paths = [os.path.join(os.environ.get('SYSTEMROOT', 'C:\\Windows'), 'Fonts')]
