@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.word_sys.pdfeditor</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>word-sys's PDF Editor</name>
+  <summary>Edit text content in PDF files</summary>
+  <description>
+    <p>
+      An open-source tool for editing content in PDF files on Linux. Edit text
+      and images directly on the page, merge and reorder pages, draw shapes
+      and highlights, and export to PDF or plain text.
+    </p>
+  </description>
+  <developer id="io.github.word-sys">
+    <name>Barın Güzeldemirci (word-sys)</name>
+  </developer>
+  <url type="homepage">https://github.com/word-sys/word-sys-pdf-editor/</url>
+  <url type="bugtracker">https://github.com/word-sys/word-sys-pdf-editor/issues</url>
+  <launchable type="desktop-id">org.word_sys.pdfeditor.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/superuser-miguel/word-sys-pdf-editor/main/screenshots/screenshot1.png</image>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/superuser-miguel/word-sys-pdf-editor/main/screenshots/screenshot2.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="1.9.3" date="2026-06-05">
+      <description>
+        <p>Adds hyperlink annotation support with link de-duplication, plus localization and bold-underline fixes.</p>
+      </description>
+    </release>
+  </releases>
+</component>

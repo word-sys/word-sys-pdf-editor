@@ -378,21 +378,64 @@ def save_document(doc, save_path, incremental=False):
         
         return False, _("err_pdf_save", e)
     
+def _is_flatpak_sandbox():
+    """Check whether the app is running inside a Flatpak sandbox."""
+    return os.path.exists('/.flatpak-info')
+
+def _resolve_libreoffice_command():
+    """Resolve the command used to invoke LibreOffice, reaching onto the host if sandboxed."""
+    for name in ('libreoffice', 'soffice'):
+        path = shutil.which(name)
+        if path:
+            return [path]
+
+    if not _is_flatpak_sandbox():
+        return None
+
+    try:
+        for name in ('libreoffice', 'soffice'):
+            result = subprocess.run(
+                ['flatpak-spawn', '--host', 'which', name],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return ['flatpak-spawn', '--host', result.stdout.strip()]
+
+        result = subprocess.run(
+            ['flatpak-spawn', '--host', 'flatpak', 'info', 'org.libreoffice.LibreOffice'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            return ['flatpak-spawn', '--host', 'flatpak', 'run', 'org.libreoffice.LibreOffice']
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return None
+
 def _export_via_libreoffice(doc, source_pdf_path, output_path, target_format):
     """Export via libreoffice."""
-    libreoffice_executable = shutil.which('libreoffice')
-    if not libreoffice_executable:
-        libreoffice_executable = shutil.which('soffice')
-    if not libreoffice_executable:
+    libreoffice_command = _resolve_libreoffice_command()
+    if not libreoffice_command:
         return False, f"LibreOffice Not Found. Install 'libreoffice-writer' to enable {target_format.upper()} export."
-    print(f"DEBUG [{target_format.upper()} Export]: Using LibreOffice executable: {libreoffice_executable}")
+    print(f"DEBUG [{target_format.upper()} Export]: Using LibreOffice command: {libreoffice_command}")
 
     final_output_dir = Path(output_path).parent
     final_output_dir.mkdir(parents=True, exist_ok=True)
 
+    if libreoffice_command[0] == 'flatpak-spawn':
+        # LibreOffice runs in its own separate Flatpak sandbox and can't see
+        # our document-portal mounts, our app-private ~/.var/app dir, or our
+        # sandbox's private /tmp. It needs a plain real directory under $HOME
+        # (outside both of those) that both sandboxes can see; we then move
+        # the converted result into the real destination afterwards.
+        work_dir = Path(os.path.expanduser('~/.word-sys-pdf-editor-libreoffice-cache'))
+        work_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        work_dir = final_output_dir
+
     temp_pdf_path = None
     try:
-        fd, temp_pdf_path = tempfile.mkstemp(suffix=".pdf", prefix="word-sys_export_", dir=str(final_output_dir))
+        fd, temp_pdf_path = tempfile.mkstemp(suffix=".pdf", prefix="word-sys_export_", dir=str(work_dir))
         os.close(fd)
         print(f"DEBUG [{target_format.upper()} Export]: Saving document state to temporary file: {temp_pdf_path}")
 
@@ -444,8 +487,7 @@ def _export_via_libreoffice(doc, source_pdf_path, output_path, target_format):
         if target_format in ('pptx', 'odp'):
             infilter = 'impress_pdf_import'
 
-        command = [
-            libreoffice_executable,
+        command = libreoffice_command + [
             '--headless',
             '--invisible',
             '--nologo',
@@ -471,7 +513,8 @@ def _export_via_libreoffice(doc, source_pdf_path, output_path, target_format):
             text=True,
             check=False,
             timeout=120,
-            env=current_env
+            env=current_env,
+            stdin=subprocess.DEVNULL
         )
 
         print(f"DEBUG [{target_format.upper()} Export]: LibreOffice Return Code: {process.returncode}")

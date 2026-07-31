@@ -10,7 +10,7 @@ class PdfEditorApplication(Adw.Application):
     """The main GTK4/libadwaita application class for the PDF Editor."""
     def __init__(self):
         """Initialise application and basic menu actions."""
-        super().__init__(application_id='org.word-sys.pdfeditor',
+        super().__init__(application_id='org.word_sys.pdfeditor',
                          flags=Gio.ApplicationFlags.HANDLES_OPEN)
         self.window = None
 
