@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.4] - 2026-07-31
+
+### Fixed
+- **GTK File Dialog & Flatpak Compatibility**: Fixed `AttributeError` for `Gtk.FileDialog` on GTK < 4.10 by introducing fallback support for `Gtk.FileChooserDialog` with explicit parent window modal binding.
+- **Export Format Detection**: Fixed "Export As" format resolution when selecting export target filters in file dialogs.
+- **Pango Markup Formatting**: Escaped recent file names and paths in the welcome view to prevent markup parsing errors.
+
+---
+
 ## [1.9.3] - 2026-06-05
 
 ### Added

@@ -9,7 +9,10 @@ import shutil
 import tempfile
 import traceback
 import re
-
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Gdk', '4.0')
+gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf, Gdk, Pango, PangoCairo
 from .models import EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape
 from .utils import find_specific_font_variant, get_default_unicode_font_path

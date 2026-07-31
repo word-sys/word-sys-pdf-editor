@@ -171,3 +171,141 @@ def show_save_changes_dialog(parent_window):
          context.iteration(True)
 
     return response
+
+
+def show_open_file_dialog(parent_window, title, filters=None, default_filter=None, callback=None):
+    """
+    Show an open file dialog using Gtk.FileDialog if available (GTK >= 4.10),
+    otherwise falling back to Gtk.FileChooserDialog (GTK < 4.10).
+    Callback receives (gfile) or (gfile, selected_filter).
+    """
+    if hasattr(Gtk, "FileDialog"):
+        dialog = Gtk.FileDialog(title=title)
+        if filters:
+            store = Gio.ListStore.new(Gtk.FileFilter)
+            for f in filters:
+                store.append(f)
+            dialog.set_filters(store)
+        if default_filter:
+            dialog.set_default_filter(default_filter)
+
+        def on_open_finish(d, result):
+            try:
+                gfile = d.open_finish(result)
+            except GLib.Error:
+                gfile = None
+            if callback:
+                import inspect
+                sig = inspect.signature(callback)
+                if len(sig.parameters) >= 2:
+                    callback(gfile, None)
+                else:
+                    callback(gfile)
+
+        dialog.open(parent_window, None, on_open_finish)
+    else:
+        dialog = Gtk.FileChooserDialog(
+            title=title,
+            transient_for=parent_window,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_buttons(
+            _("btn_cancel"), Gtk.ResponseType.CANCEL,
+            _("btn_confirm"), Gtk.ResponseType.ACCEPT,
+        )
+        if parent_window:
+            dialog.set_modal(True)
+        if filters:
+            for f in filters:
+                dialog.add_filter(f)
+        if default_filter:
+            dialog.set_filter(default_filter)
+
+        def on_response(d, response_id):
+            gfile = None
+            selected_filter = None
+            if response_id == Gtk.ResponseType.ACCEPT:
+                gfile = d.get_file()
+                selected_filter = d.get_filter()
+            d.destroy()
+            if callback:
+                import inspect
+                sig = inspect.signature(callback)
+                if len(sig.parameters) >= 2:
+                    callback(gfile, selected_filter)
+                else:
+                    callback(gfile)
+
+        dialog.connect("response", on_response)
+        dialog.present()
+
+
+def show_save_file_dialog(parent_window, title, initial_name=None, filters=None, default_filter=None, callback=None):
+    """
+    Show a save file dialog using Gtk.FileDialog if available (GTK >= 4.10),
+    otherwise falling back to Gtk.FileChooserDialog (GTK < 4.10).
+    Callback receives (gfile) or (gfile, selected_filter).
+    """
+    if hasattr(Gtk, "FileDialog"):
+        dialog = Gtk.FileDialog(title=title)
+        if initial_name:
+            dialog.set_initial_name(initial_name)
+        if filters:
+            store = Gio.ListStore.new(Gtk.FileFilter)
+            for f in filters:
+                store.append(f)
+            dialog.set_filters(store)
+        if default_filter:
+            dialog.set_default_filter(default_filter)
+
+        def on_save_finish(d, result):
+            try:
+                gfile = d.save_finish(result)
+            except GLib.Error:
+                gfile = None
+            if callback:
+                import inspect
+                sig = inspect.signature(callback)
+                if len(sig.parameters) >= 2:
+                    callback(gfile, None)
+                else:
+                    callback(gfile)
+
+        dialog.save(parent_window, None, on_save_finish)
+    else:
+        dialog = Gtk.FileChooserDialog(
+            title=title,
+            transient_for=parent_window,
+            action=Gtk.FileChooserAction.SAVE,
+        )
+        dialog.add_buttons(
+            _("btn_cancel"), Gtk.ResponseType.CANCEL,
+            _("btn_save") if "_" in _("btn_save") else _("btn_confirm"), Gtk.ResponseType.ACCEPT,
+        )
+        if parent_window:
+            dialog.set_modal(True)
+        if initial_name:
+            dialog.set_current_name(initial_name)
+        if filters:
+            for f in filters:
+                dialog.add_filter(f)
+        if default_filter:
+            dialog.set_filter(default_filter)
+
+        def on_response(d, response_id):
+            gfile = None
+            selected_filter = None
+            if response_id == Gtk.ResponseType.ACCEPT:
+                gfile = d.get_file()
+                selected_filter = d.get_filter()
+            d.destroy()
+            if callback:
+                import inspect
+                sig = inspect.signature(callback)
+                if len(sig.parameters) >= 2:
+                    callback(gfile, selected_filter)
+                else:
+                    callback(gfile)
+
+        dialog.connect("response", on_response)
+        dialog.present()

@@ -1,3 +1,11 @@
+word-sys-pdf-editor (1.9.4) bookworm; urgency=medium
+
+  * Fixed Gtk.FileDialog AttributeError on GTK < 4.10 with Gtk.FileChooserDialog fallback
+  * Fixed Export As format detection when choosing export target filters
+  * Escaped Pango markup in welcome view recent file titles and paths
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Fri, 31 Jul 2026 18:51:00 +0300
+
 word-sys-pdf-editor (1.9.3) bookworm; urgency=medium
 
   * Implemented styled and clickable web hyperlink annotations in the PDF page

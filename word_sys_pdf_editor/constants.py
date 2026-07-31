@@ -1,2 +1,2 @@
 APP_NAME = "word-sys's PDF Editor"
-APP_VERSION = "1.9.3"
+APP_VERSION = "1.9.4"

@@ -204,12 +204,12 @@ class WelcomeView(Adw.Bin):
     def _create_recent_file_row(self, item):
         """Create a list row widget for a recent file entry."""
         action_row = Adw.ActionRow()
-        action_row.set_title(item.get_display_name())
+        action_row.set_title(GLib.markup_escape_text(item.get_display_name()))
         try:
             file_path = Path(item.get_uri_display())
-            action_row.set_subtitle(str(file_path.parent))
+            action_row.set_subtitle(GLib.markup_escape_text(str(file_path.parent)))
         except Exception:
-            action_row.set_subtitle(item.get_uri_display())
+            action_row.set_subtitle(GLib.markup_escape_text(item.get_uri_display()))
         action_row.set_activatable(True)
         action_row.connect("activated", self.on_recent_file_activated, item.get_uri())
         icon = Gtk.Image.new_from_icon_name("application-pdf-symbolic")

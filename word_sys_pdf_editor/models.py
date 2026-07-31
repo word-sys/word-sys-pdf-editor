@@ -1,3 +1,5 @@
+import gi
+gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GObject, GdkPixbuf
 from .utils import normalize_color
 import re
