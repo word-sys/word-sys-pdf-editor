@@ -212,8 +212,11 @@ class WelcomeView(Adw.Bin):
             action_row.set_subtitle(GLib.markup_escape_text(item.get_uri_display()))
         action_row.set_activatable(True)
         action_row.connect("activated", self.on_recent_file_activated, item.get_uri())
-        icon = Gtk.Image.new_from_icon_name("application-pdf-symbolic")
-        action_row.add_prefix(icon)
+        if hasattr(action_row, 'set_icon_name'):
+            action_row.set_icon_name("application-pdf-symbolic")
+        else:
+            icon = Gtk.Image.new_from_icon_name("application-pdf-symbolic")
+            action_row.add_prefix(icon)
         return action_row
 
     def on_open_clicked(self, button):

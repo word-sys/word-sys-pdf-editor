@@ -330,19 +330,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.add_image_tool_button = _make_tool_btn("insert-image-symbolic", _("tool_add_image"), _("tool_add_image_tip"), "add_image")
         tools_grid.attach(self.add_image_tool_button, 0, 1, 1, 1)
 
-        self.drag_tool_button = _make_tool_btn("object-move-symbolic", _("tool_drag"), _("tool_drag_tip"), "drag")
+        self.drag_tool_button = _make_tool_btn("drag-handle-symbolic", _("tool_drag"), _("tool_drag_tip"), "drag")
         tools_grid.attach(self.drag_tool_button, 1, 1, 1, 1)
 
-        self.add_ellipse_tool_button = _make_tool_btn("shape-circle-symbolic", _("tool_ellipse"), _("tool_ellipse_tip"), "add_ellipse")
+        self.add_ellipse_tool_button = _make_tool_btn("media-record-symbolic", _("tool_ellipse"), _("tool_ellipse_tip"), "add_ellipse")
         tools_grid.attach(self.add_ellipse_tool_button, 0, 2, 1, 1)
 
-        self.add_rectangle_tool_button = _make_tool_btn("shape-rectangle-symbolic", _("tool_rectangle"), _("tool_rectangle_tip"), "add_rectangle")
+        self.add_rectangle_tool_button = _make_tool_btn("checkbox-symbolic", _("tool_rectangle"), _("tool_rectangle_tip"), "add_rectangle")
         tools_grid.attach(self.add_rectangle_tool_button, 1, 2, 1, 1)
 
         self.pen_tool_button = _make_tool_btn("document-edit-symbolic", _("tool_pen"), _("tool_pen_tip"), "pen")
         tools_grid.attach(self.pen_tool_button, 0, 3, 1, 1)
 
-        self.highlighter_tool_button = _make_tool_btn("format-text-highlight-symbolic", _("tool_highlighter"), _("tool_highlighter_tip"), "highlighter")
+        self.highlighter_tool_button = _make_tool_btn("marker-symbolic", _("tool_highlighter"), _("tool_highlighter_tip"), "highlighter")
         tools_grid.attach(self.highlighter_tool_button, 1, 3, 1, 1)
         
         sidebar_box.append(tools_grid)
@@ -545,7 +545,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn.connect("clicked", callback)
             return btn
 
-        self.highlight_button = _make_icon_label_btn("format-text-highlight-symbolic", _("highlight"), _("highlight_tip"), self.on_highlight_clicked)
+        self.highlight_button = _make_icon_label_btn("marker-symbolic", _("highlight"), _("highlight_tip"), self.on_highlight_clicked)
         self.view_toolbar_box.append(self.highlight_button)
         
         self.remove_highlight_button = _make_icon_label_btn("edit-clear-symbolic", _("remove_highlight"), _("remove_highlight_tip"), self.on_remove_highlight_clicked)

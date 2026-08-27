@@ -1018,7 +1018,8 @@ def _apply_single_object_to_page(doc, page, obj):
                 width=obj.stroke_width,
                 stroke_opacity=getattr(obj, 'opacity', 1.0),
                 lineCap=1,
-                lineJoin=1
+                lineJoin=1,
+                closePath=False
             )
             shape.commit()
         elif obj.points and len(obj.points) == 1:
