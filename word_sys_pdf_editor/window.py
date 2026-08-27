@@ -1260,6 +1260,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         cr.arc(0, 0, 1, 0, 2 * math.pi)
                         cr.restore()
                         cr.stroke()
+            elif isinstance(self.dragged_object, EditableStroke):
+                r, g, b = self.dragged_object.stroke_color
+                cr.set_source_rgba(r, g, b, 0.6)
+                cr.set_line_width(self.dragged_object.stroke_width * self.zoom_level)
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                cr.set_line_join(cairo.LINE_JOIN_ROUND)
+                if len(self.dragged_object.points) == 1:
+                    px, py = self.dragged_object.points[0]
+                    cr.arc(page_offset_x + px * self.zoom_level, page_offset_y + py * self.zoom_level, max((self.dragged_object.stroke_width * self.zoom_level) / 2.0, 1.0), 0, 2 * math.pi)
+                    cr.fill()
+                elif self.dragged_object.points:
+                    p0 = self.dragged_object.points[0]
+                    cr.move_to(page_offset_x + p0[0] * self.zoom_level, page_offset_y + p0[1] * self.zoom_level)
+                    for pt in self.dragged_object.points[1:]:
+                        cr.line_to(page_offset_x + pt[0] * self.zoom_level, page_offset_y + pt[1] * self.zoom_level)
+                    cr.stroke()
             cr.restore()
             
         for text_obj in self.editable_texts:
@@ -1427,6 +1443,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         # Render editable strokes on current page
         for stroke in getattr(self, 'editable_strokes', []):
             if getattr(stroke, 'page_number', None) != self.current_page_index:
+                continue
+            if getattr(stroke, 'is_baked', False):
+                continue
+            if stroke is self.dragged_object:
                 continue
             if not stroke.points:
                 continue
@@ -1599,6 +1619,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if (x1 - tolerance) <= page_x <= (x2 + tolerance) and \
                (y1 - tolerance) <= page_y <= (y2 + tolerance):
                 return shape_obj
+        return None
+
+    def _find_stroke_at_pos(self, page_x, page_y):
+        """Find stroke at pos."""
+        for stroke in reversed(getattr(self, 'editable_strokes', [])):
+            if stroke.page_number != self.current_page_index:
+                continue
+            if not stroke.bbox:
+                continue
+            x1, y1, x2, y2 = stroke.bbox
+            tolerance = max(stroke.stroke_width, 8.0) / self.zoom_level
+            if (x1 - tolerance) <= page_x <= (x2 + tolerance) and \
+               (y1 - tolerance) <= page_y <= (y2 + tolerance):
+                return stroke
         return None
 
     def _find_resize_handle_at_pos(self, drawn_x, drawn_y, selected_obj):
@@ -2482,14 +2516,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             clicked_image = self._find_image_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_text = self._find_text_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_shape = self._find_shape_at_pos(page_x_unzoomed, page_y_unzoomed)
+            clicked_stroke = self._find_stroke_at_pos(page_x_unzoomed, page_y_unzoomed)
 
             if clicked_image:
                 self.selected_image = clicked_image
                 self.selected_text = None
                 self.selected_shape = None
+                self.selected_stroke = None
             elif clicked_text:
                 self.selected_image = None
                 self.selected_shape = None
+                self.selected_stroke = None
                 if clicked_text == self.selected_text and n_press > 1:
                     self._show_inline_editor(clicked_text, click_x=x, click_y=y)
                 else:
@@ -2504,10 +2541,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_shape = clicked_shape
                 self.selected_text = None
                 self.selected_image = None
+                self.selected_stroke = None
+            elif clicked_stroke:
+                self.selected_stroke = clicked_stroke
+                self.selected_shape = None
+                self.selected_text = None
+                self.selected_image = None
+                self._update_stroke_format_controls(self.selected_stroke)
             else:
                 self.selected_text = None
                 self.selected_image = None
                 self.selected_shape = None
+                self.selected_stroke = None
 
             self.pdf_view.queue_draw()
             self._update_ui_state()
@@ -3001,7 +3046,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.temp_image_bbox = (page_x, page_y, page_x, page_y)
             return
 
-        selected_obj = self.selected_text or self.selected_image or self.selected_shape
+        selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
         if selected_obj and self.tool_mode == "select":
             resize_handle = self._find_resize_handle_at_pos(start_x, start_y, selected_obj)
             if resize_handle:
@@ -3014,7 +3059,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 return
 
         if self.tool_mode == "drag":
-            self.dragged_object = self._find_image_at_pos(page_x, page_y) or self._find_text_at_pos(page_x, page_y) or self._find_shape_at_pos(page_x, page_y)
+            self.dragged_object = self._find_image_at_pos(page_x, page_y) or self._find_text_at_pos(page_x, page_y) or self._find_shape_at_pos(page_x, page_y) or self._find_stroke_at_pos(page_x, page_y)
             if not self.dragged_object:
                 gesture.set_state(Gtk.EventSequenceState.DENIED)
                 return
@@ -3147,6 +3192,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             
         elif isinstance(self.dragged_object, EditableShape):
             self.selected_shape = self.dragged_object
+            self.selected_image = None
+            self.selected_text = None
+            self.selected_stroke = None
+
+        elif isinstance(self.dragged_object, EditableStroke):
+            start_points = self.drag_begin_state.get('points', [])
+            self.dragged_object.points = [(p[0] + delta_x, p[1] + delta_y) for p in start_points]
+            self.dragged_object.recalculate_bbox()
+            self.selected_stroke = self.dragged_object
+            self.selected_shape = None
             self.selected_image = None
             self.selected_text = None
 
@@ -3335,12 +3390,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_text = dragged_obj_ref
             self.selected_image = None
             self.selected_shape = None
+            self.selected_stroke = None
         elif isinstance(dragged_obj_ref, EditableImage):
             self.selected_image = dragged_obj_ref
             self.selected_text = None
             self.selected_shape = None
+            self.selected_stroke = None
         elif isinstance(dragged_obj_ref, EditableShape):
             self.selected_shape = dragged_obj_ref
+            self.selected_text = None
+            self.selected_image = None
+            self.selected_stroke = None
+        elif isinstance(dragged_obj_ref, EditableStroke):
+            self.selected_stroke = dragged_obj_ref
+            self.selected_shape = None
             self.selected_text = None
             self.selected_image = None
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw, Gio, GLib
+from gi.repository import Gtk, Adw, Gio, GLib, Gdk, Pango
 
 from . import constants
 from .i18n import _, get_language, set_language
@@ -111,6 +111,7 @@ class WelcomeView(Adw.Bin):
         self.recent_list_box = Gtk.ListBox()
         self.recent_list_box.set_selection_mode(Gtk.SelectionMode.NONE)
         self.recent_list_box.add_css_class("boxed-list")
+        self.recent_list_box.connect("row-activated", self._on_recent_row_activated)
 
         self.recent_scroll = Gtk.ScrolledWindow()
         self.recent_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -203,29 +204,49 @@ class WelcomeView(Adw.Bin):
 
     def _create_recent_file_row(self, item):
         """Create a list row widget for a recent file entry."""
-        action_row = Adw.ActionRow()
-        action_row.set_title(GLib.markup_escape_text(item.get_display_name()))
+        row = Gtk.ListBoxRow()
+        row._uri = item.get_uri()
+        row.set_activatable(True)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12,
+                      margin_start=12, margin_end=12, margin_top=8, margin_bottom=8)
+
+        display = Gdk.Display.get_default()
+        theme = Gtk.IconTheme.get_for_display(display) if display else None
+        if theme and theme.has_icon("application-pdf-symbolic"):
+            paintable = theme.lookup_icon("application-pdf-symbolic", None, 24, 1, Gtk.TextDirection.NONE, Gtk.IconLookupFlags.PRELOAD)
+            if paintable:
+                pic = Gtk.Picture.new_for_paintable(paintable)
+                pic.set_valign(Gtk.Align.CENTER)
+                box.append(pic)
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
+        title_lbl = Gtk.Label(label=item.get_display_name(), xalign=0.0, ellipsize=Pango.EllipsizeMode.END)
+        title_lbl.add_css_class("heading")
+        vbox.append(title_lbl)
+
         try:
             file_path = Path(item.get_uri_display())
-            action_row.set_subtitle(GLib.markup_escape_text(str(file_path.parent)))
+            subtitle_text = str(file_path.parent)
         except Exception:
-            action_row.set_subtitle(GLib.markup_escape_text(item.get_uri_display()))
-        action_row.set_activatable(True)
-        action_row.connect("activated", self.on_recent_file_activated, item.get_uri())
-        if hasattr(action_row, 'set_icon_name'):
-            action_row.set_icon_name("application-pdf-symbolic")
-        else:
-            icon = Gtk.Image.new_from_icon_name("application-pdf-symbolic")
-            action_row.add_prefix(icon)
-        return action_row
+            subtitle_text = item.get_uri_display()
+
+        subtitle_lbl = Gtk.Label(label=subtitle_text, xalign=0.0, ellipsize=Pango.EllipsizeMode.MIDDLE)
+        subtitle_lbl.add_css_class("dim-label")
+        subtitle_lbl.add_css_class("caption")
+        vbox.append(subtitle_lbl)
+
+        box.append(vbox)
+        row.set_child(box)
+        return row
 
     def on_open_clicked(self, button):
         """Handle open button clicks by delegating to parent window."""
         if self.parent_window:
             self.parent_window.on_open_clicked(button)
 
-    def on_recent_file_activated(self, row, uri):
-        """Open a recent file when its row is activated."""
-        if self.parent_window:
-            gfile = Gio.File.new_for_uri(uri)
+    def _on_recent_row_activated(self, list_box, row):
+        """Handle recent file row activation."""
+        if hasattr(row, '_uri') and self.parent_window:
+            gfile = Gio.File.new_for_uri(row._uri)
             self.parent_window.load_document(gfile.get_path())

@@ -148,6 +148,28 @@ class EditObjectCommand(Command):
             self._erase_ghost_if_needed(page_num, properties_to_clear)
             
         strokes = getattr(self.window, 'editable_strokes', [])
+        if isinstance(self.target_object, EditableStroke):
+            temp_obj = copy.deepcopy(self.target_object)
+            temp_obj.__dict__.update(copy.deepcopy(properties_to_apply))
+            if page_num is not None:
+                pdf_handler.rebuild_page(
+                    self.window.doc, page_num,
+                    self.window.editable_texts,
+                    self.window.editable_shapes,
+                    self.window.editable_images,
+                    exclude_obj=self.target_object,
+                    all_strokes=strokes
+                )
+            success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj)
+            if success:
+                self.target_object.is_baked = True
+                if page_num is not None:
+                    self.window._refresh_thumbnail(page_num)
+            else:
+                from .ui_components import show_error_dialog
+                show_error_dialog(self.window, _("err_during_op", msg))
+            return success
+
         if isinstance(self.target_object, EditableShape):
             temp_obj = copy.deepcopy(self.target_object)
             temp_obj.__dict__.update(copy.deepcopy(properties_to_apply))
