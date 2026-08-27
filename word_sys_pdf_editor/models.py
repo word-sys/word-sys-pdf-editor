@@ -215,13 +215,14 @@ class EditableImage:
 
 class EditableShape:
     """The EditableShape class."""
-    SHAPE_ELLIPSE = "circle"
     SHAPE_RECTANGLE = "rectangle"
     SHAPE_ELLIPSE = "ellipse"
     SHAPE_POLYGON = "polygon"
+    SHAPE_CHECKMARK = "checkmark"
+    SHAPE_CROSS = "cross"
     
     def __init__(self, shape_type, bbox, fill_color=(255, 255, 255), 
-                 stroke_color=(0, 0, 0), stroke_width=1.0, page_number=None, is_new=False, is_transparent=True):
+                 stroke_color=(0, 0, 0), stroke_width=2.0, page_number=None, is_new=False, is_transparent=True):
         """Initialize the EditableShape."""
         self.shape_type = shape_type
         self.bbox = bbox
@@ -268,6 +269,27 @@ class EditableShape:
         self.bbox = (x, y, x + width, y + height)
         self.x = x
         self.y = y
+
+    def get_checkmark_points(self):
+        """Calculate vector vertex points for checkmark shape within its bounding box."""
+        x1, y1, x2, y2 = self.bbox
+        w = max(x2 - x1, 1.0)
+        h = max(y2 - y1, 1.0)
+        return [
+            (x1 + 0.15 * w, y1 + 0.50 * h),
+            (x1 + 0.38 * w, y1 + 0.85 * h),
+            (x1 + 0.85 * w, y1 + 0.18 * h)
+        ]
+
+    def get_cross_lines(self):
+        """Calculate vector line segments for cross shape within its bounding box."""
+        x1, y1, x2, y2 = self.bbox
+        w = max(x2 - x1, 1.0)
+        h = max(y2 - y1, 1.0)
+        return [
+            ((x1 + 0.18 * w, y1 + 0.18 * h), (x2 - 0.18 * w, y2 - 0.18 * h)),
+            ((x2 - 0.18 * w, y1 + 0.18 * h), (x1 + 0.18 * w, y2 - 0.18 * h))
+        ]
 
 class EditableStroke:
     """The EditableStroke class for freehand pen and highlighter drawings."""
