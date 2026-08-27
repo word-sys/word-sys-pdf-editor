@@ -2801,7 +2801,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
             return
 
-        if self.tool_mode == "add_ellipse":
+        if self.tool_mode in ("pen", "highlighter"):
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (page_x, page_y)
+            color = self.pen_color if self.tool_mode == "pen" else self.highlighter_color
+            width = self.pen_width if self.tool_mode == "pen" else self.highlighter_width
+            opacity = 1.0 if self.tool_mode == "pen" else self.highlighter_opacity
+            self.temp_stroke = EditableStroke(
+                points=[(page_x, page_y)],
+                stroke_color=color,
+                stroke_width=width,
+                opacity=opacity,
+                tool_type=self.tool_mode,
+                page_number=self.current_page_index,
+                is_new=True
+            )
+            self.pdf_view.queue_draw()
+            return
+        elif self.tool_mode == "add_ellipse":
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             self.dragging_to_create = True
             self.drag_start_page_pos = (page_x, page_y)
@@ -2894,6 +2912,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
             
         if self.dragging_to_create:
+            if getattr(self, 'temp_stroke', None) is not None:
+                start_x, start_y = self.drag_start_page_pos
+                delta_x = offset_x / self.zoom_level
+                delta_y = offset_y / self.zoom_level
+                current_x = start_x + delta_x
+                current_y = start_y + delta_y
+                self.temp_stroke.add_point(current_x, current_y)
+                self.pdf_view.queue_draw()
+                return
             if self.temp_image_bbox is not None:
                 start_x, start_y = self.drag_start_page_pos
                 delta_x = offset_x / self.zoom_level
@@ -3037,6 +3064,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if self.dragging_to_create:
             self.dragging_to_create = False
+            if getattr(self, 'temp_stroke', None) is not None:
+                stroke_to_add = self.temp_stroke
+                self.temp_stroke = None
+                if stroke_to_add.points:
+                    stroke_to_add.recalculate_bbox()
+                    stroke_to_add.original_bbox = stroke_to_add.bbox
+                    self.selected_stroke = stroke_to_add
+                    self.selected_text = None
+                    self.selected_image = None
+                    self.selected_shape = None
+
+                    command = AddObjectCommand(self, stroke_to_add)
+                    command.execute()
+                    self.undo_manager.add_command(command)
+                    self.document_modified = True
+                    self._refresh_thumbnail(self.current_page_index)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+                return
+
             if self.temp_shape:
                 x1, y1, x2, y2 = self.temp_shape.bbox
                 if (x2 - x1) < 10 or (y2 - y1) < 10:
