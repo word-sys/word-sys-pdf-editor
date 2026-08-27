@@ -307,52 +307,42 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             column_homogeneous=True
         )
         
-        self.select_tool_button = Gtk.Button(icon_name="input-mouse-symbolic", label=_("tool_select"))
-        self.select_tool_button.set_tooltip_text(_("tool_select_tip"))
-        self.select_tool_button.connect('clicked', self.on_tool_selected, "select")
-        self.select_tool_button.add_css_class("tool-button")
+        def _make_tool_btn(icon_name, label_text, tooltip, tool_id):
+            btn = Gtk.Button()
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            box.set_halign(Gtk.Align.CENTER)
+            img = Gtk.Image.new_from_icon_name(icon_name)
+            lbl = Gtk.Label(label=label_text)
+            box.append(img)
+            box.append(lbl)
+            btn.set_child(box)
+            btn.set_tooltip_text(tooltip)
+            btn.add_css_class("tool-button")
+            btn.connect('clicked', self.on_tool_selected, tool_id)
+            return btn
+
+        self.select_tool_button = _make_tool_btn("input-mouse-symbolic", _("tool_select"), _("tool_select_tip"), "select")
         tools_grid.attach(self.select_tool_button, 0, 0, 1, 1)
 
-        self.add_text_tool_button = Gtk.Button(icon_name="insert-text-symbolic", label=_("tool_add_text"))
-        self.add_text_tool_button.set_tooltip_text(_("tool_add_text_tip"))
-        self.add_text_tool_button.connect('clicked', self.on_tool_selected, "add_text")
-        self.add_text_tool_button.add_css_class("tool-button")
+        self.add_text_tool_button = _make_tool_btn("insert-text-symbolic", _("tool_add_text"), _("tool_add_text_tip"), "add_text")
         tools_grid.attach(self.add_text_tool_button, 1, 0, 1, 1)
 
-        self.add_image_tool_button = Gtk.Button(icon_name="insert-image-symbolic", label=_("tool_add_image"))
-        self.add_image_tool_button.set_tooltip_text(_("tool_add_image_tip"))
-        self.add_image_tool_button.connect('clicked', self.on_tool_selected, "add_image")
-        self.add_image_tool_button.add_css_class("tool-button")
+        self.add_image_tool_button = _make_tool_btn("insert-image-symbolic", _("tool_add_image"), _("tool_add_image_tip"), "add_image")
         tools_grid.attach(self.add_image_tool_button, 0, 1, 1, 1)
 
-        self.drag_tool_button = Gtk.Button(icon_name="object-move-symbolic", label=_("tool_drag"))
-        self.drag_tool_button.set_tooltip_text(_("tool_drag_tip"))
-        self.drag_tool_button.connect('clicked', self.on_tool_selected, "drag")
-        self.drag_tool_button.add_css_class("tool-button")
+        self.drag_tool_button = _make_tool_btn("object-move-symbolic", _("tool_drag"), _("tool_drag_tip"), "drag")
         tools_grid.attach(self.drag_tool_button, 1, 1, 1, 1)
 
-        self.add_ellipse_tool_button = Gtk.Button(icon_name="shape-circle-symbolic", label=_("tool_ellipse"))
-        self.add_ellipse_tool_button.set_tooltip_text(_("tool_ellipse_tip"))
-        self.add_ellipse_tool_button.connect('clicked', self.on_tool_selected, "add_ellipse")
-        self.add_ellipse_tool_button.add_css_class("tool-button")
+        self.add_ellipse_tool_button = _make_tool_btn("shape-circle-symbolic", _("tool_ellipse"), _("tool_ellipse_tip"), "add_ellipse")
         tools_grid.attach(self.add_ellipse_tool_button, 0, 2, 1, 1)
 
-        self.add_rectangle_tool_button = Gtk.Button(icon_name="shape-rectangle-symbolic", label=_("tool_rectangle"))
-        self.add_rectangle_tool_button.set_tooltip_text(_("tool_rectangle_tip"))
-        self.add_rectangle_tool_button.connect('clicked', self.on_tool_selected, "add_rectangle")
-        self.add_rectangle_tool_button.add_css_class("tool-button")
+        self.add_rectangle_tool_button = _make_tool_btn("shape-rectangle-symbolic", _("tool_rectangle"), _("tool_rectangle_tip"), "add_rectangle")
         tools_grid.attach(self.add_rectangle_tool_button, 1, 2, 1, 1)
 
-        self.pen_tool_button = Gtk.Button(icon_name="document-edit-symbolic", label=_("tool_pen"))
-        self.pen_tool_button.set_tooltip_text(_("tool_pen_tip"))
-        self.pen_tool_button.connect('clicked', self.on_tool_selected, "pen")
-        self.pen_tool_button.add_css_class("tool-button")
+        self.pen_tool_button = _make_tool_btn("document-edit-symbolic", _("tool_pen"), _("tool_pen_tip"), "pen")
         tools_grid.attach(self.pen_tool_button, 0, 3, 1, 1)
 
-        self.highlighter_tool_button = Gtk.Button(icon_name="format-text-highlight-symbolic", label=_("tool_highlighter"))
-        self.highlighter_tool_button.set_tooltip_text(_("tool_highlighter_tip"))
-        self.highlighter_tool_button.connect('clicked', self.on_tool_selected, "highlighter")
-        self.highlighter_tool_button.add_css_class("tool-button")
+        self.highlighter_tool_button = _make_tool_btn("format-text-highlight-symbolic", _("tool_highlighter"), _("tool_highlighter_tip"), "highlighter")
         tools_grid.attach(self.highlighter_tool_button, 1, 3, 1, 1)
         
         sidebar_box.append(tools_grid)
@@ -543,14 +533,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.highlight_color_button.set_tooltip_text(_("highlight_color_tip"))
         self.view_toolbar_box.append(self.highlight_color_button)
         
-        self.highlight_button = Gtk.Button(icon_name="format-text-highlight-symbolic", label=_("highlight"))
-        self.highlight_button.set_tooltip_text(_("highlight_tip"))
-        self.highlight_button.connect("clicked", self.on_highlight_clicked)
+        def _make_icon_label_btn(icon_name, label_text, tooltip, callback):
+            btn = Gtk.Button()
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            img = Gtk.Image.new_from_icon_name(icon_name)
+            lbl = Gtk.Label(label=label_text)
+            box.append(img)
+            box.append(lbl)
+            btn.set_child(box)
+            btn.set_tooltip_text(tooltip)
+            btn.connect("clicked", callback)
+            return btn
+
+        self.highlight_button = _make_icon_label_btn("format-text-highlight-symbolic", _("highlight"), _("highlight_tip"), self.on_highlight_clicked)
         self.view_toolbar_box.append(self.highlight_button)
         
-        self.remove_highlight_button = Gtk.Button(icon_name="edit-clear-symbolic", label=_("remove_highlight"))
-        self.remove_highlight_button.set_tooltip_text(_("remove_highlight_tip"))
-        self.remove_highlight_button.connect("clicked", self.on_remove_highlight_clicked)
+        self.remove_highlight_button = _make_icon_label_btn("edit-clear-symbolic", _("remove_highlight"), _("remove_highlight_tip"), self.on_remove_highlight_clicked)
         self.view_toolbar_box.append(self.remove_highlight_button)
         
         self.toolbar_row1.append(self.view_toolbar_box)
@@ -618,6 +616,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_quick_guide.connect('activate', self._on_quick_guide_activated)
         self.add_action(action_quick_guide)
 
+        action_save = Gio.SimpleAction.new('save', None)
+        action_save.connect('activate', lambda a, p: self.on_save_clicked(None))
+        self.add_action(action_save)
+
         action_undo = Gio.SimpleAction.new("undo", None)
         action_undo.connect("activate", lambda a, p: self.undo_manager.undo())
         self.add_action(action_undo)
@@ -628,6 +630,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         app = self.get_application()
         if app:
+            app.set_accels_for_action("win.save", ["<Control>s"])
+            app.set_accels_for_action("win.save_as", ["<Control><Shift>s"])
             app.set_accels_for_action("win.undo", ["<Control>z"])
             app.set_accels_for_action("win.redo", ["<Control>y", "<Control><Shift>z"])
             app.set_accels_for_action("win.print", ["<Control>p"])
@@ -641,6 +645,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         can_go_next = has_pages and self.current_page_index < page_count - 1
 
         self.save_button.set_sensitive(has_doc and self.document_modified)
+        if self.lookup_action("save"):
+            self.lookup_action("save").set_enabled(has_doc and self.document_modified)
         self.lookup_action("save_as").set_enabled(has_doc)
         self.lookup_action("export_as").set_enabled(has_doc)
         self.lookup_action("print").set_enabled(has_doc)
@@ -2111,7 +2117,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def on_save_clicked(self, button):
         """Handle the save clicked event."""
-        self.on_save_as(None, None)
+        if not self.doc:
+            return
+        if self.current_file_path:
+            self.commit_pending_format_change()
+            self.save_document(self.current_file_path, incremental=False)
+        else:
+            self.on_save_as(None, None)
 
     def on_save_as(self, action, param):
         """Handle the save as event."""
@@ -2862,6 +2874,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             elif self.tool_mode in ("add_text", "pen", "highlighter"):
                  self.on_tool_selected(None, "select")
                  return True
+
+        if ctrl and keyval in (Gdk.KEY_s, Gdk.KEY_S):
+            self.on_save_clicked(None)
+            return True
 
         elif keyval == Gdk.KEY_Delete:
             self.commit_pending_format_change()

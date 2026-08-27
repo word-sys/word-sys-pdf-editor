@@ -1017,8 +1017,8 @@ def _apply_single_object_to_page(doc, page, obj):
                 color=stroke,
                 width=obj.stroke_width,
                 stroke_opacity=getattr(obj, 'opacity', 1.0),
-                lineCap=fitz.PDF_LINECAP_ROUND,
-                lineJoin=fitz.PDF_LINEJOIN_ROUND
+                lineCap=1,
+                lineJoin=1
             )
             shape.commit()
         elif obj.points and len(obj.points) == 1:
