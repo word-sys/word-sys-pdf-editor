@@ -166,11 +166,11 @@ def draw_page_to_cairo(cr, doc, page_index, zoom_level):
     try:
         page = doc.load_page(page_index)
         zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
-        pix = page.get_pixmap(matrix=zoom_matrix, alpha=True)
+        pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
         samples_bytes = bytes(pix.samples)
 
         pixbuf = GdkPixbuf.Pixbuf.new_from_data(
-            samples_bytes, GdkPixbuf.Colorspace.RGB, True, 8,
+            samples_bytes, GdkPixbuf.Colorspace.RGB, False, 8,
             pix.width, pix.height, pix.stride
         )
 
