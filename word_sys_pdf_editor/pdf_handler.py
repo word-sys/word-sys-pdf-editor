@@ -14,7 +14,7 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Gdk', '4.0')
 gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf, Gdk, Pango, PangoCairo
-from .models import EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape
+from .models import EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape, EditableStroke
 from .utils import find_specific_font_variant, get_default_unicode_font_path
 from .i18n import _
 
@@ -743,6 +743,29 @@ def delete_shape_from_page(doc, shape_obj: EditableShape):
         traceback.print_exc()
         return False, _("err_deleting_shape", e)
 
+def delete_stroke_from_page(doc, stroke_obj: EditableStroke):
+    """Delete stroke from page."""
+    if not doc or stroke_obj.page_number is None:
+        return False, "Invalid document or page number."
+    try:
+        page = doc.load_page(stroke_obj.page_number)
+        x0, y0, x1, y1 = stroke_obj.bbox
+        redact_rect = fitz.Rect(x0 - 10, y0 - 10, x1 + 10, y1 + 10)
+        if not redact_rect.is_empty and redact_rect.is_valid:
+            page.add_redact_annot(redact_rect)
+            try:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
+            except TypeError:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+            doc.load_page(stroke_obj.page_number)
+            return True, None
+        return False, "Invalid stroke bounding box."
+    except Exception as e:
+        print(f"Error deleting stroke: {e}")
+        traceback.print_exc()
+        return False, str(e)
+
+
 
 def extract_editable_shapes(doc, page_index):
     """Extract editable shapes."""
@@ -984,10 +1007,38 @@ def _apply_single_object_to_page(doc, page, obj):
         stroke = tuple(float(c) for c in obj.stroke_color)
         shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
         shape.commit()
+    elif isinstance(obj, EditableStroke):
+        if obj.points and len(obj.points) >= 2:
+            shape = page.new_shape()
+            pts = [fitz.Point(p[0], p[1]) for p in obj.points]
+            shape.draw_polyline(pts)
+            stroke = tuple(float(c) for c in obj.stroke_color)
+            shape.finish(
+                color=stroke,
+                width=obj.stroke_width,
+                stroke_opacity=getattr(obj, 'opacity', 1.0),
+                lineCap=fitz.PDF_LINECAP_ROUND,
+                lineJoin=fitz.PDF_LINEJOIN_ROUND
+            )
+            shape.commit()
+        elif obj.points and len(obj.points) == 1:
+            p = obj.points[0]
+            r = max(obj.stroke_width / 2.0, 1.0)
+            rect = fitz.Rect(p[0] - r, p[1] - r, p[0] + r, p[1] + r)
+            shape = page.new_shape()
+            shape.draw_oval(rect)
+            stroke = tuple(float(c) for c in obj.stroke_color)
+            shape.finish(
+                color=stroke,
+                fill=stroke,
+                fill_opacity=getattr(obj, 'opacity', 1.0),
+                stroke_opacity=getattr(obj, 'opacity', 1.0)
+            )
+            shape.commit()
     return True, None
 
 def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
-                 exclude_obj=None):
+                 exclude_obj=None, all_strokes=None):
     """Rebuild page."""
     if not restore_page_from_snapshot(doc, page_num):
         print(f"Warning: no snapshot for page {page_num}, skipping restore")
@@ -1005,6 +1056,11 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
             if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
                 if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
                     _apply_single_object_to_page(doc, page, obj)
+        if all_strokes:
+            for obj in all_strokes:
+                if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                    if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
+                        _apply_single_object_to_page(doc, page, obj)
         return True, None
     except Exception as e:
         print(f"ERROR: rebuild_page failed for page {page_num}: {e}")
