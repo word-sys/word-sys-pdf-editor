@@ -12,18 +12,18 @@
       and highlights, and export to PDF or plain text.
     </p>
   </description>
-  <developer id="io.github.word-sys">
-    <name>Barın Güzeldemirci (word-sys)</name>
-  </developer>
+  <developer_name>Barın Güzeldemirci (word-sys)</developer_name>
   <url type="homepage">https://github.com/word-sys/word-sys-pdf-editor/</url>
   <url type="bugtracker">https://github.com/word-sys/word-sys-pdf-editor/issues</url>
   <launchable type="desktop-id">org.word_sys.pdfeditor.desktop</launchable>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/superuser-miguel/word-sys-pdf-editor/main/screenshots/screenshot1.png</image>
+      <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot1.png</image>
+      <caption>Main window of word-sys PDF Editor</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/superuser-miguel/word-sys-pdf-editor/main/screenshots/screenshot2.png</image>
+      <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot2.png</image>
+      <caption>Editing text and annotations in a PDF file</caption>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1" />
