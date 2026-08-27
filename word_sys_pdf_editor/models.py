@@ -269,6 +269,72 @@ class EditableShape:
         self.x = x
         self.y = y
 
+class EditableStroke:
+    """The EditableStroke class for freehand pen and highlighter drawings."""
+    TOOL_PEN = "pen"
+    TOOL_HIGHLIGHTER = "highlighter"
+
+    def __init__(self, points=None, stroke_color=(0, 0, 0), stroke_width=2.0,
+                 opacity=1.0, tool_type="pen", page_number=None, is_new=True):
+        """Initialize the EditableStroke."""
+        self.points = list(points) if points else []
+        self.stroke_color = normalize_color(stroke_color)
+        self.original_stroke_color = self.stroke_color
+        self.stroke_width = float(stroke_width)
+        self.original_stroke_width = self.stroke_width
+        self.opacity = float(opacity)
+        self.tool_type = tool_type
+        self.page_number = page_number
+        self.is_new = is_new
+        self.selected = False
+        self.modified = is_new
+        self.dragging = False
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        self.x = 0
+        self.y = 0
+        self.bbox = (0, 0, 0, 0)
+        self.original_bbox = (0, 0, 0, 0)
+        if self.points:
+            self.recalculate_bbox()
+
+    def add_point(self, x, y):
+        """Add point to stroke and recalculate bbox."""
+        self.points.append((float(x), float(y)))
+        self.recalculate_bbox()
+
+    def recalculate_bbox(self):
+        """Recalculate bounding box from points with stroke width padding."""
+        if not self.points:
+            self.bbox = (0, 0, 0, 0)
+            self.original_bbox = self.bbox
+            self.x, self.y = 0, 0
+            return
+        xs = [p[0] for p in self.points]
+        ys = [p[1] for p in self.points]
+        pad = max(self.stroke_width / 2.0, 2.0)
+        min_x, max_x = min(xs) - pad, max(xs) + pad
+        min_y, max_y = min(ys) - pad, max(ys) + pad
+        self.bbox = (min_x, min_y, max_x, max_y)
+        self.original_bbox = self.bbox
+        self.x = min_x
+        self.y = min_y
+
+    def get_width(self):
+        """Get the width."""
+        return self.bbox[2] - self.bbox[0]
+
+    def get_height(self):
+        """Get the height."""
+        return self.bbox[3] - self.bbox[1]
+
+    def set_position(self, new_x, new_y):
+        """Shift all points to a new (x, y) origin."""
+        dx = new_x - self.x
+        dy = new_y - self.y
+        self.points = [(px + dx, py + dy) for px, py in self.points]
+        self.recalculate_bbox()
+
 class PdfPage(GObject.GObject):
     """The PdfPage class."""
     __gtype_name__ = 'PdfPage'
@@ -278,3 +344,4 @@ class PdfPage(GObject.GObject):
     def __init__(self, index, thumbnail):
         """Initialize the PdfPage."""
         super().__init__(index=index, thumbnail=thumbnail)
+

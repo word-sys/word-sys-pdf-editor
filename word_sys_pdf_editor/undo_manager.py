@@ -1,6 +1,6 @@
 import copy
 from . import pdf_handler
-from .models import EditableText, EditableShape
+from .models import EditableText, EditableShape, EditableStroke
 from .i18n import _
 
 class Command:
@@ -24,12 +24,12 @@ class Command:
             
         import fitz
         from . import pdf_handler
-        from .models import EditableText, EditableImage, EditableShape
+        from .models import EditableText, EditableImage, EditableShape, EditableStroke
         
         pdf_handler.restore_page_from_snapshot(self.window.doc, page_num)
         
         orig_bbox = getattr(target_object, 'original_bbox', target_object.bbox)
-        if isinstance(target_object, EditableShape):
+        if isinstance(target_object, (EditableShape, EditableStroke)):
             x0, y0, x1, y1 = orig_bbox
             redact_rect = fitz.Rect(x0 - 20, y0 - 20, x1 + 20, y1 + 20)
         else:
@@ -147,6 +147,7 @@ class EditObjectCommand(Command):
         if page_num is not None:
             self._erase_ghost_if_needed(page_num, properties_to_clear)
             
+        strokes = getattr(self.window, 'editable_strokes', [])
         if isinstance(self.target_object, EditableShape):
             temp_obj = copy.deepcopy(self.target_object)
             temp_obj.__dict__.update(copy.deepcopy(properties_to_apply))
@@ -157,7 +158,8 @@ class EditObjectCommand(Command):
                     self.window.editable_texts,
                     self.window.editable_shapes,
                     self.window.editable_images,
-                    exclude_obj=self.target_object
+                    exclude_obj=self.target_object,
+                    all_strokes=strokes
                 )
             success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj)
             if success:
@@ -180,7 +182,8 @@ class EditObjectCommand(Command):
                 self.window.editable_texts,
                 self.window.editable_shapes,
                 self.window.editable_images,
-                exclude_obj=self.target_object
+                exclude_obj=self.target_object,
+                all_strokes=strokes
             )
         
         success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj_for_pdf)
@@ -224,7 +227,8 @@ class AddObjectCommand(Command):
         self.new_object = new_object
         self.is_text = isinstance(new_object, EditableText)
         self.is_shape = isinstance(new_object, EditableShape)
-        self.is_image = not (self.is_text or self.is_shape)
+        self.is_stroke = isinstance(new_object, EditableStroke)
+        self.is_image = not (self.is_text or self.is_shape or self.is_stroke)
 
     def _refresh_thumb(self):
         """Refresh thumb."""
@@ -240,17 +244,24 @@ class AddObjectCommand(Command):
         elif self.is_shape:
             if self.new_object not in self.window.editable_shapes:
                 self.window.editable_shapes.append(self.new_object)
+        elif self.is_stroke:
+            if not hasattr(self.window, 'editable_strokes'):
+                self.window.editable_strokes = []
+            if self.new_object not in self.window.editable_strokes:
+                self.window.editable_strokes.append(self.new_object)
         else:
             if self.new_object not in self.window.editable_images:
                 self.window.editable_images.append(self.new_object)
                 
         self.new_object.is_baked = True
         page_num = getattr(self.new_object, 'page_number', self.window.current_page_index)
+        strokes = getattr(self.window, 'editable_strokes', [])
         pdf_handler.rebuild_page(
             self.window.doc, page_num,
             self.window.editable_texts,
             self.window.editable_shapes,
-            self.window.editable_images
+            self.window.editable_images,
+            all_strokes=strokes
         )
         self._refresh_thumb()
 
@@ -265,15 +276,19 @@ class AddObjectCommand(Command):
             self.window.editable_texts.remove(self.new_object)
         elif self.is_shape and self.new_object in self.window.editable_shapes:
             self.window.editable_shapes.remove(self.new_object)
+        elif self.is_stroke and hasattr(self.window, 'editable_strokes') and self.new_object in self.window.editable_strokes:
+            self.window.editable_strokes.remove(self.new_object)
         elif self.is_image and self.new_object in self.window.editable_images:
             self.window.editable_images.remove(self.new_object)
 
         page_num = getattr(self.new_object, 'page_number', self.window.current_page_index)
+        strokes = getattr(self.window, 'editable_strokes', [])
         pdf_handler.rebuild_page(
             self.window.doc, page_num,
             self.window.editable_texts,
             self.window.editable_shapes,
-            self.window.editable_images
+            self.window.editable_images,
+            all_strokes=strokes
         )
 
         self.window.document_modified = True
@@ -291,6 +306,7 @@ class DeleteObjectCommand(Command):
         self.deleted_object = deleted_object
         self.is_text = isinstance(deleted_object, EditableText)
         self.is_shape = isinstance(deleted_object, EditableShape)
+        self.is_stroke = isinstance(deleted_object, EditableStroke)
 
     def execute(self):
         """Execute the command."""
@@ -298,18 +314,22 @@ class DeleteObjectCommand(Command):
             self.window.editable_texts.remove(self.deleted_object)
         elif self.is_shape and self.deleted_object in self.window.editable_shapes:
             self.window.editable_shapes.remove(self.deleted_object)
-        elif not self.is_text and not self.is_shape and self.deleted_object in self.window.editable_images:
+        elif self.is_stroke and hasattr(self.window, 'editable_strokes') and self.deleted_object in self.window.editable_strokes:
+            self.window.editable_strokes.remove(self.deleted_object)
+        elif not self.is_text and not self.is_shape and not self.is_stroke and self.deleted_object in self.window.editable_images:
             self.window.editable_images.remove(self.deleted_object)
 
         page_num = getattr(self.deleted_object, 'page_number', self.window.current_page_index)
         if page_num is not None:
             self._erase_ghost_if_needed(self.deleted_object, page_num)
             
+        strokes = getattr(self.window, 'editable_strokes', [])
         pdf_handler.rebuild_page(
             self.window.doc, page_num,
             self.window.editable_texts,
             self.window.editable_shapes,
-            self.window.editable_images
+            self.window.editable_images,
+            all_strokes=strokes
         )
 
         self.window.document_modified = True
@@ -323,15 +343,22 @@ class DeleteObjectCommand(Command):
             self.window.editable_texts.append(self.deleted_object)
         elif self.is_shape and self.deleted_object not in self.window.editable_shapes:
             self.window.editable_shapes.append(self.deleted_object)
-        elif not self.is_text and not self.is_shape and self.deleted_object not in self.window.editable_images:
+        elif self.is_stroke:
+            if not hasattr(self.window, 'editable_strokes'):
+                self.window.editable_strokes = []
+            if self.deleted_object not in self.window.editable_strokes:
+                self.window.editable_strokes.append(self.deleted_object)
+        elif not self.is_text and not self.is_shape and not self.is_stroke and self.deleted_object not in self.window.editable_images:
             self.window.editable_images.append(self.deleted_object)
 
         page_num = getattr(self.deleted_object, 'page_number', self.window.current_page_index)
+        strokes = getattr(self.window, 'editable_strokes', [])
         pdf_handler.rebuild_page(
             self.window.doc, page_num,
             self.window.editable_texts,
             self.window.editable_shapes,
-            self.window.editable_images
+            self.window.editable_images,
+            all_strokes=strokes
         )
 
         self.window.document_modified = True
