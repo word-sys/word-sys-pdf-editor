@@ -20,7 +20,7 @@ from . import constants
 from . import pdf_handler
 from . import print_handler
 from .welcome_view import WelcomeView 
-from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape
+from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke
 from .ui_components import PageThumbnailFactory, show_error_dialog, show_confirm_dialog, show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog
 from . import utils
 
@@ -43,9 +43,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.editable_texts = [] 
         self.editable_images = []
         self.editable_shapes = []
+        self.editable_strokes = []
         self.selected_text = None
         self.selected_image = None
         self.selected_shape = None
+        self.selected_stroke = None
         self.text_edit_popover = None
         self.text_edit_view = None
         self.is_saving = False
@@ -56,6 +58,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.resize_start_bbox = None  
         self.dragging_to_create = False  
         self.temp_shape = None  
+        self.temp_stroke = None
         self.temp_image_bbox = None  
         self.temp_image_path = None  
         self.drag_start_page_pos = None  
@@ -63,6 +66,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.next_shape_stroke = (0, 0, 0)
         self.next_shape_stroke_width = 2.0
         self.next_shape_transparent = True
+        self.pen_color = (0.0, 0.0, 0.0)
+        self.pen_width = 2.0
+        self.highlighter_color = (1.0, 0.9, 0.0)
+        self.highlighter_width = 16.0
+        self.highlighter_opacity = 0.35
         self.document_modified = False 
         self.tool_mode = "select" 
         self.current_pdf_page_width = 0
@@ -971,9 +979,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.editable_texts = []
         self.editable_images = []
         self.editable_shapes = []
+        self.editable_strokes = []
         self.selected_text = None
         self.selected_image = None
         self.selected_shape = None
+        self.selected_stroke = None
+        self.temp_stroke = None
         self.hide_text_editor()
         self.pages_model.remove_all()
         self.document_modified = False
@@ -1345,7 +1356,61 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.stroke()
             cr.set_dash([])
 
-        selected_obj = self.selected_text or self.selected_image or self.selected_shape
+        # Render editable strokes on current page
+        for stroke in getattr(self, 'editable_strokes', []):
+            if getattr(stroke, 'page_number', None) != self.current_page_index:
+                continue
+            if not stroke.points:
+                continue
+            cr.save()
+            r, g, b = stroke.stroke_color
+            opacity = getattr(stroke, 'opacity', 1.0)
+            cr.set_source_rgba(r, g, b, opacity)
+            cr.set_line_width(stroke.stroke_width * self.zoom_level)
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
+            cr.set_line_join(cairo.LINE_JOIN_ROUND)
+
+            if len(stroke.points) == 1:
+                px, py = stroke.points[0]
+                draw_x = page_offset_x + (px * self.zoom_level)
+                draw_y = page_offset_y + (py * self.zoom_level)
+                rad = max((stroke.stroke_width * self.zoom_level) / 2.0, 1.0)
+                cr.arc(draw_x, draw_y, rad, 0, 2 * math.pi)
+                cr.fill()
+            else:
+                p0 = stroke.points[0]
+                cr.move_to(page_offset_x + p0[0] * self.zoom_level, page_offset_y + p0[1] * self.zoom_level)
+                for pt in stroke.points[1:]:
+                    cr.line_to(page_offset_x + pt[0] * self.zoom_level, page_offset_y + pt[1] * self.zoom_level)
+                cr.stroke()
+            cr.restore()
+
+        # Render live drawing temp stroke
+        if getattr(self, 'temp_stroke', None) and self.temp_stroke.points:
+            cr.save()
+            r, g, b = self.temp_stroke.stroke_color
+            opacity = getattr(self.temp_stroke, 'opacity', 1.0)
+            cr.set_source_rgba(r, g, b, opacity)
+            cr.set_line_width(self.temp_stroke.stroke_width * self.zoom_level)
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
+            cr.set_line_join(cairo.LINE_JOIN_ROUND)
+
+            if len(self.temp_stroke.points) == 1:
+                px, py = self.temp_stroke.points[0]
+                draw_x = page_offset_x + (px * self.zoom_level)
+                draw_y = page_offset_y + (py * self.zoom_level)
+                rad = max((self.temp_stroke.stroke_width * self.zoom_level) / 2.0, 1.0)
+                cr.arc(draw_x, draw_y, rad, 0, 2 * math.pi)
+                cr.fill()
+            else:
+                p0 = self.temp_stroke.points[0]
+                cr.move_to(page_offset_x + p0[0] * self.zoom_level, page_offset_y + p0[1] * self.zoom_level)
+                for pt in self.temp_stroke.points[1:]:
+                    cr.line_to(page_offset_x + pt[0] * self.zoom_level, page_offset_y + pt[1] * self.zoom_level)
+                cr.stroke()
+            cr.restore()
+
+        selected_obj = self.selected_text or self.selected_image or self.selected_shape or self.selected_stroke
         if selected_obj and not self.dragged_object:
             is_image = isinstance(selected_obj, EditableImage)
             style_context = area.get_style_context()
