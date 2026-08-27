@@ -342,6 +342,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.add_rectangle_tool_button.connect('clicked', self.on_tool_selected, "add_rectangle")
         self.add_rectangle_tool_button.add_css_class("tool-button")
         tools_grid.attach(self.add_rectangle_tool_button, 1, 2, 1, 1)
+
+        self.pen_tool_button = Gtk.Button(icon_name="document-edit-symbolic", label=_("tool_pen"))
+        self.pen_tool_button.set_tooltip_text(_("tool_pen_tip"))
+        self.pen_tool_button.connect('clicked', self.on_tool_selected, "pen")
+        self.pen_tool_button.add_css_class("tool-button")
+        tools_grid.attach(self.pen_tool_button, 0, 3, 1, 1)
+
+        self.highlighter_tool_button = Gtk.Button(icon_name="format-text-highlight-symbolic", label=_("tool_highlighter"))
+        self.highlighter_tool_button.set_tooltip_text(_("tool_highlighter_tip"))
+        self.highlighter_tool_button.connect('clicked', self.on_tool_selected, "highlighter")
+        self.highlighter_tool_button.add_css_class("tool-button")
+        tools_grid.attach(self.highlighter_tool_button, 1, 3, 1, 1)
         
         sidebar_box.append(tools_grid)
 
@@ -499,6 +511,27 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.toolbar_row2.append(self.shape_toolbar_box)
         self.shape_toolbar_box.set_visible(False)
 
+        self.stroke_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
+        self.toolbar_row2.append(self.stroke_toolbar_sep)
+        self.stroke_toolbar_sep.set_visible(False)
+
+        self.stroke_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.stroke_color_button = Gtk.ColorButton()
+        self.stroke_color_button.set_tooltip_text(_("stroke_color_tip"))
+        stroke_color_rgba = Gdk.RGBA()
+        stroke_color_rgba.parse("black")
+        self.stroke_color_button.set_rgba(stroke_color_rgba)
+        self.stroke_color_button.connect("color-set", self.on_stroke_format_changed)
+        self.stroke_toolbar_box.append(self.stroke_color_button)
+
+        self.stroke_width_spin = Gtk.SpinButton.new_with_range(0.5, 40, 0.5)
+        self.stroke_width_spin.set_value(2.0)
+        self.stroke_width_spin.set_tooltip_text(_("stroke_width_tip"))
+        self.stroke_width_spin.connect("value-changed", self.on_stroke_format_changed)
+        self.stroke_toolbar_box.append(self.stroke_width_spin)
+        self.toolbar_row2.append(self.stroke_toolbar_box)
+        self.stroke_toolbar_box.set_visible(False)
+
         self.view_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
         self.toolbar_row1.append(self.view_toolbar_sep)
         self.view_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -625,7 +658,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         sidebar_tools = [self.select_tool_button, self.add_text_tool_button,
                          self.add_image_tool_button, self.drag_tool_button,
-                         self.add_ellipse_tool_button, self.add_rectangle_tool_button]
+                         self.add_ellipse_tool_button, self.add_rectangle_tool_button,
+                         self.pen_tool_button, self.highlighter_tool_button]
         for btn in sidebar_tools:
             btn.set_sensitive(in_edit and has_doc)
             
@@ -636,17 +670,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.delete_page_button.set_sensitive(in_edit and has_doc)
 
         shape_selected = self.selected_shape is not None
+        stroke_selected = getattr(self, 'selected_stroke', None) is not None
         text_selected = self.selected_text is not None
         shape_controls_active = in_edit and (shape_selected or self.tool_mode in ("add_ellipse", "add_rectangle"))
+        stroke_controls_active = in_edit and (stroke_selected or self.tool_mode in ("pen", "highlighter"))
         view_text_selected = self.view_mode and (getattr(self, 'view_sel_rect', None) is not None or getattr(self, 'selected_word', None) is not None)
         format_enabled_base = in_edit and ((text_selected or self.tool_mode == "add_text") and
-                               self.selected_image is None and not shape_selected)
+                               self.selected_image is None and not shape_selected and not stroke_selected)
 
         if hasattr(self, 'toolbar_row2'):
             self.toolbar_row2.set_visible(in_edit and has_doc)
 
         if hasattr(self, 'text_format_box'):
-            self.text_format_box.set_visible(in_edit and not shape_controls_active)
+            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active)
             self.text_format_sep.set_visible(False)
 
         self.font_combo.set_sensitive(format_enabled_base and not self.font_scan_in_progress)
@@ -665,6 +701,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.shape_stroke_button.set_sensitive(shape_controls_active)
         self.shape_stroke_width_spin.set_sensitive(shape_controls_active)
         self.shape_transparent_toggle.set_sensitive(shape_controls_active)
+
+        if hasattr(self, 'stroke_toolbar_box'):
+            self.stroke_toolbar_box.set_visible(stroke_controls_active)
+            self.stroke_toolbar_sep.set_visible(False)
+
+        if hasattr(self, 'stroke_color_button'):
+            self.stroke_color_button.set_sensitive(stroke_controls_active)
+        if hasattr(self, 'stroke_width_spin'):
+            self.stroke_width_spin.set_sensitive(stroke_controls_active)
 
         if hasattr(self, 'view_toolbar_box'):
             self.view_toolbar_box.set_visible(has_doc)
@@ -698,12 +743,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         else:
             self._update_shape_format_controls(None)
 
+        if stroke_selected:
+            self._update_stroke_format_controls(self.selected_stroke)
+        elif stroke_controls_active:
+            self._update_stroke_format_controls(None)
+
         self.select_tool_button.get_style_context().remove_class('active')
         self.add_text_tool_button.get_style_context().remove_class('active')
         self.add_image_tool_button.get_style_context().remove_class('active')
         self.drag_tool_button.get_style_context().remove_class('active')
         self.add_ellipse_tool_button.get_style_context().remove_class('active')
         self.add_rectangle_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'pen_tool_button'):
+            self.pen_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'highlighter_tool_button'):
+            self.highlighter_tool_button.get_style_context().remove_class('active')
 
         if self.view_mode:
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
@@ -724,6 +778,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
         elif self.tool_mode == "add_rectangle":
             self.add_rectangle_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "pen":
+            if hasattr(self, 'pen_tool_button'):
+                self.pen_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "highlighter":
+            if hasattr(self, 'highlighter_tool_button'):
+                self.highlighter_tool_button.get_style_context().add_class('active')
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
 
         if has_doc:
@@ -1754,6 +1816,31 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.shape_stroke_button.handler_unblock_by_func(self.on_shape_format_changed)
             self.shape_stroke_width_spin.handler_unblock_by_func(self.on_shape_format_changed)
 
+    def _update_stroke_format_controls(self, stroke_obj):
+        """Update stroke format controls."""
+        try:
+            self.stroke_color_button.handler_block_by_func(self.on_stroke_format_changed)
+            self.stroke_width_spin.handler_block_by_func(self.on_stroke_format_changed)
+
+            if not stroke_obj:
+                if self.tool_mode == "highlighter":
+                    r, g, b = self.highlighter_color
+                    w = self.highlighter_width
+                else:
+                    r, g, b = self.pen_color
+                    w = self.pen_width
+            else:
+                r, g, b = stroke_obj.stroke_color
+                w = stroke_obj.stroke_width
+
+            rgba = Gdk.RGBA()
+            rgba.red, rgba.green, rgba.blue, rgba.alpha = r, g, b, 1.0
+            self.stroke_color_button.set_rgba(rgba)
+            self.stroke_width_spin.set_value(w)
+        finally:
+            self.stroke_color_button.handler_unblock_by_func(self.on_stroke_format_changed)
+            self.stroke_width_spin.handler_unblock_by_func(self.on_stroke_format_changed)
+
     def _show_inline_editor(self, text_obj, click_x=None, click_y=None):
         """Show inline editor."""
         self._hide_inline_editor()
@@ -2695,6 +2782,40 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
 
+    def on_stroke_format_changed(self, widget, *args):
+        """Handle the stroke format changed event."""
+        stroke_rgba = self.stroke_color_button.get_rgba()
+        stroke_color = (stroke_rgba.red, stroke_rgba.green, stroke_rgba.blue)
+        stroke_width = self.stroke_width_spin.get_value()
+
+        if self.tool_mode == "highlighter" or (self.selected_stroke and self.selected_stroke.tool_type == "highlighter"):
+            self.highlighter_color = stroke_color
+            self.highlighter_width = stroke_width
+        else:
+            self.pen_color = stroke_color
+            self.pen_width = stroke_width
+
+        if self.selected_stroke:
+            old_properties = copy.deepcopy(self.selected_stroke.__dict__)
+            changed = False
+            if self.selected_stroke.stroke_color != stroke_color:
+                self.selected_stroke.stroke_color = stroke_color
+                changed = True
+            if self.selected_stroke.stroke_width != stroke_width:
+                self.selected_stroke.stroke_width = stroke_width
+                self.selected_stroke.recalculate_bbox()
+                changed = True
+
+            if changed:
+                new_properties = copy.deepcopy(self.selected_stroke.__dict__)
+                self.selected_stroke.__dict__.update(old_properties)
+
+                command = EditObjectCommand(self, self.selected_stroke, old_properties, new_properties)
+                command.execute()
+                self.undo_manager.add_command(command)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+
     def on_text_edit_done(self, button):
         """Handle the text edit done event."""
         self._apply_and_hide_editor(force_apply=True)
@@ -2733,13 +2854,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                  self.pdf_view.queue_draw()
                  self._update_ui_state()
                  return True
-            elif self.tool_mode == "add_text":
+            elif getattr(self, 'selected_stroke', None):
+                 self.selected_stroke = None
+                 self.pdf_view.queue_draw()
+                 self._update_ui_state()
+                 return True
+            elif self.tool_mode in ("add_text", "pen", "highlighter"):
                  self.on_tool_selected(None, "select")
                  return True
 
         elif keyval == Gdk.KEY_Delete:
             self.commit_pending_format_change()
-            obj_to_delete = self.selected_text or self.selected_image or self.selected_shape
+            obj_to_delete = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
             if obj_to_delete and not (self.inline_editor_widget is not None):
                 self._handle_delete_with_confirmation(obj_to_delete, "delete_confirm_title")
                 return True
@@ -2773,6 +2899,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if self.selected_shape:
             self.selected_shape = None
+
+        if hasattr(self, 'selected_stroke') and self.selected_stroke:
+            self.selected_stroke = None
 
         self.pdf_view.queue_draw()
 
@@ -3813,6 +3942,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif isinstance(obj, EditableImage):
             confirm_text = _("delete_image_confirm")
             confirm_title = _("delete_confirm_title")
+        elif isinstance(obj, EditableStroke):
+            confirm_text = _("delete_shape_confirm")
+            confirm_title = _("delete_confirm_title")
         else:
             return
             
@@ -3823,6 +3955,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_text = None
             self.selected_image = None
             self.selected_shape = None
+            self.selected_stroke = None
             self._update_ui_state()
             self.pdf_view.queue_draw()
             self.status_label.set_text(_("object_deleted"))
