@@ -999,13 +999,28 @@ def _apply_single_object_to_page(doc, page, obj):
     elif isinstance(obj, EditableShape):
         rect = fitz.Rect(obj.bbox)
         shape = page.new_shape()
+        stroke = tuple(float(c) for c in obj.stroke_color)
+        fill = tuple(float(c) for c in obj.fill_color) if not obj.is_transparent else None
+
         if obj.shape_type == EditableShape.SHAPE_RECTANGLE:
             shape.draw_rect(rect)
+            shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
         elif obj.shape_type == EditableShape.SHAPE_ELLIPSE:
             shape.draw_oval(rect)
-        fill = tuple(float(c) for c in obj.fill_color) if not obj.is_transparent else None
-        stroke = tuple(float(c) for c in obj.stroke_color)
-        shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
+            shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
+        elif obj.shape_type == EditableShape.SHAPE_CHECKMARK:
+            pts = obj.get_checkmark_points()
+            fitz_pts = [fitz.Point(p[0], p[1]) for p in pts]
+            shape.draw_polyline(fitz_pts)
+            shape.finish(color=stroke, fill=None, width=obj.stroke_width, lineCap=1, lineJoin=1, closePath=False)
+        elif obj.shape_type == EditableShape.SHAPE_CROSS:
+            lines = obj.get_cross_lines()
+            for (p1, p2) in lines:
+                shape.draw_line(fitz.Point(p1[0], p1[1]), fitz.Point(p2[0], p2[1]))
+            shape.finish(color=stroke, fill=None, width=obj.stroke_width, lineCap=1, lineJoin=1, closePath=False)
+        else:
+            shape.draw_rect(rect)
+            shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
         shape.commit()
     elif isinstance(obj, EditableStroke):
         if obj.points and len(obj.points) >= 2:

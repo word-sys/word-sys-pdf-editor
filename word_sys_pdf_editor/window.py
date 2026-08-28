@@ -1260,6 +1260,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         cr.arc(0, 0, 1, 0, 2 * math.pi)
                         cr.restore()
                         cr.stroke()
+                elif self.dragged_object.shape_type == EditableShape.SHAPE_CHECKMARK:
+                    pts = self.dragged_object.get_checkmark_points()
+                    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+                    cr.move_to(page_offset_x + pts[0][0] * self.zoom_level, page_offset_y + pts[0][1] * self.zoom_level)
+                    for pt in pts[1:]:
+                        cr.line_to(page_offset_x + pt[0] * self.zoom_level, page_offset_y + pt[1] * self.zoom_level)
+                    cr.stroke()
+                elif self.dragged_object.shape_type == EditableShape.SHAPE_CROSS:
+                    lines = self.dragged_object.get_cross_lines()
+                    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+                    for (p1, p2) in lines:
+                        cr.move_to(page_offset_x + p1[0] * self.zoom_level, page_offset_y + p1[1] * self.zoom_level)
+                        cr.line_to(page_offset_x + p2[0] * self.zoom_level, page_offset_y + p2[1] * self.zoom_level)
+                    cr.stroke()
             elif isinstance(self.dragged_object, EditableStroke):
                 r, g, b = self.dragged_object.stroke_color
                 cr.set_source_rgba(r, g, b, 0.6)
@@ -1350,6 +1366,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 continue
             if getattr(shape, 'is_baked', False):
                 continue
+            if shape is self.dragged_object:
+                continue
             
             x1, y1, x2, y2 = shape.bbox
             draw_x = page_offset_x + (x1 * self.zoom_level)
@@ -1389,6 +1407,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.arc(0, 0, 1, 0, 2 * math.pi)
                 cr.restore()
                 cr.stroke()
+            elif shape.shape_type == EditableShape.SHAPE_CHECKMARK:
+                pts = shape.get_checkmark_points()
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                cr.set_line_join(cairo.LINE_JOIN_ROUND)
+                cr.move_to(page_offset_x + pts[0][0] * self.zoom_level, page_offset_y + pts[0][1] * self.zoom_level)
+                for pt in pts[1:]:
+                    cr.line_to(page_offset_x + pt[0] * self.zoom_level, page_offset_y + pt[1] * self.zoom_level)
+                cr.stroke()
+            elif shape.shape_type == EditableShape.SHAPE_CROSS:
+                lines = shape.get_cross_lines()
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                cr.set_line_join(cairo.LINE_JOIN_ROUND)
+                for (p1, p2) in lines:
+                    cr.move_to(page_offset_x + p1[0] * self.zoom_level, page_offset_y + p1[1] * self.zoom_level)
+                    cr.line_to(page_offset_x + p2[0] * self.zoom_level, page_offset_y + p2[1] * self.zoom_level)
+                cr.stroke()
             cr.restore()
 
         
@@ -1412,6 +1446,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.scale(draw_w / 2.0, draw_h / 2.0)
                 cr.arc(0, 0, 1, 0, 2 * math.pi)
                 cr.restore()
+                cr.stroke()
+            elif self.temp_shape.shape_type == EditableShape.SHAPE_CHECKMARK:
+                pts = self.temp_shape.get_checkmark_points()
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                cr.set_line_join(cairo.LINE_JOIN_ROUND)
+                cr.move_to(page_offset_x + pts[0][0] * self.zoom_level, page_offset_y + pts[0][1] * self.zoom_level)
+                for pt in pts[1:]:
+                    cr.line_to(page_offset_x + pt[0] * self.zoom_level, page_offset_y + pt[1] * self.zoom_level)
+                cr.stroke()
+            elif self.temp_shape.shape_type == EditableShape.SHAPE_CROSS:
+                lines = self.temp_shape.get_cross_lines()
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                cr.set_line_join(cairo.LINE_JOIN_ROUND)
+                for (p1, p2) in lines:
+                    cr.move_to(page_offset_x + p1[0] * self.zoom_level, page_offset_y + p1[1] * self.zoom_level)
+                    cr.line_to(page_offset_x + p2[0] * self.zoom_level, page_offset_y + p2[1] * self.zoom_level)
                 cr.stroke()
 
         if self.temp_image_bbox:
