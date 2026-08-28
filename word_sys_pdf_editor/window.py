@@ -21,7 +21,11 @@ from . import pdf_handler
 from . import print_handler
 from .welcome_view import WelcomeView 
 from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke
-from .ui_components import PageThumbnailFactory, show_error_dialog, show_confirm_dialog, show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog
+from .ui_components import (
+    PageThumbnailFactory, show_error_dialog, show_confirm_dialog,
+    show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog,
+    SymbolsPopover, render_emoji_to_png_bytes
+)
 from . import utils
 
 class PdfEditorWindow(Adw.ApplicationWindow):
@@ -344,6 +348,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.highlighter_tool_button = _make_tool_btn("marker-symbolic", _("tool_highlighter"), _("tool_highlighter_tip"), "highlighter")
         tools_grid.attach(self.highlighter_tool_button, 1, 3, 1, 1)
+
+        self.checkmark_tool_button = _make_tool_btn("emblem-ok-symbolic", _("tool_checkmark"), _("tool_checkmark_tip"), "add_checkmark")
+        tools_grid.attach(self.checkmark_tool_button, 0, 4, 1, 1)
+
+        self.cross_tool_button = _make_tool_btn("window-close-symbolic", _("tool_cross"), _("tool_cross_tip"), "add_cross")
+        tools_grid.attach(self.cross_tool_button, 1, 4, 1, 1)
         
         sidebar_box.append(tools_grid)
 
@@ -416,6 +426,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.toolbar_row1.append(self.page_label)
         self.toolbar_row1.append(self.next_button)
         self.toolbar_row1.append(self.add_page_button)
+
+        self.toolbar_row1.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6))
+
+        self.symbols_button = Gtk.MenuButton()
+        self.symbols_button.set_icon_name("face-smile-symbolic")
+        self.symbols_button.set_tooltip_text(_("tooltip_symbols"))
+        self.symbols_popover = SymbolsPopover(editor_window=self)
+        self.symbols_button.set_popover(self.symbols_popover)
+        self.toolbar_row1.append(self.symbols_button)
 
         self.text_format_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
         self.toolbar_row2.append(self.text_format_sep)
@@ -665,9 +684,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         sidebar_tools = [self.select_tool_button, self.add_text_tool_button,
                          self.add_image_tool_button, self.drag_tool_button,
                          self.add_ellipse_tool_button, self.add_rectangle_tool_button,
-                         self.pen_tool_button, self.highlighter_tool_button]
+                         self.pen_tool_button, self.highlighter_tool_button,
+                         getattr(self, 'checkmark_tool_button', None),
+                         getattr(self, 'cross_tool_button', None)]
         for btn in sidebar_tools:
-            btn.set_sensitive(in_edit and has_doc)
+            if btn:
+                btn.set_sensitive(in_edit and has_doc)
             
         if hasattr(self, 'add_page_button'):
             self.add_page_button.set_sensitive(in_edit and has_doc)
@@ -675,10 +697,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, 'delete_page_button'):
             self.delete_page_button.set_sensitive(in_edit and has_doc)
 
+        if hasattr(self, 'symbols_button'):
+            self.symbols_button.set_sensitive(in_edit and has_doc)
+
         shape_selected = self.selected_shape is not None
         stroke_selected = getattr(self, 'selected_stroke', None) is not None
         text_selected = self.selected_text is not None
-        shape_controls_active = in_edit and (shape_selected or self.tool_mode in ("add_ellipse", "add_rectangle"))
+        shape_controls_active = in_edit and (shape_selected or self.tool_mode in ("add_ellipse", "add_rectangle", "add_checkmark", "add_cross"))
         stroke_controls_active = in_edit and (stroke_selected or self.tool_mode in ("pen", "highlighter"))
         view_text_selected = self.view_mode and (getattr(self, 'view_sel_rect', None) is not None or getattr(self, 'selected_word', None) is not None)
         format_enabled_base = in_edit and ((text_selected or self.tool_mode == "add_text") and
@@ -764,6 +789,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pen_tool_button.get_style_context().remove_class('active')
         if hasattr(self, 'highlighter_tool_button'):
             self.highlighter_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'checkmark_tool_button'):
+            self.checkmark_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'cross_tool_button'):
+            self.cross_tool_button.get_style_context().remove_class('active')
 
         if self.view_mode:
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
@@ -784,6 +813,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
         elif self.tool_mode == "add_rectangle":
             self.add_rectangle_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "add_checkmark":
+            if hasattr(self, 'checkmark_tool_button'):
+                self.checkmark_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "add_cross":
+            if hasattr(self, 'cross_tool_button'):
+                self.cross_tool_button.get_style_context().add_class('active')
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
         elif self.tool_mode == "pen":
             if hasattr(self, 'pen_tool_button'):
@@ -1310,7 +1347,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             draw_y = page_offset_y + (y1 * self.zoom_level)
             cr.save()
             layout = PangoCairo.create_layout(cr)
-            font_desc = Pango.FontDescription.from_string(text_obj.font_family_base)
+            font_family = f"{text_obj.font_family_base}, DejaVu Sans, FreeSans, sans-serif"
+            font_desc = Pango.FontDescription.from_string(font_family)
             if text_obj.is_bold: font_desc.set_weight(Pango.Weight.BOLD)
             if text_obj.is_italic: font_desc.set_style(Pango.Style.ITALIC)
             font_desc.set_absolute_size(int(text_obj.font_size * self.zoom_level * Pango.SCALE))
@@ -3089,6 +3127,40 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 is_transparent=self.next_shape_transparent
             )
             return
+        elif self.tool_mode == "add_checkmark":
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (page_x, page_y)
+            color = self.next_shape_stroke if hasattr(self, 'next_shape_stroke') else (0.1, 0.65, 0.25)
+            width = max(getattr(self, 'next_shape_stroke_width', 2.5), 2.0)
+            self.temp_shape = EditableShape(
+                shape_type=EditableShape.SHAPE_CHECKMARK,
+                bbox=(page_x, page_y, page_x, page_y),
+                fill_color=(1, 1, 1),
+                stroke_color=color,
+                stroke_width=width,
+                page_number=self.current_page_index,
+                is_new=True,
+                is_transparent=True
+            )
+            return
+        elif self.tool_mode == "add_cross":
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (page_x, page_y)
+            color = self.next_shape_stroke if hasattr(self, 'next_shape_stroke') else (0.85, 0.15, 0.15)
+            width = max(getattr(self, 'next_shape_stroke_width', 2.5), 2.0)
+            self.temp_shape = EditableShape(
+                shape_type=EditableShape.SHAPE_CROSS,
+                bbox=(page_x, page_y, page_x, page_y),
+                fill_color=(1, 1, 1),
+                stroke_color=color,
+                stroke_width=width,
+                page_number=self.current_page_index,
+                is_new=True,
+                is_transparent=True
+            )
+            return
         elif self.tool_mode == "add_image":
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             self.dragging_to_create = True
@@ -3337,14 +3409,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if self.temp_shape:
                 x1, y1, x2, y2 = self.temp_shape.bbox
                 if (x2 - x1) < 10 or (y2 - y1) < 10:
-                    self.temp_shape = None
-                    self.pdf_view.queue_draw()
-                    return
+                    if self.temp_shape.shape_type in (EditableShape.SHAPE_CHECKMARK, EditableShape.SHAPE_CROSS):
+                        cx, cy = self.drag_start_page_pos
+                        size = 24.0
+                        self.temp_shape.bbox = (cx - size / 2.0, cy - size / 2.0, cx + size / 2.0, cy + size / 2.0)
+                        self.temp_shape.x = self.temp_shape.bbox[0]
+                        self.temp_shape.y = self.temp_shape.bbox[1]
+                    else:
+                        self.temp_shape = None
+                        self.pdf_view.queue_draw()
+                        return
                 
                 self.temp_shape.original_bbox = self.temp_shape.bbox
                 self.selected_shape = self.temp_shape
                 self.selected_text = None
                 self.selected_image = None
+                self.selected_stroke = None
                 
                 command = AddObjectCommand(self, self.temp_shape)
                 command.execute()
@@ -3459,6 +3539,55 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self._update_ui_state()
         self.pdf_view.queue_draw()
+
+    def insert_symbol_or_emoji(self, symbol, is_emoji=False):
+        """Insert symbol into active text block or create full-color emoji stamp on document."""
+        if getattr(self, 'inline_editor_widget', None) is not None and getattr(self, 'inline_text_view', None) is not None:
+            buf = self.inline_text_view.get_buffer()
+            buf.insert_at_cursor(symbol)
+            self.inline_text_view.grab_focus()
+            return
+
+        if is_emoji and self.doc and self.current_pdf_page_width > 0:
+            try:
+                png_bytes = render_emoji_to_png_bytes(symbol, size=96)
+                page_w_unzoomed = self.current_pdf_page_width / self.zoom_level
+                page_h_unzoomed = self.current_pdf_page_height / self.zoom_level
+                stamp_size = 32.0
+                stamp_x = max(20.0, (page_w_unzoomed - stamp_size) / 2.0)
+                stamp_y = max(20.0, (page_h_unzoomed - stamp_size) / 2.0)
+
+                emoji_obj = EditableImage(
+                    bbox=(stamp_x, stamp_y, stamp_x + stamp_size, stamp_y + stamp_size),
+                    page_number=self.current_page_index,
+                    xref=None,
+                    image_bytes=png_bytes,
+                    is_new=True
+                )
+                self.selected_image = emoji_obj
+                self.selected_text = None
+                self.selected_shape = None
+                if hasattr(self, 'selected_stroke'):
+                    self.selected_stroke = None
+
+                command = AddObjectCommand(self, emoji_obj)
+                command.execute()
+                self.undo_manager.add_command(command)
+                self.document_modified = True
+                self._refresh_thumbnail(self.current_page_index)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+                self.status_label.set_text(f"Added emoji stamp: {symbol}")
+                return
+            except Exception as e:
+                print(f"Error creating emoji stamp: {e}")
+
+        display = Gdk.Display.get_default()
+        if display:
+            clipboard = display.get_clipboard()
+            clipboard.set(symbol)
+
+        self.status_label.set_text(_("symbol_copied", symbol))
 
     def _on_quick_guide_activated(self, action, param):
         """Handle the quick guide activated event."""

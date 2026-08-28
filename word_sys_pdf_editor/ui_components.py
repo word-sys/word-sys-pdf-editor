@@ -1,7 +1,9 @@
 import gi
+import io
+import cairo
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Gdk, GdkPixbuf, Adw, GLib, GObject, Gio
+from gi.repository import Gtk, Gdk, GdkPixbuf, Adw, GLib, GObject, Gio, Pango, PangoCairo
 from .i18n import _
 
 
@@ -309,3 +311,106 @@ def show_save_file_dialog(parent_window, title, initial_name=None, filters=None,
 
         dialog.connect("response", on_response)
         dialog.present()
+
+
+def render_emoji_to_png_bytes(emoji_char, size=96):
+    """Render an emoji character into crisp high-resolution PNG bytes using Cairo and Pango."""
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+    cr = cairo.Context(surface)
+    layout = PangoCairo.create_layout(cr)
+    font_desc = Pango.FontDescription("Noto Color Emoji, Apple Color Emoji, Segoe UI Emoji, sans-serif")
+    font_desc.set_absolute_size(int(size * 0.72 * Pango.SCALE))
+    layout.set_font_description(font_desc)
+    layout.set_text(emoji_char, -1)
+
+    ink_rect, logical_rect = layout.get_pixel_extents()
+    x = (size - logical_rect.width) / 2.0
+    y = (size - logical_rect.height) / 2.0
+    cr.move_to(x, y)
+    PangoCairo.show_layout(cr, layout)
+
+    bio = io.BytesIO()
+    surface.write_to_png(bio)
+    return bio.getvalue()
+
+
+class SymbolsPopover(Gtk.Popover):
+    """Popover palette for inserting special characters, form review symbols, and emojis."""
+    SYMBOLS_REVIEW = [
+        "✓", "✔", "✕", "✗", "🗹", "☒", "☐", "★", "☆", 
+        "➜", "➔", "⬤", "◯", "▲", "▼", "■", "◆", "§",
+        "©", "®", "™", "€", "$", "£", "¥", "°", "±",
+        "≠", "≈", "≤", "≥", "∞", "‰", "•", "–", "—"
+    ]
+    
+    EMOJIS_COMMON = [
+        "👍", "👎", "⚠️", "✅", "❌", "📌", "📝", "💡",
+        "🔒", "⭐", "🎯", "🚀", "🔥", "❤️", "ℹ️", "❓",
+        "❗", "👏", "🎉", "👀", "✍️", "🔍", "📎", "📅"
+    ]
+
+    def __init__(self, editor_window=None, **kwargs):
+        super().__init__(**kwargs)
+        self.editor_window = editor_window
+        self.set_autohide(True)
+        self.set_size_request(280, 240)
+        self._build_ui()
+
+    def _build_ui(self):
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_start=8, margin_end=8, margin_top=8, margin_bottom=8)
+        
+        stack = Gtk.Stack()
+        stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        
+        switcher = Gtk.StackSwitcher()
+        switcher.set_stack(stack)
+        switcher.set_halign(Gtk.Align.CENTER)
+        main_box.append(switcher)
+
+        # Tab 1: Symbols
+        symbols_flow = Gtk.FlowBox()
+        symbols_flow.set_valign(Gtk.Align.START)
+        symbols_flow.set_max_children_per_line(6)
+        symbols_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        symbols_flow.set_row_spacing(4)
+        symbols_flow.set_column_spacing(4)
+        
+        for sym in self.SYMBOLS_REVIEW:
+            btn = Gtk.Button(label=sym)
+            btn.add_css_class("flat")
+            btn.set_size_request(36, 36)
+            btn.connect("clicked", self._on_symbol_clicked, sym, False)
+            symbols_flow.append(btn)
+            
+        sym_scroll = Gtk.ScrolledWindow(vexpand=True, hexpand=True)
+        sym_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sym_scroll.set_child(symbols_flow)
+        stack.add_titled(sym_scroll, "symbols", _("tab_symbols"))
+
+        # Tab 2: Emojis
+        emojis_flow = Gtk.FlowBox()
+        emojis_flow.set_valign(Gtk.Align.START)
+        emojis_flow.set_max_children_per_line(6)
+        emojis_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        emojis_flow.set_row_spacing(4)
+        emojis_flow.set_column_spacing(4)
+        
+        for em in self.EMOJIS_COMMON:
+            btn = Gtk.Button(label=em)
+            btn.add_css_class("flat")
+            btn.set_size_request(36, 36)
+            btn.connect("clicked", self._on_symbol_clicked, em, True)
+            emojis_flow.append(btn)
+            
+        em_scroll = Gtk.ScrolledWindow(vexpand=True, hexpand=True)
+        em_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        em_scroll.set_child(emojis_flow)
+        stack.add_titled(em_scroll, "emojis", _("tab_emojis"))
+
+        main_box.append(stack)
+        self.set_child(main_box)
+
+    def _on_symbol_clicked(self, button, symbol, is_emoji):
+        self.popdown()
+        if self.editor_window and hasattr(self.editor_window, 'insert_symbol_or_emoji'):
+            self.editor_window.insert_symbol_or_emoji(symbol, is_emoji=is_emoji)

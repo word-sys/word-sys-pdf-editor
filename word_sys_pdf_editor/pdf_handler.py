@@ -30,6 +30,20 @@ def _get_font_args_for_pymupdf(text_obj):
     )
 
     if font_to_embed_path:
+        try:
+            test_f = fitz.Font(fontfile=font_to_embed_path)
+            non_ascii_chars = [c for c in text_obj.text if ord(c) > 127]
+            missing = [c for c in non_ascii_chars if not test_f.has_glyph(ord(c))]
+            if missing:
+                fb_path = find_specific_font_variant("DejaVu Sans", text_obj.is_bold, text_obj.is_italic)
+                if fb_path and fb_path != font_to_embed_path:
+                    fb_f = fitz.Font(fontfile=fb_path)
+                    if all(fb_f.has_glyph(ord(c)) for c in missing if ord(c) < 0x10000):
+                        font_to_embed_path = fb_path
+                        print(f"DEBUG (FontHelper): Fallback to DejaVu Sans for symbols: {missing}")
+        except Exception as e:
+            print(f"DEBUG (FontHelper): Glyph check warning: {e}")
+
         style_suffix = ""
         if text_obj.is_bold: style_suffix += "Bold"
         if text_obj.is_italic: style_suffix += "Italic"
