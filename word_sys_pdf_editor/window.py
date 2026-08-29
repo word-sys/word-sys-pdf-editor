@@ -3032,6 +3032,35 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.selected_image = None
                     self._update_ui_state()
                 return True
+
+        # Single-key tool selection shortcuts (when not editing text)
+        if not ctrl and not (state & Gdk.ModifierType.ALT_MASK) and self.inline_editor_widget is None:
+            tool_shortcuts = {
+                Gdk.KEY_v: "add_checkmark",
+                Gdk.KEY_V: "add_checkmark",
+                Gdk.KEY_x: "add_cross",
+                Gdk.KEY_X: "add_cross",
+                Gdk.KEY_p: "pen",
+                Gdk.KEY_P: "pen",
+                Gdk.KEY_h: "highlighter",
+                Gdk.KEY_H: "highlighter",
+                Gdk.KEY_s: "select",
+                Gdk.KEY_S: "select",
+                Gdk.KEY_t: "add_text",
+                Gdk.KEY_T: "add_text",
+                Gdk.KEY_i: "add_image",
+                Gdk.KEY_I: "add_image",
+                Gdk.KEY_m: "drag",
+                Gdk.KEY_M: "drag",
+                Gdk.KEY_c: "add_ellipse",
+                Gdk.KEY_C: "add_ellipse",
+                Gdk.KEY_r: "add_rectangle",
+                Gdk.KEY_R: "add_rectangle",
+            }
+            if keyval in tool_shortcuts:
+                self.on_tool_selected(None, tool_shortcuts[keyval])
+                return True
+
         return False
 
     def on_tool_selected(self, button, tool_name):
