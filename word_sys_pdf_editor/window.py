@@ -3031,6 +3031,51 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         show_error_dialog(self, _("err_image_delete_msg", error_msg), _("err_image_delete_title"))
                     self.selected_image = None
                     self._update_ui_state()
+        # Arrow key nudge movement (1pt normal / 10pt with Shift) for selected objects
+        if self.inline_editor_widget is None and keyval in (Gdk.KEY_Left, Gdk.KEY_Right, Gdk.KEY_Up, Gdk.KEY_Down):
+            selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
+            if selected_obj:
+                step = 10.0 if bool(state & Gdk.ModifierType.SHIFT_MASK) else 1.0
+                dx, dy = 0.0, 0.0
+                if keyval == Gdk.KEY_Left:
+                    dx = -step
+                elif keyval == Gdk.KEY_Right:
+                    dx = step
+                elif keyval == Gdk.KEY_Up:
+                    dy = -step
+                elif keyval == Gdk.KEY_Down:
+                    dy = step
+
+                old_properties = copy.deepcopy(selected_obj.__dict__)
+
+                if isinstance(selected_obj, EditableText):
+                    selected_obj.x += dx
+                    selected_obj.y += dy
+                    if getattr(selected_obj, 'baseline', None) is not None:
+                        selected_obj.baseline += dy
+                    if selected_obj.bbox:
+                        x1, y1, x2, y2 = selected_obj.bbox
+                        selected_obj.bbox = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
+                elif isinstance(selected_obj, EditableStroke):
+                    selected_obj.points = [(p[0] + dx, p[1] + dy) for p in selected_obj.points]
+                    selected_obj.recalculate_bbox()
+                    selected_obj.original_bbox = selected_obj.bbox
+                elif isinstance(selected_obj, (EditableShape, EditableImage)):
+                    x1, y1, x2, y2 = selected_obj.bbox
+                    selected_obj.bbox = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
+                    selected_obj.x = selected_obj.bbox[0]
+                    selected_obj.y = selected_obj.bbox[1]
+
+                new_properties = copy.deepcopy(selected_obj.__dict__)
+                selected_obj.__dict__.update(old_properties)
+
+                command = EditObjectCommand(self, selected_obj, old_properties, new_properties)
+                command.execute()
+                self.undo_manager.add_command(command)
+                self.document_modified = True
+                self._refresh_thumbnail(self.current_page_index)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
                 return True
 
         # Single-key tool selection shortcuts (when not editing text)
