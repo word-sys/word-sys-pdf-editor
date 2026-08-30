@@ -3153,6 +3153,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
             return
 
+        # Allow direct resize handle interaction on already selected objects regardless of active tool
+        selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
+        if selected_obj:
+            resize_handle = self._find_resize_handle_at_pos(start_x, start_y, selected_obj)
+            if resize_handle:
+                self.resize_handle = resize_handle
+                self.resize_start_bbox = selected_obj.bbox
+                self.dragged_object = selected_obj
+                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+                self.drag_start_pos = (start_x, start_y)
+                self.drag_begin_state = copy.deepcopy(selected_obj.__dict__)
+                return
+
         if self.tool_mode in ("pen", "highlighter"):
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             self.dragging_to_create = True
@@ -3241,18 +3254,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.drag_start_page_pos = (page_x, page_y)
             self.temp_image_bbox = (page_x, page_y, page_x, page_y)
             return
-
-        selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
-        if selected_obj and self.tool_mode == "select":
-            resize_handle = self._find_resize_handle_at_pos(start_x, start_y, selected_obj)
-            if resize_handle:
-                self.resize_handle = resize_handle
-                self.resize_start_bbox = selected_obj.bbox
-                self.dragged_object = selected_obj
-                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-                self.drag_start_pos = (start_x, start_y)
-                self.drag_begin_state = copy.deepcopy(selected_obj.__dict__)
-                return
 
         if self.tool_mode == "drag":
             self.dragged_object = self._find_image_at_pos(page_x, page_y) or self._find_text_at_pos(page_x, page_y) or self._find_shape_at_pos(page_x, page_y) or self._find_stroke_at_pos(page_x, page_y)
