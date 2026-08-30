@@ -1,3 +1,15 @@
+word-sys-pdf-editor (1.10.0~beta1) bookworm; urgency=medium
+
+  * Added Quick Save (Ctrl+S) with atomic file saving protecting against file corruption
+  * Added manual freehand Pen and Highlighter drawing tools with color, width and opacity controls
+  * Added quick Checkmark (✓) and Cross (✗) vector shape stamping tools
+  * Added Special Characters, Symbols and Emojis palette with full-color emoji stamps and font fallback
+  * Added single-key keyboard shortcuts (V, X, P, H, S, T, I, M, C, R) and updated tool button labels
+  * Added arrow key nudge movement (1pt and 10pt with Shift) for selected objects with undo/redo
+  * Added direct resize handle interaction during active creation tools
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Sun, 30 Aug 2026 18:43:00 +0300
+
 word-sys-pdf-editor (1.9.4) bookworm; urgency=medium
 
   * Fixed Gtk.FileDialog AttributeError on GTK < 4.10 with Gtk.FileChooserDialog fallback

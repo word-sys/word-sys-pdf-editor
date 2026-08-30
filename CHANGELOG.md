@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.10.0-beta1] - 2026-08-30
+
+### Added
+- **Quick Save (Ctrl+S)**: Direct quick saving with `Ctrl+S` shortcut and toolbar button, including atomic temporary file swapping to ensure original PDF files are protected against corruption.
+- **Manual Freehand Pen & Highlighter Tools**: Added freehand drawing tools with customizable colors, stroke widths, and opacity. Features live Cairo drawing previews and native PyMuPDF vector path embedding.
+- **Quick Checkmark (✓) & Cross (✗) Tools**: Dedicated 1-click sidebar tools for adding resizable, vector-crisp checkmarks and crosses for fast form review and document markup.
+- **Special Characters, Symbols & Emojis Palette**: New popover palette with categorized tabs for form review symbols and emojis. Emojis are stamped as high-resolution, full-color movable annotations, and text symbols feature automatic `DejaVu Sans` font fallback to eliminate missing glyph tofu boxes.
+- **Single-Key Keyboard Shortcuts**: Quick tool selection shortcuts (`V` for Checkmark, `X` for Cross, `P` for Pen, `H` for Highlighter, `S` for Select, `T` for Text, `I` for Image, `M` for Move, `C` for Ellipse, `R` for Rectangle) with updated sidebar tool button label hints.
+- **Arrow Key Nudge Movement**: Move any selected object with pixel-precision using Arrow keys (1.0 pt fine alignment) and `Shift + Arrow keys` (10.0 pt step) with complete Undo/Redo tracking.
+- **Direct Creation Tool Resizing**: Resize handles on newly created objects can now be directly grabbed and dragged without requiring a manual switch back to the "Select" tool.
+
+---
+
 ## [1.9.4] - 2026-07-31
 
 ### Fixed

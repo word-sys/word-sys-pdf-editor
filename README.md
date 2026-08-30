@@ -30,6 +30,7 @@ License: **GPL-3.0-or-later**
 *   Change font type, size, color, and decoration
 *   Granular Word Selection and precise highlighting
 *   Save edited PDFs
+*   Quick Save
 *   Export PDFs to DOCX or ODT (requires LibreOffice) and TXT formats
 *   User-friendly interface with page previews
 *   Safe Save
@@ -37,7 +38,9 @@ License: **GPL-3.0-or-later**
 *   Undo/Redo changes
 *   Merge PDFs
 *   Add/remove pages from PDFs
-*   Add shapes to PDFs
+*   Add shapes to PDFs (Rectangles, Ellipses, Checkmarks, Crosses)
+*   Draw freehand Pen and Highlighter strokes
+*   Special Characters, Symbols & Emojis
 
 ---
 
