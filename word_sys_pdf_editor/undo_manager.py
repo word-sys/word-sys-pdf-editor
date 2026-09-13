@@ -185,6 +185,7 @@ class EditObjectCommand(Command):
         if isinstance(self.target_object, EditableStroke):
             temp_obj = copy.deepcopy(self.target_object)
             temp_obj.__dict__.update(copy.deepcopy(properties_to_apply))
+            temp_obj.original_bbox = properties_to_clear.get('bbox', temp_obj.bbox)
             if page_num is not None:
                 pdf_handler.rebuild_page(
                     self.window.doc, page_num,
