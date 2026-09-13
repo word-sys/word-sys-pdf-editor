@@ -18,7 +18,61 @@ from .models import EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, Editabl
 from .utils import find_specific_font_variant, get_default_unicode_font_path
 from .i18n import _
 
-_surface_cache = {"surface": None, "data_ref": None}
+_cairo_page_cache = {}
+
+def invalidate_page_cache(doc=None, page_index=None):
+    """Invalidate cached Cairo page surfaces."""
+    global _cairo_page_cache
+    if doc is None:
+        _cairo_page_cache.clear()
+        return
+    doc_id = id(doc)
+    if page_index is None:
+        keys_to_del = [k for k in _cairo_page_cache if k[0] == doc_id]
+    else:
+        keys_to_del = [k for k in _cairo_page_cache if k[0] == doc_id and k[1] == page_index]
+    for k in keys_to_del:
+        _cairo_page_cache.pop(k, None)
+
+def get_page_cairo_surface(doc, page_index, zoom_level):
+    """Get or render cached Cairo ImageSurface for the given page and zoom level."""
+    global _cairo_page_cache
+    if not doc or not (0 <= page_index < doc.page_count):
+        return None
+
+    cache_key = (id(doc), page_index, round(float(zoom_level), 4))
+    if cache_key in _cairo_page_cache:
+        return _cairo_page_cache[cache_key]
+
+    try:
+        page = doc.load_page(page_index)
+        zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+        pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
+        samples_bytes = bytes(pix.samples)
+
+        pixbuf = GdkPixbuf.Pixbuf.new_from_data(
+            samples_bytes, GdkPixbuf.Colorspace.RGB, False, 8,
+            pix.width, pix.height, pix.stride
+        )
+
+        surf = cairo.ImageSurface(cairo.FORMAT_RGB24, pix.width, pix.height)
+        cr_surf = cairo.Context(surf)
+        cr_surf.set_source_rgb(1.0, 1.0, 1.0)
+        cr_surf.paint()
+        if pixbuf:
+            Gdk.cairo_set_source_pixbuf(cr_surf, pixbuf, 0, 0)
+            cr_surf.paint()
+
+        # Limit cache size to 6 surfaces to conserve memory
+        if len(_cairo_page_cache) >= 6:
+            oldest_key = next(iter(_cairo_page_cache))
+            _cairo_page_cache.pop(oldest_key, None)
+
+        _cairo_page_cache[cache_key] = surf
+        return surf
+    except Exception as e:
+        print(f"Error creating cached page surface for page {page_index}: {e}")
+        return None
 
 def _get_font_args_for_pymupdf(text_obj):
     """Get the font args for pymupdf."""
@@ -88,6 +142,7 @@ def close_pdf_document(doc):
     """Close PDF document."""
     if doc:
         try:
+            invalidate_page_cache(doc)
             doc.close()
         except Exception as e:
             print(f"Error closing PDF document: {e}")
@@ -171,56 +226,18 @@ def pixmap_to_cairo_surface(pix):
 
 
 def draw_page_to_cairo(cr, doc, page_index, zoom_level):
-    """Draw page to cairo."""
-    if not doc or not (0 <= page_index < doc.page_count):
+    """Draw page to cairo using the cached surface."""
+    surf = get_page_cairo_surface(doc, page_index, zoom_level)
+    if surf:
+        cr.set_source_rgb(1.0, 1.0, 1.0)
+        cr.paint()
+        cr.set_source_surface(surf, 0, 0)
+        cr.paint()
+        return True, None
+    else:
         cr.set_source_rgb(0.7, 0.7, 0.7)
         cr.paint()
-        return False, "Invalid document or page index."
-
-    try:
-        page = doc.load_page(page_index)
-        zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
-        pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
-        samples_bytes = bytes(pix.samples)
-
-        pixbuf = GdkPixbuf.Pixbuf.new_from_data(
-            samples_bytes, GdkPixbuf.Colorspace.RGB, False, 8,
-            pix.width, pix.height, pix.stride
-        )
-
-        if pixbuf:
-            cr.set_source_rgb(1.0, 1.0, 1.0)
-            cr.paint()
-
-            Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0)
-            cr.paint()
-            return True, None
-        else:
-            error_msg = "Failed to create GdkPixbuf from page pixmap."
-            print(error_msg)
-            cr.set_source_rgb(1.0, 0.8, 0.8)
-            cr.paint()
-            layout = PangoCairo.create_layout(cr)
-            layout.set_text(f"Error: {error_msg}", -1)
-            font_desc = Pango.FontDescription("Sans 10")
-            layout.set_font_description(font_desc)
-            cr.move_to(10, 10)
-            PangoCairo.show_layout(cr, layout)
-            return False, error_msg
-
-    except Exception as e:
-        error_msg = f"Error rendering page {page_index+1} via GdkPixbuf: {e}"
-        print(error_msg)
-        cr.set_source_rgb(1.0, 0.0, 0.0)
-        cr.paint()
-        cr.set_source_rgb(1.0,1.0,1.0)
-        layout = PangoCairo.create_layout(cr)
-        layout.set_text(error_msg, -1)
-        font_desc = Pango.FontDescription("Sans 10")
-        layout.set_font_description(font_desc)
-        cr.move_to(10, 10)
-        PangoCairo.show_layout(cr, layout)
-        return False, error_msg
+        return False, "Failed to render page."
 
 
 def extract_editable_text(doc, page_index):
@@ -725,6 +742,7 @@ def delete_image_from_page(doc, image_obj: EditableImage):
             page.add_redact_annot(redact_rect)
             page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
             doc.load_page(image_obj.page_number)
+            invalidate_page_cache(doc, image_obj.page_number)
             return True, None
         else:
             return False, _("err_invalid_image_bbox")
@@ -749,6 +767,7 @@ def delete_shape_from_page(doc, shape_obj: EditableShape):
             except TypeError:
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
             doc.load_page(shape_obj.page_number)
+            invalidate_page_cache(doc, shape_obj.page_number)
             return True, None
         else:
             return False, _("err_invalid_shape_bbox")
@@ -772,6 +791,7 @@ def delete_stroke_from_page(doc, stroke_obj: EditableStroke):
             except TypeError:
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
             doc.load_page(stroke_obj.page_number)
+            invalidate_page_cache(doc, stroke_obj.page_number)
             return True, None
         return False, "Invalid stroke bounding box."
     except Exception as e:
@@ -902,6 +922,7 @@ def restore_page_from_snapshot(doc, page_num: int) -> bool:
             if sig not in original_signatures:
                 page.delete_link(link)
                 
+        invalidate_page_cache(doc, page_num)
         return True
     except Exception as e:
         print(f"Warning: could not restore snapshot for page {page_num}: {e}")
@@ -1091,6 +1112,7 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
                 if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
                     if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
                         _apply_single_object_to_page(doc, page, obj)
+        invalidate_page_cache(doc, page_num)
         return True, None
     except Exception as e:
         print(f"ERROR: rebuild_page failed for page {page_num}: {e}")

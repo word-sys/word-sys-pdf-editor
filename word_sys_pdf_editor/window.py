@@ -1181,16 +1181,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         cr.save()
         cr.translate(page_offset_x, page_offset_y)
-        try:
-            page_surface = cr.get_target().create_similar_image(cairo.FORMAT_ARGB32, int(page_w), int(page_h))
-        except Exception:
-            page_surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, int(page_w), int(page_h))
-
-        page_cr = cairo.Context(page_surface)
-        pdf_handler.draw_page_to_cairo(page_cr, self.doc, self.current_page_index, self.zoom_level)
-
-        cr.set_source_surface(page_surface, 0, 0)
-        cr.paint()
+        cached_surf = pdf_handler.get_page_cairo_surface(self.doc, self.current_page_index, self.zoom_level)
+        if cached_surf:
+            cr.set_source_surface(cached_surf, 0, 0)
+            cr.paint()
+        else:
+            pdf_handler.draw_page_to_cairo(cr, self.doc, self.current_page_index, self.zoom_level)
         cr.restore()
 
         if self.dragged_object:
