@@ -240,6 +240,56 @@ def draw_page_to_cairo(cr, doc, page_index, zoom_level):
         return False, "Failed to render page."
 
 
+def _get_page_text_baselines(page):
+    """Get list of (x0, x1, baseline) for all text lines on page."""
+    baselines = []
+    try:
+        text_dict = page.get_text("dict", flags=0)
+        for block in text_dict.get("blocks", []):
+            if block.get("type") == 0:
+                for line in block.get("lines", []):
+                    spans = line.get("spans", [])
+                    if spans:
+                        tx0 = min(s["bbox"][0] for s in spans)
+                        tx1 = max(s["bbox"][2] for s in spans)
+                        baseline = spans[0].get("origin", (0, line.get("bbox", [0, 0, 0, 0])[3]))[1]
+                        baselines.append((tx0, tx1, baseline))
+    except Exception:
+        pass
+    return baselines
+
+
+def _is_underline_drawing(drawing, baselines):
+    """Check if a drawing is an underline coincident with a text baseline."""
+    if not baselines:
+        return False
+    try:
+        items = drawing.get('items', [])
+        rect = drawing.get('rect')
+        line_y = None
+        line_x0 = None
+        line_x1 = None
+        if len(items) == 1 and items[0][0] == 'l':
+            p1, p2 = items[0][1], items[0][2]
+            if abs(p1.y - p2.y) <= 1.0 and abs(p1.x - p2.x) >= 4.0:
+                line_y = (p1.y + p2.y) / 2.0
+                line_x0, line_x1 = min(p1.x, p2.x), max(p1.x, p2.x)
+        elif rect and rect.height <= 3.5 and rect.width >= 4.0:
+            line_y = (rect.y0 + rect.y1) / 2.0
+            line_x0, line_x1 = rect.x0, rect.x1
+
+        if line_y is None:
+            return False
+
+        for tx0, tx1, baseline in baselines:
+            if abs(line_y - (baseline + 1.5)) <= 3.5:
+                if not (line_x1 < tx0 - 6.0 or line_x0 > tx1 + 6.0):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def extract_editable_text(doc, page_index):
     """Extract editable text."""
     editable_texts = []
@@ -303,6 +353,10 @@ def extract_editable_text(doc, page_index):
                         baseline=first_span.get("origin", (0, bbox[3]))[1] if first_span else bbox[3]
                     )
                     editable.page_number = page_index
+                    for d in page.get_drawings():
+                        if _is_underline_drawing(d, [(bbox[0], bbox[2], editable.baseline)]):
+                            editable.is_underline = True
+                            break
                     editable_texts.append(editable)
                     print(f"DEBUG: Extracted text: '{combined_text}' bbox={bbox}")
         
@@ -880,8 +934,11 @@ def extract_editable_shapes(doc, page_index):
     try:
         page = doc.load_page(page_index)
         drawings = page.get_drawings()
+        baselines = _get_page_text_baselines(page)
         for drawing in drawings:
             try:
+                if _is_underline_drawing(drawing, baselines):
+                    continue
                 items = drawing.get('items', [])
                 if not items:
                     continue
@@ -970,8 +1027,11 @@ def extract_editable_strokes(doc, page_index):
     try:
         page = doc.load_page(page_index)
         drawings = page.get_drawings()
+        baselines = _get_page_text_baselines(page)
         for drawing in drawings:
             try:
+                if _is_underline_drawing(drawing, baselines):
+                    continue
                 items = drawing.get('items', [])
                 if not items:
                     continue

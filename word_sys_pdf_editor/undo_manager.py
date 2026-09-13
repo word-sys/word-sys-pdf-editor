@@ -1,4 +1,5 @@
 import copy
+import re
 from . import pdf_handler
 from .models import EditableText, EditableShape, EditableStroke
 from .i18n import _
@@ -41,6 +42,50 @@ class Command:
             
             if isinstance(target_object, EditableText):
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
+
+                # If text has underline or links, redact vector underline lines cleanly
+                is_underlined = (
+                    getattr(target_object, 'is_underline', False)
+                    or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', getattr(target_object, 'text', '')))
+                )
+                x0, y0, x1, y1 = orig_bbox
+                baseline = getattr(target_object, 'baseline', y1)
+                
+                if not is_underlined:
+                    strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.5)
+                    try:
+                        for d in page.get_drawings():
+                            d_rect = d.get('rect')
+                            if d_rect and d_rect.intersects(strip_test) and d_rect.height <= 3.5:
+                                is_underlined = True
+                                break
+                    except Exception:
+                        pass
+                        
+                if is_underlined:
+                    lines = getattr(target_object, 'text', '').split('\n')
+                    line_height = getattr(target_object, 'font_size', 12.0) * 1.2
+                    for i in range(len(lines)):
+                        strip_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 3.5)
+                        try:
+                            for d in page.get_drawings():
+                                d_rect = d.get('rect')
+                                if d_rect and d_rect.intersects(strip_rect) and d_rect.height <= 3.5:
+                                    strip_rect = strip_rect | fitz.Rect(d_rect)
+                        except Exception:
+                            pass
+                        page.add_redact_annot(strip_rect)
+                    try:
+                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
+                    except Exception:
+                        pass
+                    
+                    try:
+                        for link in list(page.get_links()):
+                            if fitz.Rect(link.get('from', (0, 0, 0, 0))).intersects(fitz.Rect(orig_bbox)):
+                                page.delete_link(link)
+                    except Exception as link_err:
+                        print(f"Warning: could not delete old link: {link_err}")
             elif isinstance(target_object, EditableImage):
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
             else:
@@ -145,6 +190,53 @@ class EditObjectCommand(Command):
             
             if isinstance(self.target_object, EditableText):
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
+
+                # If text has underline or links, redact vector underline lines cleanly
+                is_underlined = (
+                    getattr(self.target_object, 'is_underline', False)
+                    or properties_to_clear.get('is_underline', False)
+                    or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', getattr(self.target_object, 'text', '')))
+                    or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', properties_to_clear.get('text', '')))
+                )
+                x0, y0, x1, y1 = orig_bbox
+                baseline = getattr(self.target_object, 'baseline', y1)
+                
+                if not is_underlined:
+                    strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.5)
+                    try:
+                        for d in page.get_drawings():
+                            d_rect = d.get('rect')
+                            if d_rect and d_rect.intersects(strip_test) and d_rect.height <= 3.5:
+                                is_underlined = True
+                                break
+                    except Exception:
+                        pass
+                        
+                if is_underlined:
+                    text_val = properties_to_clear.get('text', getattr(self.target_object, 'text', ''))
+                    lines = text_val.split('\n')
+                    line_height = getattr(self.target_object, 'font_size', 12.0) * 1.2
+                    for i in range(len(lines)):
+                        strip_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 3.5)
+                        try:
+                            for d in page.get_drawings():
+                                d_rect = d.get('rect')
+                                if d_rect and d_rect.intersects(strip_rect) and d_rect.height <= 3.5:
+                                    strip_rect = strip_rect | fitz.Rect(d_rect)
+                        except Exception:
+                            pass
+                        page.add_redact_annot(strip_rect)
+                    try:
+                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
+                    except Exception:
+                        pass
+                    
+                    try:
+                        for link in list(page.get_links()):
+                            if fitz.Rect(link.get('from', (0, 0, 0, 0))).intersects(fitz.Rect(orig_bbox)):
+                                page.delete_link(link)
+                    except Exception as link_err:
+                        print(f"Warning: could not delete old link: {link_err}")
             elif isinstance(self.target_object, EditableImage):
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
             else:
