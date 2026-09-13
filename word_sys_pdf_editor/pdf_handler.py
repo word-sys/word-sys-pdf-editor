@@ -1158,6 +1158,7 @@ def insert_blank_page(doc, page_index=None, width=None, height=None):
                 height = default_height
         
         doc.new_page(width=width, height=height)
+        invalidate_page_cache(doc)
         return True, _("success_blank_page_added", doc.page_count)
     
     except Exception as e:
@@ -1175,6 +1176,7 @@ def merge_pdf_pages(target_doc, source_pdf_path, insert_position=None):
         target_doc.insert_pdf(source_doc, from_page=0, to_page=source_page_count - 1)
         
         source_doc.close()
+        invalidate_page_cache(target_doc)
         
         return True, _("success_merged_pages", source_page_count), source_page_count
     
@@ -1194,6 +1196,7 @@ def move_page(doc, from_index, to_index):
             return True, _("success_page_already_there")
         
         doc.move_page(from_index, to_index)
+        invalidate_page_cache(doc)
         
         return True, _("success_page_moved", from_index + 1, to_index + 1)
     
@@ -1213,6 +1216,7 @@ def delete_page(doc, page_index):
             return False, _("err_invalid_page_index_val", page_index + 1)
         
         doc.delete_page(page_index)
+        invalidate_page_cache(doc)
         return True, _("success_page_deleted", page_index + 1)
     
     except Exception as e:
@@ -1230,6 +1234,7 @@ def add_highlight_annotation(doc, page_index, rect_unzoomed, color=(1, 0.93, 0))
         annot = page.add_highlight_annot(r)
         annot.set_colors(stroke=color)
         annot.update()
+        invalidate_page_cache(doc, page_index)
         return True, None
     except Exception as e:
         traceback.print_exc()
@@ -1256,6 +1261,8 @@ def remove_highlight_annotations(doc, page_index, rect_unzoomed=None):
                         page.delete_annot(annot)
                         removed_count += 1
         
+        if removed_count > 0:
+            invalidate_page_cache(doc, page_index)
         return True, removed_count
     except Exception as e:
         traceback.print_exc()

@@ -3958,6 +3958,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.doc, self.current_page_index, (x1, y1, x2, y2), color=color
         )
         if success:
+            pdf_handler.invalidate_page_cache(self.doc, self.current_page_index)
             self.document_modified = True
             self.view_sel_start = None
             self.view_sel_rect = None
@@ -4429,6 +4430,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             removed_count += 1
             
             if removed_count > 0:
+                pdf_handler.invalidate_page_cache(self.doc, self.current_page_index)
                 self.document_modified = True
                 self._refresh_thumbnail(self.current_page_index)
                 self._update_ui_state()
