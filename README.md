@@ -1,7 +1,7 @@
 # word-sys's PDF Editor
 <img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/word_sys_pdf_editor/img/f-pv1.svg" width="256" height="256"/>
 
-**word-sys's PDF Editor** is a simple and user-friendly tool developed for Pardus, Debian and other Linux distributions, focused on editing text content in PDF files. Developed from scratch in the spirit of #MilliTeknolojiHamlesi and TEKNOFEST to meet a need in the Pardus ecosystem, word-sys's PDF Editor is a free and open PDF editor serving both corporate and individual users — and the **FIRST PLACE** winner of the TEKNOFEST 2025 Pardus Development Competition.
+**word-sys's PDF Editor** is a simple and user-friendly tool developed for Pardus, Debian and other Linux distributions, focused on editing text, image and object content in PDF files. Developed from scratch in the spirit of #MilliTeknolojiHamlesi and TEKNOFEST to meet the need for a free, open-source PDF editor in the Linux ecosystem, word-sys's PDF Editor serves both corporate and individual users, including those who prefer the Turkish language interface, easy to use — and the **FIRST PLACE** winner of the TEKNOFEST 2025 Pardus Development Competition.
 
 Developer: **Barın Güzeldemirci (word-sys)**  
 License: **GPL-3.0-or-later**
@@ -9,7 +9,7 @@ License: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Recommended Stable Release: v1.9.4** — For the most stable experience, it is strongly recommended to use version **1.9.4**. See the installation sections below for details on how to install this version.
+> **Recommended Stable Release: v1.10.0~beta1** — For the most stable experience, it is strongly recommended to use version **1.10.0~beta1**. See the installation sections below for details on how to install this version.
 
 ---
 
@@ -52,19 +52,19 @@ There are many ways to install word-sys's PDF Editor on your system:
 
 This method is the easiest installation path for Linux distributions.
 
-1.  Download the latest `.deb` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named something like `word-sys-pdf-editor_1.9.4_all.deb`.
+1.  Download the latest `.deb` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named something like `word-sys-pdf-editor_1.10.0~beta1_all.deb`.
 
     > [!TIP]
-    > **Use version 1.9.4** for the most stable experience: look for `word-sys-pdf-editor_1.9.4_all.deb` on the releases page.
+    > **Use version 1.10.0~beta1** for the most stable experience: look for `word-sys-pdf-editor_1.10.0~beta1_all.deb` on the releases page.
 
 2.  Open a terminal in the directory where you downloaded the `.deb` file.
 3.  Run the following command to install the package:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.9.4_all.deb
+    sudo apt install ./word-sys-pdf-editor_1.10.0~beta1_all.deb
     ```
-    *(Note: Replace `word-sys-pdf-editor_1.9.2_all.deb` with the exact filename you downloaded if different.)*
-4.  If you encounter a dependency error during installation, try running the following command to fix missing dependencies:
+    *(Note: Replace `word-sys-pdf-editor_1.10.0~beta1_all.deb` with the exact filename you downloaded if different.)*
+4.  If you encounter a dependency error during installation, it may happens because of you existing broken system, firstly try running the following command to fix missing dependencies or problems on your other packages:
     ```bash
     sudo apt --fix-broken install
     ```
@@ -78,7 +78,7 @@ This method is the easiest usable path for all Linux distributions.
 
 1.  Download the latest `.AppImage` or `*-linux-x64.tar.gz` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named something like `word-sys-pdf-editor.AppImage` or `word-sys-pdf-editor-linux-x64.tar.gz`.
 
-    > **Use version 1.9.4** for the most stable experience: look for `v1.9.4` tag on the releases page.
+    > **Use version 1.10.0~beta1** for the most stable experience: look for `v1.10.0-beta1` tag on the releases page.
 
 #### A. AppImage Installation
 
@@ -125,7 +125,7 @@ This method is the easiest usable path for all Linux distributions.
 This method is suitable for users who want to run the application directly from source code or contribute to development.
 
 > [!TIP]
-> For a stable experience, use the **v1.9.4** tag when cloning. If you want to test the latest development changes, you can clone the `main` branch directly — but note that it may be less stable.
+> For a stable experience, use the **v1.10.0-beta1** tag when cloning. If you want to test the latest development changes, you can clone the `main` branch directly — but note that it may be less stable.
 
 ---
 
@@ -148,9 +148,9 @@ This method is suitable for users who want to run the application directly from 
 
 2.  **Download the Source Code:**
 
-    **Recommended (stable v1.9.4):**
+    **Recommended (stable v1.10.0-beta1):**
     ```bash
-    git clone --branch 1.9.4 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.10.0-beta1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -200,9 +200,9 @@ This method is suitable for users who want to run the application directly from 
 
 2.  **Download the Source Code:**
 
-    **Recommended (stable v1.9.4):**
+    **Recommended (stable v1.10.0-beta1):**
     ```bash
-    git clone --branch 1.9.4 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.10.0-beta1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -235,9 +235,9 @@ This method is suitable for users who want to run the application directly from 
 
 1.  **Download the Source Code:**
 
-    **Recommended (stable v1.9.4):**
+    **Recommended (stable v1.10.0-beta1):**
     ```bash
-    git clone --branch 1.9.4 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.10.0-beta1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
