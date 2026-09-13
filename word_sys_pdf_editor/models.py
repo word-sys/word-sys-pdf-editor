@@ -350,6 +350,30 @@ class EditableStroke:
         """Get the height."""
         return self.bbox[3] - self.bbox[1]
 
+    def scale_to_bbox(self, new_bbox, orig_bbox, orig_points=None):
+        """Scale stroke points proportionally to match new bounding box."""
+        if not self.points:
+            self.bbox = new_bbox
+            self.x, self.y = new_bbox[0], new_bbox[1]
+            return
+        pts_to_scale = orig_points if orig_points else self.points
+        ox1, oy1, ox2, oy2 = orig_bbox
+        nx1, ny1, nx2, ny2 = new_bbox
+        ow = max(ox2 - ox1, 1e-3)
+        oh = max(oy2 - oy1, 1e-3)
+        nw = max(nx2 - nx1, 1e-3)
+        nh = max(ny2 - ny1, 1e-3)
+        new_pts = []
+        for px, py in pts_to_scale:
+            rx = (px - ox1) / ow
+            ry = (py - oy1) / oh
+            new_pts.append((nx1 + rx * nw, ny1 + ry * nh))
+        self.points = new_pts
+        self.recalculate_bbox()
+        self.bbox = new_bbox
+        self.x = new_bbox[0]
+        self.y = new_bbox[1]
+
     def set_position(self, new_x, new_y):
         """Shift all points to a new (x, y) origin."""
         dx = new_x - self.x

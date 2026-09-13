@@ -1049,6 +1049,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         else:
             self.editable_shapes = shapes
 
+        strokes, strokes_error = pdf_handler.extract_editable_strokes(self.doc, page_index)
+        if strokes_error:
+            print(f"Warning: Could not extract strokes from page {page_index + 1}: {strokes_error}")
+            self.editable_strokes = []
+        else:
+            self.editable_strokes = strokes
+
         page = self.doc.load_page(page_index)
         self.current_pdf_page_width = int(page.rect.width * self.zoom_level)
         self.current_pdf_page_height = int(page.rect.height * self.zoom_level)
@@ -3552,10 +3559,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             else:
                 new_y1 = new_y2 - min_size
 
-        self.dragged_object.bbox = (new_x1, new_y1, new_x2, new_y2)
-        
-        self.dragged_object.x = new_x1
-        self.dragged_object.y = new_y1
+        if isinstance(self.dragged_object, EditableStroke):
+            start_points = self.drag_begin_state.get('points', self.dragged_object.points)
+            self.dragged_object.scale_to_bbox((new_x1, new_y1, new_x2, new_y2), self.resize_start_bbox, start_points)
+        else:
+            self.dragged_object.bbox = (new_x1, new_y1, new_x2, new_y2)
+            self.dragged_object.x = new_x1
+            self.dragged_object.y = new_y1
 
         self.pdf_view.queue_draw()
 

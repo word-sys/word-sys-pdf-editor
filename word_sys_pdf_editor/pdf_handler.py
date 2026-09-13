@@ -762,12 +762,12 @@ def delete_shape_from_page(doc, shape_obj: EditableShape):
         page = doc.load_page(shape_obj.page_number)
 
         x0, y0, x1, y1 = shape_obj.bbox
-        pad = max(getattr(shape_obj, 'stroke_width', 2.0) / 2.0 + 1.0, 1.5)
+        pad = max(getattr(shape_obj, 'stroke_width', 2.0) / 2.0 + 1.5, 2.0)
         redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
         if not redact_rect.is_empty and redact_rect.is_valid:
             page.add_redact_annot(redact_rect)
             try:
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=1, text=1)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
             except TypeError:
                 try:
                     page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
@@ -790,12 +790,12 @@ def delete_stroke_from_page(doc, stroke_obj: EditableStroke):
     try:
         page = doc.load_page(stroke_obj.page_number)
         x0, y0, x1, y1 = stroke_obj.bbox
-        pad = max(getattr(stroke_obj, 'stroke_width', 2.0) / 2.0 + 1.0, 1.5)
+        pad = max(getattr(stroke_obj, 'stroke_width', 2.0) / 2.0 + 1.5, 2.0)
         redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
         if not redact_rect.is_empty and redact_rect.is_valid:
             page.add_redact_annot(redact_rect)
             try:
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=1, text=1)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
             except TypeError:
                 try:
                     page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
@@ -813,7 +813,7 @@ def delete_stroke_from_page(doc, stroke_obj: EditableStroke):
 
 
 def extract_editable_shapes(doc, page_index):
-    """Extract editable shapes."""
+    """Extract editable geometric shapes (rectangles, ellipses)."""
     editable_shapes = []
     if not doc or not (0 <= page_index < doc.page_count):
         return [], "Invalid document or page index for shape extraction."
@@ -822,47 +822,76 @@ def extract_editable_shapes(doc, page_index):
         drawings = page.get_drawings()
         for drawing in drawings:
             try:
-                rect = drawing.get('rect')
-                if not rect:
-                    continue
-                r = fitz.Rect(rect)
-                if r.is_empty or not r.is_valid:
-                    continue
-                if r.width < 2 or r.height < 2:
-                    continue
-
-                bbox = (r.x0, r.y0, r.x1, r.y1)
-
                 items = drawing.get('items', [])
-                shape_type = EditableShape.SHAPE_RECTANGLE  # default
-                for item in items:
-                    if item[0] == 'c':  
-                        shape_type = EditableShape.SHAPE_ELLIPSE
-                        break
+                if not items:
+                    continue
 
-                raw_fill = drawing.get('fill')     
-                raw_stroke = drawing.get('color')  
+                raw_fill = drawing.get('fill')
+                raw_stroke = drawing.get('color')
                 raw_width = drawing.get('width', 1.0)
-
                 is_transparent = (raw_fill is None)
                 fill_color = raw_fill if raw_fill else (1.0, 1.0, 1.0)
                 stroke_color = raw_stroke if raw_stroke else (0.0, 0.0, 0.0)
                 stroke_width = float(raw_width) if raw_width else 1.0
 
-                shape_obj = EditableShape(
-                    shape_type=shape_type,
-                    bbox=bbox,
-                    fill_color=fill_color,
-                    stroke_color=stroke_color,
-                    stroke_width=stroke_width,
-                    page_number=page_index,
-                    is_new=False,
-                    is_transparent=is_transparent
-                )
-                shape_obj.is_baked = True
-                editable_shapes.append(shape_obj)
+                # Check if rectangle:
+                if len(items) == 1 and items[0][0] == 're':
+                    r = fitz.Rect(items[0][1])
+                    if r.width >= 2 and r.height >= 2:
+                        shape_obj = EditableShape(
+                            shape_type=EditableShape.SHAPE_RECTANGLE,
+                            bbox=(r.x0, r.y0, r.x1, r.y1),
+                            fill_color=fill_color,
+                            stroke_color=stroke_color,
+                            stroke_width=stroke_width,
+                            page_number=page_index,
+                            is_new=False,
+                            is_transparent=is_transparent
+                        )
+                        shape_obj.is_baked = True
+                        editable_shapes.append(shape_obj)
+                    continue
+
+                # Check if ellipse:
+                if len(items) == 4 and all(it[0] == 'c' for it in items):
+                    rect = drawing.get('rect')
+                    if rect:
+                        r = fitz.Rect(rect)
+                        if r.width >= 2 and r.height >= 2:
+                            shape_obj = EditableShape(
+                                shape_type=EditableShape.SHAPE_ELLIPSE,
+                                bbox=(r.x0, r.y0, r.x1, r.y1),
+                                fill_color=fill_color,
+                                stroke_color=stroke_color,
+                                stroke_width=stroke_width,
+                                page_number=page_index,
+                                is_new=False,
+                                is_transparent=is_transparent
+                            )
+                            shape_obj.is_baked = True
+                            editable_shapes.append(shape_obj)
+                    continue
+
+                # If drawing is filled, treat as rectangle shape by bounding box
+                if raw_fill is not None:
+                    rect = drawing.get('rect')
+                    if rect:
+                        r = fitz.Rect(rect)
+                        if r.width >= 2 and r.height >= 2:
+                            shape_obj = EditableShape(
+                                shape_type=EditableShape.SHAPE_RECTANGLE,
+                                bbox=(r.x0, r.y0, r.x1, r.y1),
+                                fill_color=fill_color,
+                                stroke_color=stroke_color,
+                                stroke_width=stroke_width,
+                                page_number=page_index,
+                                is_new=False,
+                                is_transparent=False
+                            )
+                            shape_obj.is_baked = True
+                            editable_shapes.append(shape_obj)
             except Exception as item_err:
-                print(f"Warning: skipping drawing item: {item_err}")
+                print(f"Warning: skipping shape drawing item: {item_err}")
                 continue
 
         print(f"DEBUG: Extracted {len(editable_shapes)} shapes from page {page_index}")
@@ -870,7 +899,75 @@ def extract_editable_shapes(doc, page_index):
     except Exception as e:
         error_msg = f"Error extracting shapes from page {page_index}: {e}"
         print(error_msg)
-        traceback.print_exc()
+        return [], error_msg
+
+
+def extract_editable_strokes(doc, page_index):
+    """Extract editable freehand and highlighter strokes."""
+    editable_strokes = []
+    if not doc or not (0 <= page_index < doc.page_count):
+        return [], "Invalid document or page index for stroke extraction."
+    try:
+        page = doc.load_page(page_index)
+        drawings = page.get_drawings()
+        for drawing in drawings:
+            try:
+                items = drawing.get('items', [])
+                if not items:
+                    continue
+
+                # Skip pure shapes (handled by extract_editable_shapes)
+                if len(items) == 1 and items[0][0] == 're':
+                    continue
+                if len(items) == 4 and all(it[0] == 'c' for it in items):
+                    continue
+                if drawing.get('fill') is not None:
+                    continue
+
+                raw_stroke = drawing.get('color')
+                raw_width = drawing.get('width', 1.0)
+                raw_opacity = drawing.get('opacity')
+
+                pts = []
+                for it in items:
+                    if it[0] == 'l':
+                        p1, p2 = it[1], it[2]
+                        if not pts or pts[-1] != (p1.x, p1.y):
+                            pts.append((p1.x, p1.y))
+                        pts.append((p2.x, p2.y))
+                    elif it[0] == 'c':
+                        p1, p2, p3, p4 = it[1], it[2], it[3], it[4]
+                        if not pts or pts[-1] != (p1.x, p1.y):
+                            pts.append((p1.x, p1.y))
+                        pts.append((p4.x, p4.y))
+
+                if pts and len(pts) >= 1:
+                    stroke_width = float(raw_width) if raw_width else 2.0
+                    is_hl = (stroke_width >= 8.0) or (raw_opacity is not None and raw_opacity < 0.9)
+                    tool_type = EditableStroke.TOOL_HIGHLIGHTER if is_hl else EditableStroke.TOOL_PEN
+                    opacity = float(raw_opacity) if raw_opacity is not None else (0.35 if is_hl else 1.0)
+                    stroke_color = raw_stroke if raw_stroke else (0.0, 0.0, 0.0)
+
+                    stroke_obj = EditableStroke(
+                        points=pts,
+                        stroke_color=stroke_color,
+                        stroke_width=stroke_width,
+                        opacity=opacity,
+                        tool_type=tool_type,
+                        page_number=page_index,
+                        is_new=False
+                    )
+                    stroke_obj.is_baked = True
+                    editable_strokes.append(stroke_obj)
+            except Exception as item_err:
+                print(f"Warning: skipping stroke drawing item: {item_err}")
+                continue
+
+        print(f"DEBUG: Extracted {len(editable_strokes)} strokes from page {page_index}")
+        return editable_strokes, None
+    except Exception as e:
+        error_msg = f"Error extracting strokes from page {page_index}: {e}"
+        print(error_msg)
         return [], error_msg
 
 _page_snapshots: dict = {}

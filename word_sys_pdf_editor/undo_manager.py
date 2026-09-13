@@ -30,8 +30,8 @@ class Command:
         
         orig_bbox = getattr(target_object, 'original_bbox', target_object.bbox)
         if isinstance(target_object, (EditableShape, EditableStroke)):
+            pad = max(getattr(target_object, 'stroke_width', 2.0) / 2.0 + 1.5, 2.0)
             x0, y0, x1, y1 = orig_bbox
-            pad = max(getattr(target_object, 'stroke_width', 2.0) / 2.0 + 1.0, 1.5)
             redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
         else:
             redact_rect = fitz.Rect(orig_bbox)
@@ -45,12 +45,24 @@ class Command:
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
             else:
                 try:
-                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=1, text=1)
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
                 except TypeError:
                     try:
                         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
                     except Exception:
                         page.apply_redactions()
+
+                # If redacting graphics, any intersecting shapes or strokes must be re-applied on rebuild
+                redact_fitz = fitz.Rect(redact_rect)
+                other_objs = [o for o in getattr(self.window, 'editable_shapes', []) if o is not target_object]
+                other_objs += [s for s in getattr(self.window, 'editable_strokes', []) if s is not target_object]
+                for other in other_objs:
+                    if hasattr(other, 'bbox') and other.bbox:
+                        ox0, oy0, ox1, oy1 = other.bbox
+                        opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0)
+                        other_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
+                        if redact_fitz.intersects(other_rect):
+                            other._ghost_redacted = True
                     
             self.window.doc.load_page(page_num)
             pdf_handler.save_page_snapshot(self.window.doc, page_num, force=True)
@@ -120,10 +132,10 @@ class EditObjectCommand(Command):
         
         pdf_handler.restore_page_from_snapshot(self.window.doc, page_num)
         
-        orig_bbox = getattr(self.target_object, 'original_bbox', self.target_object.bbox)
+        orig_bbox = properties_to_clear.get('bbox', getattr(self.target_object, 'original_bbox', self.target_object.bbox))
         if isinstance(self.target_object, (EditableShape, EditableStroke)):
+            pad = max(getattr(self.target_object, 'stroke_width', 2.0) / 2.0 + 1.5, 2.0)
             x0, y0, x1, y1 = orig_bbox
-            pad = max(getattr(self.target_object, 'stroke_width', 2.0) / 2.0 + 1.0, 1.5)
             redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
         else:
             redact_rect = fitz.Rect(orig_bbox)
@@ -137,12 +149,24 @@ class EditObjectCommand(Command):
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
             else:
                 try:
-                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=1, text=1)
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
                 except TypeError:
                     try:
                         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
                     except Exception:
                         page.apply_redactions()
+
+                # If redacting graphics, any intersecting shapes or strokes must be re-applied on rebuild
+                redact_fitz = fitz.Rect(redact_rect)
+                other_objs = [o for o in getattr(self.window, 'editable_shapes', []) if o is not self.target_object]
+                other_objs += [s for s in getattr(self.window, 'editable_strokes', []) if s is not self.target_object]
+                for other in other_objs:
+                    if hasattr(other, 'bbox') and other.bbox:
+                        ox0, oy0, ox1, oy1 = other.bbox
+                        opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0)
+                        other_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
+                        if redact_fitz.intersects(other_rect):
+                            other._ghost_redacted = True
                     
             self.window.doc.load_page(page_num)
             pdf_handler.save_page_snapshot(self.window.doc, page_num, force=True)
@@ -173,6 +197,7 @@ class EditObjectCommand(Command):
             success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj)
             if success:
                 self.target_object.is_baked = True
+                self.target_object._ghost_redacted = True
                 if page_num is not None:
                     self.window._refresh_thumbnail(page_num)
             else:
@@ -196,6 +221,7 @@ class EditObjectCommand(Command):
             success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj)
             if success:
                 self.target_object.is_baked = True
+                self.target_object._ghost_redacted = True
                 if page_num is not None:
                     self.window._refresh_thumbnail(page_num)
             else:
