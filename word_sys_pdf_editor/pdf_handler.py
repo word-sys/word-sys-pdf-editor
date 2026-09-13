@@ -1231,12 +1231,15 @@ def _apply_single_object_to_page(doc, page, obj):
             pts = [fitz.Point(p[0], p[1]) for p in obj.points]
             shape.draw_polyline(pts)
             stroke = tuple(float(c) for c in obj.stroke_color)
+            is_hl = getattr(obj, 'tool_type', None) in (EditableStroke.TOOL_HIGHLIGHTER, "highlighter") or obj.stroke_width >= 8.0
+            cap = 2 if is_hl else 1
+            join = 2 if is_hl else 1
             shape.finish(
                 color=stroke,
                 width=obj.stroke_width,
                 stroke_opacity=getattr(obj, 'opacity', 1.0),
-                lineCap=1,
-                lineJoin=1,
+                lineCap=cap,
+                lineJoin=join,
                 closePath=False
             )
             shape.commit()
@@ -1245,7 +1248,11 @@ def _apply_single_object_to_page(doc, page, obj):
             r = max(obj.stroke_width / 2.0, 1.0)
             rect = fitz.Rect(p[0] - r, p[1] - r, p[0] + r, p[1] + r)
             shape = page.new_shape()
-            shape.draw_oval(rect)
+            is_hl = getattr(obj, 'tool_type', None) in (EditableStroke.TOOL_HIGHLIGHTER, "highlighter") or obj.stroke_width >= 8.0
+            if is_hl:
+                shape.draw_rect(rect)
+            else:
+                shape.draw_oval(rect)
             stroke = tuple(float(c) for c in obj.stroke_color)
             shape.finish(
                 color=stroke,

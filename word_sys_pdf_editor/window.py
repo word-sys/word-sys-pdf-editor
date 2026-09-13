@@ -74,7 +74,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pen_color = (0.0, 0.0, 0.0)
         self.pen_width = 2.0
         self.highlighter_color = (1.0, 0.9, 0.0)
-        self.highlighter_width = 16.0
+        self.highlighter_width = 14.0
         self.highlighter_opacity = 0.35
         self.document_modified = False 
         self.tool_mode = "select" 
@@ -1325,11 +1325,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 r, g, b = self.dragged_object.stroke_color
                 cr.set_source_rgba(r, g, b, 0.6)
                 cr.set_line_width(self.dragged_object.stroke_width * self.zoom_level)
-                cr.set_line_cap(cairo.LINE_CAP_ROUND)
-                cr.set_line_join(cairo.LINE_JOIN_ROUND)
+                is_hl = getattr(self.dragged_object, 'tool_type', None) in ("highlighter", EditableStroke.TOOL_HIGHLIGHTER) or self.dragged_object.stroke_width >= 8.0
+                if is_hl:
+                    cr.set_line_cap(cairo.LINE_CAP_SQUARE)
+                    cr.set_line_join(cairo.LINE_JOIN_BEVEL)
+                else:
+                    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                    cr.set_line_join(cairo.LINE_JOIN_ROUND)
                 if len(self.dragged_object.points) == 1:
                     px, py = self.dragged_object.points[0]
-                    cr.arc(page_offset_x + px * self.zoom_level, page_offset_y + py * self.zoom_level, max((self.dragged_object.stroke_width * self.zoom_level) / 2.0, 1.0), 0, 2 * math.pi)
+                    rad = max((self.dragged_object.stroke_width * self.zoom_level) / 2.0, 1.0)
+                    if is_hl:
+                        cr.rectangle(page_offset_x + px * self.zoom_level - rad, page_offset_y + py * self.zoom_level - rad, rad * 2.0, rad * 2.0)
+                    else:
+                        cr.arc(page_offset_x + px * self.zoom_level, page_offset_y + py * self.zoom_level, rad, 0, 2 * math.pi)
                     cr.fill()
                 elif self.dragged_object.points:
                     p0 = self.dragged_object.points[0]
@@ -1551,15 +1560,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             opacity = getattr(stroke, 'opacity', 1.0)
             cr.set_source_rgba(r, g, b, opacity)
             cr.set_line_width(stroke.stroke_width * self.zoom_level)
-            cr.set_line_cap(cairo.LINE_CAP_ROUND)
-            cr.set_line_join(cairo.LINE_JOIN_ROUND)
+            is_hl = getattr(stroke, 'tool_type', None) in ("highlighter", EditableStroke.TOOL_HIGHLIGHTER) or stroke.stroke_width >= 8.0
+            if is_hl:
+                cr.set_line_cap(cairo.LINE_CAP_SQUARE)
+                cr.set_line_join(cairo.LINE_JOIN_BEVEL)
+            else:
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                cr.set_line_join(cairo.LINE_JOIN_ROUND)
 
             if len(stroke.points) == 1:
                 px, py = stroke.points[0]
                 draw_x = page_offset_x + (px * self.zoom_level)
                 draw_y = page_offset_y + (py * self.zoom_level)
                 rad = max((stroke.stroke_width * self.zoom_level) / 2.0, 1.0)
-                cr.arc(draw_x, draw_y, rad, 0, 2 * math.pi)
+                if is_hl:
+                    cr.rectangle(draw_x - rad, draw_y - rad, rad * 2.0, rad * 2.0)
+                else:
+                    cr.arc(draw_x, draw_y, rad, 0, 2 * math.pi)
                 cr.fill()
             else:
                 p0 = stroke.points[0]
@@ -1576,15 +1593,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             opacity = getattr(self.temp_stroke, 'opacity', 1.0)
             cr.set_source_rgba(r, g, b, opacity)
             cr.set_line_width(self.temp_stroke.stroke_width * self.zoom_level)
-            cr.set_line_cap(cairo.LINE_CAP_ROUND)
-            cr.set_line_join(cairo.LINE_JOIN_ROUND)
+            is_hl = getattr(self.temp_stroke, 'tool_type', None) in ("highlighter", EditableStroke.TOOL_HIGHLIGHTER) or self.tool_mode == "highlighter" or self.temp_stroke.stroke_width >= 8.0
+            if is_hl:
+                cr.set_line_cap(cairo.LINE_CAP_SQUARE)
+                cr.set_line_join(cairo.LINE_JOIN_BEVEL)
+            else:
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                cr.set_line_join(cairo.LINE_JOIN_ROUND)
 
             if len(self.temp_stroke.points) == 1:
                 px, py = self.temp_stroke.points[0]
                 draw_x = page_offset_x + (px * self.zoom_level)
                 draw_y = page_offset_y + (py * self.zoom_level)
                 rad = max((self.temp_stroke.stroke_width * self.zoom_level) / 2.0, 1.0)
-                cr.arc(draw_x, draw_y, rad, 0, 2 * math.pi)
+                if is_hl:
+                    cr.rectangle(draw_x - rad, draw_y - rad, rad * 2.0, rad * 2.0)
+                else:
+                    cr.arc(draw_x, draw_y, rad, 0, 2 * math.pi)
                 cr.fill()
             else:
                 p0 = self.temp_stroke.points[0]
@@ -1750,7 +1775,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         rect_h = (y2 - y1) * self.zoom_level + (2 * padding)
         
         handle_size = 8.0
-        handle_tolerance = 12.0  
+        handle_tolerance = 4.0 if getattr(self, 'tool_mode', None) in ("pen", "highlighter") else 4.5  
         
         handles = [
             ("nw", rect_x, rect_y),
@@ -3253,7 +3278,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.tool_mode = tool_name
         print(_("dbg_tool_changed", self.tool_mode))
-        self._update_ui_state() 
+        self._update_ui_state()
+        if self.tool_mode in ("pen", "highlighter"):
+            self._update_stroke_format_controls(None)
 
     def on_drag_begin(self, gesture, start_x, start_y):
         """Handle the drag begin event."""
@@ -3290,6 +3317,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 return
 
         if self.tool_mode in ("pen", "highlighter"):
+            self.selected_stroke = None
+            self.selected_text = None
+            self.selected_image = None
+            self.selected_shape = None
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             self.dragging_to_create = True
             self.drag_start_page_pos = (page_x, page_y)
