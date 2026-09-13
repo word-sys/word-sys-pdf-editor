@@ -658,6 +658,68 @@ def export_pdf_as_text(doc, output_txt_path):
     except Exception as e:
         return False, f"Error exporting as text: {e}"
 
+def get_image_rgba_bytes(doc, xref):
+    """Extract image as RGBA PNG bytes, compositing alpha/smask if present."""
+    try:
+        image_data = doc.extract_image(xref)
+        if not image_data or 'image' not in image_data:
+            return None
+
+        smask_xref = image_data.get('smask', 0)
+        if not smask_xref:
+            try:
+                smask_val = doc.xref_get_key(xref, "SMask")
+                if smask_val and smask_val[0] == "xref":
+                    smask_xref = int(smask_val[1].split()[0])
+            except Exception:
+                pass
+
+        base_pix = fitz.Pixmap(doc, xref)
+
+        # If soft mask (alpha transparency) is present
+        if smask_xref and smask_xref > 0:
+            try:
+                mask_pix = fitz.Pixmap(doc, smask_xref)
+                if base_pix.n != 3:
+                    base_pix = fitz.Pixmap(fitz.csRGB, base_pix)
+                if mask_pix.n != 1:
+                    mask_pix = fitz.Pixmap(fitz.csGRAY, mask_pix)
+                if base_pix.width == mask_pix.width and base_pix.height == mask_pix.height:
+                    rgba_pix = fitz.Pixmap(base_pix, mask_pix)
+                    return rgba_pix.tobytes("png")
+                else:
+                    from PIL import Image
+                    import io
+                    base_img = Image.open(io.BytesIO(base_pix.tobytes("png"))).convert("RGB")
+                    mask_img = Image.open(io.BytesIO(mask_pix.tobytes("png"))).convert("L")
+                    mask_img = mask_img.resize(base_img.size, Image.Resampling.LANCZOS)
+                    base_img.putalpha(mask_img)
+                    out_buf = io.BytesIO()
+                    base_img.save(out_buf, format="PNG")
+                    return out_buf.getvalue()
+            except Exception as mask_err:
+                print(f"Warning: smask compositing failed for xref {xref}: {mask_err}")
+
+        # If base pixmap itself has alpha channel
+        if base_pix.alpha:
+            if base_pix.n != 4:
+                base_pix = fitz.Pixmap(fitz.csRGB, base_pix)
+            return base_pix.tobytes("png")
+
+        # If CMYK without alpha, convert to standard RGB PNG
+        if base_pix.n >= 4:
+            rgb_pix = fitz.Pixmap(fitz.csRGB, base_pix)
+            return rgb_pix.tobytes("png")
+
+        # Standard image (JPEG, non-transparent PNG, etc.)
+        return image_data["image"]
+    except Exception as e:
+        print(f"Warning: get_image_rgba_bytes failed for xref {xref}: {e}")
+        try:
+            return doc.extract_image(xref).get("image")
+        except Exception:
+            return None
+
 def extract_editable_images(doc, page_index):
     """Extract editable images."""
     editable_images = []
@@ -685,12 +747,10 @@ def extract_editable_images(doc, page_index):
                     continue
  
                 try:
-                    image_data = doc.extract_image(xref)
-                    if not image_data or 'image' not in image_data:
+                    image_bytes = get_image_rgba_bytes(doc, xref)
+                    if not image_bytes:
                         print(f"DEBUG: Could not extract image data for xref {xref}")
                         continue
-                    
-                    image_bytes = image_data["image"]
                     
                     image_obj = EditableImage(
                         bbox=bbox,
