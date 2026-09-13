@@ -43,6 +43,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.doc = None 
         self.current_page_index = 0
         self.zoom_level = 1.0
+        self._last_pointer_pos = None
         self.pages_model = Gio.ListStore(item_type=PdfPage)
         self.editable_texts = [] 
         self.editable_images = []
@@ -583,6 +584,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         scroll_controller = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
         scroll_controller.connect('scroll', self.on_scroll_zoom)
         self.pdf_view.add_controller(scroll_controller)
+
+        motion_controller = Gtk.EventControllerMotion.new()
+        motion_controller.connect('motion', self._on_pointer_motion)
+        self.pdf_view.add_controller(motion_controller)
 
         click_controller = Gtk.GestureClick.new()
         click_controller.connect('pressed', self.on_pdf_view_pressed)
@@ -2397,25 +2402,131 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             else:
                 self.status_label.set_text(_("print_cancelled"))
 
-    def on_zoom_in(self, button=None):
+    def _on_pointer_motion(self, controller, x, y):
+        """Track last pointer position on pdf_view for focal zoom."""
+        self._last_pointer_pos = (x, y)
+
+    def _update_inline_editor_position(self):
+        """Update inline editor position and size after zoom changes."""
+        if not getattr(self, 'inline_editor_widget', None) or not getattr(self, 'inline_editor_text_obj', None):
+            return
+        text_obj = self.inline_editor_text_obj
+        if not text_obj.bbox:
+            return
+        da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
+        da_h = max(self.pdf_view.get_allocated_height(), self.current_pdf_page_height)
+        page_offset_x = max(0, (da_w - self.current_pdf_page_width) / 2)
+        page_offset_y = max(0, (da_h - self.current_pdf_page_height) / 2)
+        x1, y1, x2, y2 = text_obj.bbox
+        ed_x = int(page_offset_x + x1 * self.zoom_level)
+        ed_y = int(page_offset_y + y1 * self.zoom_level)
+        ed_w = max(180, int((x2 - x1) * self.zoom_level) + 60)
+        ed_h = max(40, int((y2 - y1) * self.zoom_level) + 16)
+        self.inline_editor_widget.set_margin_start(ed_x)
+        self.inline_editor_widget.set_margin_top(ed_y)
+        self.inline_editor_widget.set_size_request(ed_w, ed_h)
+
+    def _set_zoom(self, new_zoom, focal_point=None):
+        """Set zoom level smoothly with focal point anchoring, without reloading page."""
+        if not self.doc or not (0 <= self.current_page_index < pdf_handler.get_page_count(self.doc)):
+            return
+
+        clamped_zoom = max(0.1, min(8.0, new_zoom))
+        if abs(clamped_zoom - self.zoom_level) < 0.001:
+            return
+
+        old_zoom = self.zoom_level
+        self.zoom_level = clamped_zoom
+        self.zoom_label.set_text(f"{int(self.zoom_level * 100)}%")
+
+        page = self.doc.load_page(self.current_page_index)
+        new_page_w = int(page.rect.width * self.zoom_level)
+        new_page_h = int(page.rect.height * self.zoom_level)
+
+        h_adj = self.pdf_scroll.get_hadjustment()
+        v_adj = self.pdf_scroll.get_vadjustment()
+
+        # Viewport dimensions
+        vp_w = h_adj.get_page_size() if h_adj and h_adj.get_page_size() > 0 else float(self.pdf_scroll.get_allocated_width())
+        vp_h = v_adj.get_page_size() if v_adj and v_adj.get_page_size() > 0 else float(self.pdf_scroll.get_allocated_height())
+
+        scroll_x = h_adj.get_value() if h_adj else 0.0
+        scroll_y = v_adj.get_value() if v_adj else 0.0
+
+        # Current allocated drawing area dimensions
+        da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
+        da_h = max(self.pdf_view.get_allocated_height(), self.current_pdf_page_height)
+        page_offset_x = max(0.0, (da_w - self.current_pdf_page_width) / 2.0)
+        page_offset_y = max(0.0, (da_h - self.current_pdf_page_height) / 2.0)
+
+        # Determine focal anchor on the PDF page and screen viewport
+        if focal_point is not None:
+            focus_x, focus_y = focal_point
+            doc_x = (focus_x - page_offset_x) / old_zoom
+            doc_y = (focus_y - page_offset_y) / old_zoom
+            vp_x = focus_x - scroll_x
+            vp_y = focus_y - scroll_y
+        else:
+            center_x = scroll_x + (vp_w / 2.0)
+            center_y = scroll_y + (vp_h / 2.0)
+            doc_x = (center_x - page_offset_x) / old_zoom
+            doc_y = (center_y - page_offset_y) / old_zoom
+            vp_x = vp_w / 2.0
+            vp_y = vp_h / 2.0
+
+        # Update content dimensions
+        self.current_pdf_page_width = new_page_w
+        self.current_pdf_page_height = new_page_h
+        self.pdf_view.set_content_width(new_page_w)
+        self.pdf_view.set_content_height(new_page_h)
+
+        # Reposition active inline editor if open
+        self._update_inline_editor_position()
+
+        # Calculate new offsets for new page size vs viewport
+        new_da_w = max(new_page_w, int(vp_w))
+        new_da_h = max(new_page_h, int(vp_h))
+        new_offset_x = max(0.0, (new_da_w - new_page_w) / 2.0)
+        new_offset_y = max(0.0, (new_da_h - new_page_h) / 2.0)
+
+        new_focus_x = new_offset_x + (doc_x * self.zoom_level)
+        new_focus_y = new_offset_y + (doc_y * self.zoom_level)
+
+        new_scroll_x = new_focus_x - vp_x
+        new_scroll_y = new_focus_y - vp_y
+
+        def _apply_scroll():
+            if h_adj:
+                max_x = max(0.0, h_adj.get_upper() - h_adj.get_page_size())
+                h_adj.set_value(max(0.0, min(new_scroll_x, max_x)))
+            if v_adj:
+                max_y = max(0.0, v_adj.get_upper() - v_adj.get_page_size())
+                v_adj.set_value(max(0.0, min(new_scroll_y, max_y)))
+            return False
+
+        _apply_scroll()
+        GLib.idle_add(_apply_scroll)
+
+        self.pdf_view.queue_draw()
+
+    def on_zoom_in(self, button=None, focal_point=None):
         """Handle the zoom in event."""
         if not self.doc: return
-        self.zoom_level = min(8.0, self.zoom_level * 1.2)
-        self.zoom_label.set_text(f"{int(self.zoom_level * 100)}%")
-        self._load_page(self.current_page_index)
+        self._set_zoom(self.zoom_level * 1.2, focal_point=focal_point)
 
-    def on_zoom_out(self, button=None):
+    def on_zoom_out(self, button=None, focal_point=None):
         """Handle the zoom out event."""
         if not self.doc: return
-        self.zoom_level = max(0.1, self.zoom_level / 1.2)
-        self.zoom_label.set_text(f"{int(self.zoom_level * 100)}%")
-        self._load_page(self.current_page_index)
+        self._set_zoom(self.zoom_level / 1.2, focal_point=focal_point)
 
     def on_scroll_zoom(self, controller, dx, dy):
         """Handle the scroll zoom event."""
         if controller.get_current_event_state() & Gdk.ModifierType.CONTROL_MASK:
-            if dy < 0: self.on_zoom_in()
-            elif dy > 0: self.on_zoom_out()
+            focal_point = getattr(self, '_last_pointer_pos', None)
+            if dy < 0:
+                self.on_zoom_in(focal_point=focal_point)
+            elif dy > 0:
+                self.on_zoom_out(focal_point=focal_point)
             return True
         return False
 
@@ -3010,6 +3121,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if ctrl and keyval in (Gdk.KEY_s, Gdk.KEY_S):
             self.on_save_clicked(None)
+            return True
+        elif ctrl and keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
+            self.on_zoom_in(focal_point=getattr(self, '_last_pointer_pos', None))
+            return True
+        elif ctrl and keyval in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract):
+            self.on_zoom_out(focal_point=getattr(self, '_last_pointer_pos', None))
+            return True
+        elif ctrl and keyval in (Gdk.KEY_0, Gdk.KEY_KP_0):
+            self._set_zoom(1.0, focal_point=getattr(self, '_last_pointer_pos', None))
             return True
 
         elif keyval == Gdk.KEY_Delete:
