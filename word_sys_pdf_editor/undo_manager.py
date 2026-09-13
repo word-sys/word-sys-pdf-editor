@@ -31,7 +31,8 @@ class Command:
         orig_bbox = getattr(target_object, 'original_bbox', target_object.bbox)
         if isinstance(target_object, (EditableShape, EditableStroke)):
             x0, y0, x1, y1 = orig_bbox
-            redact_rect = fitz.Rect(x0 - 20, y0 - 20, x1 + 20, y1 + 20)
+            pad = max(getattr(target_object, 'stroke_width', 2.0) / 2.0 + 1.0, 1.5)
+            redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
         else:
             redact_rect = fitz.Rect(orig_bbox)
         try:
@@ -39,17 +40,21 @@ class Command:
             page.add_redact_annot(redact_rect)
             
             if isinstance(target_object, EditableText):
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=False)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
             elif isinstance(target_object, EditableImage):
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=False)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
             else:
                 try:
-                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
-                except Exception:
-                    page.apply_redactions()
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=1, text=1)
+                except TypeError:
+                    try:
+                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
+                    except Exception:
+                        page.apply_redactions()
                     
             self.window.doc.load_page(page_num)
             pdf_handler.save_page_snapshot(self.window.doc, page_num, force=True)
+            pdf_handler.invalidate_page_cache(self.window.doc, page_num)
             target_object._ghost_redacted = True
         except Exception as e:
             print(f"Warning: could not erase ghost from snapshot for page {page_num}: {e}")
@@ -111,14 +116,15 @@ class EditObjectCommand(Command):
             
         import fitz
         from . import pdf_handler
-        from .models import EditableText, EditableImage, EditableShape
+        from .models import EditableText, EditableImage, EditableShape, EditableStroke
         
         pdf_handler.restore_page_from_snapshot(self.window.doc, page_num)
         
         orig_bbox = getattr(self.target_object, 'original_bbox', self.target_object.bbox)
-        if isinstance(self.target_object, EditableShape):
+        if isinstance(self.target_object, (EditableShape, EditableStroke)):
             x0, y0, x1, y1 = orig_bbox
-            redact_rect = fitz.Rect(x0 - 20, y0 - 20, x1 + 20, y1 + 20)
+            pad = max(getattr(self.target_object, 'stroke_width', 2.0) / 2.0 + 1.0, 1.5)
+            redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
         else:
             redact_rect = fitz.Rect(orig_bbox)
         try:
@@ -126,17 +132,21 @@ class EditObjectCommand(Command):
             page.add_redact_annot(redact_rect)
             
             if isinstance(self.target_object, EditableText):
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=False)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
             elif isinstance(self.target_object, EditableImage):
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=False)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
             else:
                 try:
-                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
-                except Exception:
-                    page.apply_redactions()
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=1, text=1)
+                except TypeError:
+                    try:
+                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
+                    except Exception:
+                        page.apply_redactions()
                     
             self.window.doc.load_page(page_num)
             pdf_handler.save_page_snapshot(self.window.doc, page_num, force=True)
+            pdf_handler.invalidate_page_cache(self.window.doc, page_num)
             self.target_object._ghost_redacted = True
         except Exception as e:
             print(f"Warning: could not erase ghost from snapshot for page {page_num}: {e}")

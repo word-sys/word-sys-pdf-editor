@@ -740,7 +740,10 @@ def delete_image_from_page(doc, image_obj: EditableImage):
         redact_rect = fitz.Rect(image_obj.bbox)
         if not redact_rect.is_empty and redact_rect.is_valid:
             page.add_redact_annot(redact_rect)
-            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
+            try:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
+            except TypeError:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
             doc.load_page(image_obj.page_number)
             invalidate_page_cache(doc, image_obj.page_number)
             return True, None
@@ -759,13 +762,17 @@ def delete_shape_from_page(doc, shape_obj: EditableShape):
         page = doc.load_page(shape_obj.page_number)
 
         x0, y0, x1, y1 = shape_obj.bbox
-        redact_rect = fitz.Rect(x0 - 20, y0 - 20, x1 + 20, y1 + 20)
+        pad = max(getattr(shape_obj, 'stroke_width', 2.0) / 2.0 + 1.0, 1.5)
+        redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
         if not redact_rect.is_empty and redact_rect.is_valid:
             page.add_redact_annot(redact_rect)
             try:
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=1, text=1)
             except TypeError:
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+                try:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
+                except Exception:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
             doc.load_page(shape_obj.page_number)
             invalidate_page_cache(doc, shape_obj.page_number)
             return True, None
@@ -783,13 +790,17 @@ def delete_stroke_from_page(doc, stroke_obj: EditableStroke):
     try:
         page = doc.load_page(stroke_obj.page_number)
         x0, y0, x1, y1 = stroke_obj.bbox
-        redact_rect = fitz.Rect(x0 - 10, y0 - 10, x1 + 10, y1 + 10)
+        pad = max(getattr(stroke_obj, 'stroke_width', 2.0) / 2.0 + 1.0, 1.5)
+        redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
         if not redact_rect.is_empty and redact_rect.is_valid:
             page.add_redact_annot(redact_rect)
             try:
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=1, text=1)
             except TypeError:
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+                try:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
+                except Exception:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
             doc.load_page(stroke_obj.page_number)
             invalidate_page_cache(doc, stroke_obj.page_number)
             return True, None
