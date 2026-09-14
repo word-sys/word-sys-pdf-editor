@@ -312,15 +312,13 @@ def normalize_color(color_val):
     if color_val is None:
         return (0.0, 0.0, 0.0)
 
-    if isinstance(color_val, (int, float)):
-        if isinstance(color_val, int) and color_val > 255:
-             blue = (color_val & 255) / 255.0
-             green = ((color_val >> 8) & 255) / 255.0
-             red = ((color_val >> 16) & 255) / 255.0
-             return (red, green, blue)
-        val = float(color_val)
-        if val > 1.0:
-             val = val / 255.0
+    if isinstance(color_val, int):
+        blue = (color_val & 255) / 255.0
+        green = ((color_val >> 8) & 255) / 255.0
+        red = ((color_val >> 16) & 255) / 255.0
+        return (red, green, blue)
+    elif isinstance(color_val, float):
+        val = color_val / 255.0 if color_val > 1.0 else color_val
         val = max(0.0, min(1.0, val))
         return (val, val, val)
 

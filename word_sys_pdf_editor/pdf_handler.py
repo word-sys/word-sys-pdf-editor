@@ -290,6 +290,19 @@ def _is_underline_drawing(drawing, baselines):
     return False
 
 
+def _get_span_style_signature(span):
+    """Compute a normalized tuple signature for style comparison."""
+    color = span.get("color", 0)
+    if isinstance(color, (list, tuple)):
+        norm_color = tuple(round(float(c), 3) for c in color[:3])
+    else:
+        norm_color = int(color)
+    font = span.get("font", "")
+    flags = span.get("flags", 0)
+    size = round(float(span.get("size", 11.0)), 1)
+    return (norm_color, font, flags, size)
+
+
 def extract_editable_text(doc, page_index):
     """Extract editable text."""
     editable_texts = []
@@ -299,6 +312,12 @@ def extract_editable_text(doc, page_index):
         page = doc.load_page(page_index)
         text_dict = page.get_text("dict", flags=0)
 
+        page_drawings = None
+        try:
+            page_drawings = page.get_drawings()
+        except Exception:
+            page_drawings = []
+
         for block in text_dict.get("blocks", []):
             if block.get("type") == 0:
                 for line in block.get("lines", []):
@@ -306,59 +325,69 @@ def extract_editable_text(doc, page_index):
                     if not spans:
                         continue
                     
-                    combined_text = ""
-                    min_x = float('inf')
-                    max_x = float('-inf')
-                    min_y = float('inf')
-                    max_y = float('-inf')
-                    first_span = None
+                    # Group adjacent spans in line sharing identical style signature
+                    runs = []
+                    current_run = []
+                    current_sig = None
                     
                     for span in spans:
                         text = span.get("text", "")
-                        bbox = span.get("bbox")
-                        
                         if not text:
                             continue
                         
-                        if first_span is None:
-                            first_span = span
+                        sig = _get_span_style_signature(span)
                         
-                        combined_text += text
+                        # If span is purely whitespace, attach to current active run
+                        if not text.strip() and current_run:
+                            current_run.append(span)
+                            continue
+                            
+                        if current_sig is None:
+                            current_sig = sig
+                            current_run = [span]
+                        elif sig == current_sig:
+                            current_run.append(span)
+                        else:
+                            if current_run:
+                                runs.append(current_run)
+                            current_sig = sig
+                            current_run = [span]
+                            
+                    if current_run:
+                        runs.append(current_run)
                         
-                        if bbox:
-                            min_x = min(min_x, bbox[0])
-                            min_y = min(min_y, bbox[1])
-                            max_x = max(max_x, bbox[2])
-                            max_y = max(max_y, bbox[3])
-                    
-                    if not combined_text or first_span is None:
-                        continue
-                    
-                    combined_text = combined_text.strip()
-                    if not combined_text:
-                        continue
-                    
-                    bbox = [min_x, min_y, max_x, max_y] if min_x != float('inf') else first_span.get("bbox", [0, 0, 100, 100])
-                    
-                    span_data = first_span.copy() if first_span else {}
-                    span_data["bbox"] = tuple(bbox)
-                    span_data["text"] = combined_text
-                    
-                    editable = EditableText(
-                        x=bbox[0], y=bbox[1], text=combined_text,
-                        font_size=first_span.get("size", 11) if first_span else 11,
-                        font_family=first_span.get("font", "Liberation Sans") if first_span else "Liberation Sans",
-                        color=first_span.get("color", 0) if first_span else 0,
-                        span_data=span_data,
-                        baseline=first_span.get("origin", (0, bbox[3]))[1] if first_span else bbox[3]
-                    )
-                    editable.page_number = page_index
-                    for d in page.get_drawings():
-                        if _is_underline_drawing(d, [(bbox[0], bbox[2], editable.baseline)]):
-                            editable.is_underline = True
-                            break
-                    editable_texts.append(editable)
-                    print(f"DEBUG: Extracted text: '{combined_text}' bbox={bbox}")
+                    for run in runs:
+                        combined_text = "".join(s.get("text", "") for s in run)
+                        if not combined_text.strip():
+                            continue
+                            
+                        first_span = run[0]
+                        min_x = min(s.get("bbox", (0, 0, 0, 0))[0] for s in run)
+                        min_y = min(s.get("bbox", (0, 0, 0, 0))[1] for s in run)
+                        max_x = max(s.get("bbox", (0, 0, 0, 0))[2] for s in run)
+                        max_y = max(s.get("bbox", (0, 0, 0, 0))[3] for s in run)
+                        bbox = [min_x, min_y, max_x, max_y]
+                        
+                        span_data = first_span.copy()
+                        span_data["bbox"] = tuple(bbox)
+                        span_data["text"] = combined_text
+                        
+                        editable = EditableText(
+                            x=bbox[0], y=bbox[1], text=combined_text,
+                            font_size=first_span.get("size", 11) if first_span else 11,
+                            font_family=first_span.get("font", "Liberation Sans") if first_span else "Liberation Sans",
+                            color=first_span.get("color", 0) if first_span else 0,
+                            span_data=span_data,
+                            baseline=first_span.get("origin", (0, bbox[3]))[1] if first_span else bbox[3]
+                        )
+                        editable.page_number = page_index
+                        if page_drawings:
+                            for d in page_drawings:
+                                if _is_underline_drawing(d, [(bbox[0], bbox[2], editable.baseline)]):
+                                    editable.is_underline = True
+                                    break
+                        editable_texts.append(editable)
+                        print(f"DEBUG: Extracted text segment: '{combined_text}' font='{editable.font_family_base}' color={editable.color} bbox={bbox}")
         
         print(f"DEBUG: Total text objects extracted from page {page_index}: {len(editable_texts)}")
         return editable_texts, None
