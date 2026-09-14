@@ -2,6 +2,7 @@ import os
 import platform
 from pathlib import Path
 import re
+import subprocess
 import threading
 from gi.repository import GLib
 from .i18n import _
@@ -9,6 +10,7 @@ from .i18n import _
 FONT_SCAN_COMPLETED = threading.Event()
 SYSTEM_FONTS = {}
 FONT_FAMILY_LIST_SORTED = []
+FONT_MATCH_CACHE = {}
 
 def _get_embedded_font_dir():
     """Retrieve the embedded fonts directory within the package."""
@@ -127,19 +129,62 @@ def scan_system_fonts_async(callback_on_done=None):
     thread = threading.Thread(target=_scan, daemon=True)
     thread.start()
 
-def find_specific_font_variant(family_name, is_bold=False, is_italic=False):
-    """Find specific font variant."""
-    if not FONT_SCAN_COMPLETED.is_set():
-        print(_("wait_font_scan"))
-        FONT_SCAN_COMPLETED.wait(timeout=5)
-        if not FONT_SCAN_COMPLETED.is_set():
-            print(_("err_font_scan_timeout"))
-            return None
+def _match_fontconfig(family_name, is_bold=False, is_italic=False):
+    """Resolve a font family and style using Linux fontconfig (fc-match) directly."""
+    if not family_name:
+        return None
 
-    normalized_family_name = family_name.replace(" ", "").lower() if family_name else ""
+    clean_family = str(family_name).strip()
+    cache_key = (clean_family, bool(is_bold), bool(is_italic))
+    if cache_key in FONT_MATCH_CACHE:
+        return FONT_MATCH_CACHE[cache_key]
+
+    if platform.system() != "Linux":
+        return None
+
+    style_parts = []
+    if is_bold:
+        style_parts.append("bold")
+    if is_italic:
+        style_parts.append("italic")
+    if not style_parts:
+        style_parts.append("regular")
+
+    pattern = f"{clean_family}:{':'.join(style_parts)}"
+    try:
+        res = subprocess.run(
+            ["fc-match", "-f", "%{file}\n", pattern],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=1.0,
+            check=False
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            font_path = res.stdout.strip().split("\n")[0].strip()
+            if font_path and os.path.isfile(font_path):
+                FONT_MATCH_CACHE[cache_key] = font_path
+                return font_path
+    except Exception as e:
+        print(f"DEBUG: fc-match failed for '{pattern}': {e}")
+
+    FONT_MATCH_CACHE[cache_key] = None
+    return None
+
+def find_specific_font_variant(family_name, is_bold=False, is_italic=False):
+    """Find specific font variant using cache, SYSTEM_FONTS, and fontconfig."""
+    if not family_name:
+        return None
+
+    cache_key = (str(family_name).strip(), bool(is_bold), bool(is_italic))
+    if cache_key in FONT_MATCH_CACHE and FONT_MATCH_CACHE[cache_key]:
+        return FONT_MATCH_CACHE[cache_key]
+
+    normalized_family_name = family_name.replace(" ", "").lower()
     
     sans_prefixes = ("arial", "helvetica", "calibri")
     serif_prefixes = ("times", "timesnewroman")
+    mono_prefixes = ("courier", "couriernew")
     matched_alias = None
     for prefix in sans_prefixes:
         if normalized_family_name.startswith(prefix):
@@ -150,36 +195,73 @@ def find_specific_font_variant(family_name, is_bold=False, is_italic=False):
             if normalized_family_name.startswith(prefix):
                 matched_alias = "liberationserif"
                 break
+    if not matched_alias:
+        for prefix in mono_prefixes:
+            if normalized_family_name.startswith(prefix):
+                matched_alias = "liberationmono"
+                break
     if matched_alias:
         print(f"DEBUG: Mapping proprietary font '{family_name}' to '{matched_alias}'")
         normalized_family_name = matched_alias
 
-    found_family_key = None
-    if family_name in SYSTEM_FONTS:
-        found_family_key = family_name
-    else:
-        for key in SYSTEM_FONTS:
-            normalized_key = key.replace(" ", "").lower()
-            if normalized_key == normalized_family_name:
-                found_family_key = key
-                print(f"DEBUG: Found normalized font match: '{family_name}' -> '{key}'")
-                break
+    # 1. Try SYSTEM_FONTS if font scan has already completed
+    if FONT_SCAN_COMPLETED.is_set():
+        found_family_key = None
+        if family_name in SYSTEM_FONTS:
+            found_family_key = family_name
+        else:
+            for key in SYSTEM_FONTS:
+                if key.replace(" ", "").lower() == normalized_family_name:
+                    found_family_key = key
+                    break
 
-    if found_family_key:
-        family_variants = SYSTEM_FONTS[found_family_key]
-        if is_bold and is_italic and "BoldItalic" in family_variants:
-            return family_variants["BoldItalic"]
-        if is_bold and "Bold" in family_variants:
-            return family_variants["Bold"]
-        if is_italic and "Italic" in family_variants:
-            return family_variants["Italic"]
-        if "Regular" in family_variants:
-            return family_variants["Regular"]
-        if family_variants:
-            return next(iter(family_variants.values()))
-    
+        if found_family_key:
+            family_variants = SYSTEM_FONTS[found_family_key]
+            if is_bold and is_italic and "BoldItalic" in family_variants:
+                path = family_variants["BoldItalic"]
+            elif is_bold and "Bold" in family_variants:
+                path = family_variants["Bold"]
+            elif is_italic and "Italic" in family_variants:
+                path = family_variants["Italic"]
+            elif "Regular" in family_variants:
+                path = family_variants["Regular"]
+            elif family_variants:
+                path = next(iter(family_variants.values()))
+            else:
+                path = None
+
+            if path and os.path.isfile(path):
+                FONT_MATCH_CACHE[cache_key] = path
+                return path
+
+    # 2. Try fast Linux fontconfig match
+    fc_path = _match_fontconfig(family_name, is_bold, is_italic)
+    if fc_path and os.path.isfile(fc_path):
+        FONT_MATCH_CACHE[cache_key] = fc_path
+        return fc_path
+
+    # 3. If font scan hasn't completed and fc-match didn't succeed, wait up to 2 seconds
+    if not FONT_SCAN_COMPLETED.is_set():
+        FONT_SCAN_COMPLETED.wait(timeout=2.0)
+        if FONT_SCAN_COMPLETED.is_set():
+            for key in SYSTEM_FONTS:
+                if key.replace(" ", "").lower() == normalized_family_name:
+                    family_variants = SYSTEM_FONTS[key]
+                    if is_bold and is_italic and "BoldItalic" in family_variants:
+                        path = family_variants["BoldItalic"]
+                    elif is_bold and "Bold" in family_variants:
+                        path = family_variants["Bold"]
+                    elif is_italic and "Italic" in family_variants:
+                        path = family_variants["Italic"]
+                    elif "Regular" in family_variants:
+                        path = family_variants["Regular"]
+                    else:
+                        path = next(iter(family_variants.values())) if family_variants else None
+                    if path and os.path.isfile(path):
+                        FONT_MATCH_CACHE[cache_key] = path
+                        return path
+
     print(f"WARNING: Could not find any font file for family '{family_name}' (normalized: '{normalized_family_name}')")
-    
     return None
 
 UNICODE_FONT_PATH = None
@@ -187,35 +269,41 @@ UNICODE_FONT_PATH = None
 def get_default_unicode_font_path():
     """Get the default unicode font path."""
     global UNICODE_FONT_PATH
-    if UNICODE_FONT_PATH:
+    if UNICODE_FONT_PATH and os.path.isfile(UNICODE_FONT_PATH):
         return UNICODE_FONT_PATH
 
-    if not FONT_SCAN_COMPLETED.is_set():
-        print("Varsayılan unicode font için taramanın bitmesi bekleniyor...")
-        FONT_SCAN_COMPLETED.wait(timeout=10)
+    preferred_defaults = ["Liberation Sans", "DejaVu Sans", "Noto Sans", "sans-serif"]
+    for family in preferred_defaults:
+        fc_path = _match_fontconfig(family, False, False)
+        if fc_path and os.path.isfile(fc_path):
+            UNICODE_FONT_PATH = fc_path
+            print(f"Default Unicode font set to: {UNICODE_FONT_PATH}")
+            return UNICODE_FONT_PATH
 
-    preferred_defaults = ["Liberation Sans", "DejaVu Sans", "Noto Sans"]
+    if not FONT_SCAN_COMPLETED.is_set():
+        FONT_SCAN_COMPLETED.wait(timeout=2.0)
+
     for family in preferred_defaults:
         path = find_specific_font_variant(family, False, False)
-        if path:
+        if path and os.path.isfile(path):
             UNICODE_FONT_PATH = path
-            print(f"Varsayılan Unicode fontu şuna ayarlandı: {UNICODE_FONT_PATH}")
+            print(f"Default Unicode font set to: {UNICODE_FONT_PATH}")
             return UNICODE_FONT_PATH
 
     if FONT_FAMILY_LIST_SORTED and SYSTEM_FONTS:
         for family_name in FONT_FAMILY_LIST_SORTED:
             if "Regular" in SYSTEM_FONTS[family_name]:
                 UNICODE_FONT_PATH = SYSTEM_FONTS[family_name]["Regular"]
-                print(f"Varsayılan Unicode fontu (yedek) şuna ayarlandı: {UNICODE_FONT_PATH}")
+                print(f"Default Unicode font (fallback) set to: {UNICODE_FONT_PATH}")
                 return UNICODE_FONT_PATH
         if FONT_FAMILY_LIST_SORTED:
             first_family = FONT_FAMILY_LIST_SORTED[0]
             if SYSTEM_FONTS[first_family]:
-                 UNICODE_FONT_PATH = next(iter(SYSTEM_FONTS[first_family].values()))
-                 print(f"Varsayılan Unicode fontu (mutlak yedek) şuna ayarlandı: {UNICODE_FONT_PATH}")
-                 return UNICODE_FONT_PATH
+                UNICODE_FONT_PATH = next(iter(SYSTEM_FONTS[first_family].values()))
+                print(f"Default Unicode font (absolute fallback) set to: {UNICODE_FONT_PATH}")
+                return UNICODE_FONT_PATH
 
-    print("KRİTİK: Taramadan sonra hiçbir yedek Unicode fontu belirlenemedi.")
+    print("CRITICAL: No fallback Unicode font could be determined after scan.")
     return None
 
 

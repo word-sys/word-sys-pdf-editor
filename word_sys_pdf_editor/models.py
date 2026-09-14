@@ -12,9 +12,15 @@ FLAG_MONOSPACED = 1 << 3   # bit 3
 FLAG_BOLD = 1 << 4         # bit 4
 
 BASE14_FALLBACK_MAP = {
-    'helvetica': 'helv', 'arial': 'helv', 'sans': 'helv', 'verdana': 'helv', 'tahoma': 'helv', 'liberation sans': 'helv',
-    'times': 'timr', 'timesnewroman': 'timr', 'serif': 'timr', 'georgia': 'timr', 'liberation serif': 'timr',
-    'courier': 'cour', 'couriernew': 'cour', 'mono': 'cour', 'monospace': 'cour', 'consolas': 'cour'
+    'helvetica': 'helv', 'arial': 'helv', 'sans': 'helv', 'verdana': 'helv', 'tahoma': 'helv',
+    'liberation sans': 'helv', 'liberationsans': 'helv', 'dejavusans': 'helv', 'notosans': 'helv',
+    'carlito': 'helv', 'cantarell': 'helv', 'ubuntu': 'helv',
+    'times': 'timr', 'timesnewroman': 'timr', 'serif': 'timr', 'georgia': 'timr',
+    'liberation serif': 'timr', 'liberationserif': 'timr', 'dejavuserif': 'timr', 'notoserif': 'timr',
+    'caladea': 'timr', 'roman': 'timr',
+    'courier': 'cour', 'couriernew': 'cour', 'mono': 'cour', 'monospace': 'cour',
+    'consolas': 'cour', 'liberation mono': 'cour', 'liberationmono': 'cour',
+    'dejavusansmono': 'cour', 'notosansmono': 'cour', 'fixed': 'cour'
 }
 
 class EditableText:
@@ -32,22 +38,28 @@ class EditableText:
 
         self.original_bbox = span_data.get("bbox") if span_data else None
 
-        pdf_font_name_original = "Liberation Sans"
+        pdf_font_name_original = font_family or "Liberation Sans"
         flags = 0
         
         if span_data:
-            pdf_font_name_original = span_data.get('font', "Liberation Sans")
+            pdf_font_name_original = span_data.get('font', pdf_font_name_original)
             flags = span_data.get('flags', 0)
 
         self.font_family_original = pdf_font_name_original 
 
         self.is_bold = bool(flags & FLAG_BOLD) 
         self.is_italic = bool(flags & FLAG_ITALIC)
+        self.is_serif = bool(flags & FLAG_SERIF)
+        self.is_monospace = bool(flags & FLAG_MONOSPACED)
         self.is_underline = False
 
         name_after_prefix_removal = re.sub(r'^[A-Z]{6}\+', '', pdf_font_name_original)
+        if ',' in name_after_prefix_removal:
+            name_after_prefix_removal = name_after_prefix_removal.split(',')[0]
         
-        potential_family_name = name_after_prefix_removal
+        potential_family_name = re.sub(r'[-_ ]?(PSMT|PS|MT)$', '', name_after_prefix_removal, flags=re.IGNORECASE).strip('-_ ')
+        if not potential_family_name:
+            potential_family_name = name_after_prefix_removal
         
         style_patterns = [
             (r"(BoldItalic|BoldOblique|BdI|Z|BI)$", "BoldItalic"),
@@ -62,40 +74,51 @@ class EditableText:
         for pattern, style_tag in style_patterns:
             m = re.search(r"([-_ ]?" + pattern + r")$", temp_name, re.IGNORECASE)
             if m:
-                if style_tag == "BoldItalic":
-                    if not self.is_bold: self.is_bold = True
-                    if not self.is_italic: self.is_italic = True
-                    detected_style_parts.extend(["Bold", "Italic"])
-                elif style_tag == "Bold":
-                    if not self.is_bold: self.is_bold = True
-                    detected_style_parts.append("Bold")
-                elif style_tag == "Italic":
-                    if not self.is_italic: self.is_italic = True
-                    detected_style_parts.append("Italic")
-                temp_name = temp_name[:m.start()].strip("-_ ")
+                matched_str = m.group(0).lower()
+                if "roman" in matched_str and ("times" in temp_name.lower()):
+                    pass
+                else:
+                    if style_tag == "BoldItalic":
+                        if not self.is_bold: self.is_bold = True
+                        if not self.is_italic: self.is_italic = True
+                        detected_style_parts.extend(["Bold", "Italic"])
+                    elif style_tag == "Bold":
+                        if not self.is_bold: self.is_bold = True
+                        detected_style_parts.append("Bold")
+                    elif style_tag == "Italic":
+                        if not self.is_italic: self.is_italic = True
+                        detected_style_parts.append("Italic")
+                    temp_name = temp_name[:m.start()].strip("-_ ")
         
         cleaned_family_name = temp_name if temp_name else name_after_prefix_removal
 
-        cleaned_family_name = re.sub(r'(PSMT|PS|MT)$', '', cleaned_family_name, flags=re.IGNORECASE).strip()
+        cleaned_family_name = re.sub(r'[-_ ]?(PSMT|PS|MT)$', '', cleaned_family_name, flags=re.IGNORECASE).strip('-_ ')
 
         cleaned_family_name_spaced = re.sub(r"(\w)([A-Z])", r"\1 \2", cleaned_family_name)
         base_name = ' '.join(word.capitalize() for word in cleaned_family_name_spaced.replace('-', ' ').replace('_', ' ').split())
+        base_name = base_name.replace("Deja Vu", "DejaVu")
         
+        if base_name in ("Times New", "Times"):
+            base_name = "Times New Roman"
+
+        lower_orig = pdf_font_name_original.lower()
+        if any(kw in lower_orig for kw in ('mono', 'typewriter', 'courier', 'console', 'consolas', 'fixed')):
+            self.is_monospace = True
+        if any(kw in lower_orig for kw in ('serif', 'times', 'roman', 'georgia', 'cambria', 'garamond', 'minion')):
+            self.is_serif = True
+
         self.font_fallback_used = False
         lower_base = base_name.lower().replace(" ", "")
         sans_aliases = ("arial", "helvetica", "calibri")
-        serif_aliases = ("times", "timesnewroman")
+        serif_aliases = ("times", "timesnew", "timesnewroman")
+        mono_aliases = ("courier", "couriernew")
         
-        if lower_base in sans_aliases or any(lower_base.startswith(a) for a in sans_aliases):
+        if lower_base in sans_aliases:
             base_name = "Liberation Sans"
-        elif lower_base in serif_aliases or any(lower_base.startswith(a) for a in serif_aliases):
+        elif lower_base in serif_aliases:
             base_name = "Liberation Serif"
-        elif lower_base not in ["liberationsans", "liberationserif", "dejavusans", "notosans", "courier", "ubuntu", "comic"]:
-            if "serif" in lower_base:
-                base_name = "Liberation Serif"
-            else:
-                base_name = "Liberation Sans"
-            self.font_fallback_used = base_name
+        elif lower_base in mono_aliases:
+            base_name = "Liberation Mono"
             
         self.font_family_base = base_name
         
@@ -112,11 +135,19 @@ class EditableText:
         self.original_is_bold = self.is_bold
         self.original_is_italic = self.is_italic
         normalized_for_base14 = re.sub(r'[^a-zA-Z0-9]', '', self.font_family_base).lower()
-        self.pdf_fontname_base14 = 'helv'
-        for name_key, base14_val in BASE14_FALLBACK_MAP.items():
-            if name_key in normalized_for_base14:
-                self.pdf_fontname_base14 = base14_val
+        matched_base14 = None
+        for name_key in sorted(BASE14_FALLBACK_MAP.keys(), key=len, reverse=True):
+            if name_key.replace(" ", "") in normalized_for_base14:
+                matched_base14 = BASE14_FALLBACK_MAP[name_key]
                 break
+        if matched_base14:
+            self.pdf_fontname_base14 = matched_base14
+        elif self.is_monospace:
+            self.pdf_fontname_base14 = 'cour'
+        elif self.is_serif:
+            self.pdf_fontname_base14 = 'timr'
+        else:
+            self.pdf_fontname_base14 = 'helv'
         
         pdf_color = color
         if span_data and 'color' in span_data:

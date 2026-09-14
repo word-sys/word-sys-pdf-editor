@@ -347,7 +347,7 @@ def extract_editable_text(doc, page_index):
                     editable = EditableText(
                         x=bbox[0], y=bbox[1], text=combined_text,
                         font_size=first_span.get("size", 11) if first_span else 11,
-                        font_family="Liberation Sans",
+                        font_family=first_span.get("font", "Liberation Sans") if first_span else "Liberation Sans",
                         color=first_span.get("color", 0) if first_span else 0,
                         span_data=span_data,
                         baseline=first_span.get("origin", (0, bbox[3]))[1] if first_span else bbox[3]
