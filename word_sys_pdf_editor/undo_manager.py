@@ -52,13 +52,15 @@ class Command:
                 baseline = getattr(target_object, 'baseline', y1)
                 
                 if not is_underlined:
-                    strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.5)
+                    strip_test = fitz.Rect(x0, baseline - 1.0, x1, baseline + 3.0)
                     try:
                         for d in page.get_drawings():
                             d_rect = d.get('rect')
                             if d_rect and d_rect.intersects(strip_test) and d_rect.height <= 3.5:
-                                is_underlined = True
-                                break
+                                overlap = min(d_rect.x1, x1) - max(d_rect.x0, x0)
+                                if overlap >= min(4.0, (x1 - x0) * 0.4):
+                                    is_underlined = True
+                                    break
                     except Exception:
                         pass
                         
@@ -66,14 +68,7 @@ class Command:
                     lines = getattr(target_object, 'text', '').split('\n')
                     line_height = getattr(target_object, 'font_size', 12.0) * 1.2
                     for i in range(len(lines)):
-                        strip_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 3.5)
-                        try:
-                            for d in page.get_drawings():
-                                d_rect = d.get('rect')
-                                if d_rect and d_rect.intersects(strip_rect) and d_rect.height <= 3.5:
-                                    strip_rect = strip_rect | fitz.Rect(d_rect)
-                        except Exception:
-                            pass
+                        strip_rect = fitz.Rect(x0, baseline + (i * line_height) - 0.5, x1, baseline + (i * line_height) + 3.0)
                         page.add_redact_annot(strip_rect)
                     try:
                         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
@@ -202,13 +197,15 @@ class EditObjectCommand(Command):
                 baseline = getattr(self.target_object, 'baseline', y1)
                 
                 if not is_underlined:
-                    strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.5)
+                    strip_test = fitz.Rect(x0, baseline - 1.0, x1, baseline + 3.0)
                     try:
                         for d in page.get_drawings():
                             d_rect = d.get('rect')
                             if d_rect and d_rect.intersects(strip_test) and d_rect.height <= 3.5:
-                                is_underlined = True
-                                break
+                                overlap = min(d_rect.x1, x1) - max(d_rect.x0, x0)
+                                if overlap >= min(4.0, (x1 - x0) * 0.4):
+                                    is_underlined = True
+                                    break
                     except Exception:
                         pass
                         
@@ -217,14 +214,7 @@ class EditObjectCommand(Command):
                     lines = text_val.split('\n')
                     line_height = getattr(self.target_object, 'font_size', 12.0) * 1.2
                     for i in range(len(lines)):
-                        strip_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 3.5)
-                        try:
-                            for d in page.get_drawings():
-                                d_rect = d.get('rect')
-                                if d_rect and d_rect.intersects(strip_rect) and d_rect.height <= 3.5:
-                                    strip_rect = strip_rect | fitz.Rect(d_rect)
-                        except Exception:
-                            pass
+                        strip_rect = fitz.Rect(x0, baseline + (i * line_height) - 0.5, x1, baseline + (i * line_height) + 3.0)
                         page.add_redact_annot(strip_rect)
                     try:
                         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)

@@ -278,12 +278,14 @@ def _is_underline_drawing(drawing, baselines):
             line_y = (rect.y0 + rect.y1) / 2.0
             line_x0, line_x1 = rect.x0, rect.x1
 
-        if line_y is None:
+        if line_y is None or line_x0 is None or line_x1 is None:
             return False
 
         for tx0, tx1, baseline in baselines:
-            if abs(line_y - (baseline + 1.5)) <= 3.5:
-                if not (line_x1 < tx0 - 6.0 or line_x0 > tx1 + 6.0):
+            if abs(line_y - (baseline + 1.5)) <= 2.5:
+                overlap = min(line_x1, tx1) - max(line_x0, tx0)
+                text_width = max(0.1, tx1 - tx0)
+                if overlap >= min(4.0, text_width * 0.4):
                     return True
     except Exception:
         pass
@@ -310,7 +312,7 @@ def extract_editable_text(doc, page_index):
         return [], "Invalid document or page index for text extraction."
     try:
         page = doc.load_page(page_index)
-        text_dict = page.get_text("dict", flags=0)
+        text_dict = page.get_text("rawdict", flags=0)
 
         page_drawings = None
         try:
@@ -331,7 +333,7 @@ def extract_editable_text(doc, page_index):
                     current_sig = None
                     
                     for span in spans:
-                        text = span.get("text", "")
+                        text = "".join(c["c"] for c in span.get("chars", [])) if span.get("chars") else span.get("text", "")
                         if not text:
                             continue
                         
@@ -357,17 +359,31 @@ def extract_editable_text(doc, page_index):
                         runs.append(current_run)
                         
                     for run in runs:
-                        combined_text = "".join(s.get("text", "") for s in run)
-                        if not combined_text.strip():
-                            continue
+                        all_chars = []
+                        for s in run:
+                            if s.get("chars"):
+                                all_chars.extend(s["chars"])
+                        if all_chars:
+                            non_space = [c for c in all_chars if not c["c"].isspace()]
+                            if not non_space:
+                                continue
+                            combined_text = "".join(c["c"] for c in all_chars).strip()
+                            min_x = min(c["bbox"][0] for c in non_space)
+                            min_y = min(c["bbox"][1] for c in non_space)
+                            max_x = max(c["bbox"][2] for c in non_space)
+                            max_y = max(c["bbox"][3] for c in non_space)
+                        else:
+                            combined_text = "".join(s.get("text", "") for s in run).strip()
+                            if not combined_text:
+                                continue
+                            min_x = min(s.get("bbox", (0, 0, 0, 0))[0] for s in run)
+                            min_y = min(s.get("bbox", (0, 0, 0, 0))[1] for s in run)
+                            max_x = max(s.get("bbox", (0, 0, 0, 0))[2] for s in run)
+                            max_y = max(s.get("bbox", (0, 0, 0, 0))[3] for s in run)
                             
-                        first_span = run[0]
-                        min_x = min(s.get("bbox", (0, 0, 0, 0))[0] for s in run)
-                        min_y = min(s.get("bbox", (0, 0, 0, 0))[1] for s in run)
-                        max_x = max(s.get("bbox", (0, 0, 0, 0))[2] for s in run)
-                        max_y = max(s.get("bbox", (0, 0, 0, 0))[3] for s in run)
                         bbox = [min_x, min_y, max_x, max_y]
                         
+                        first_span = run[0]
                         span_data = first_span.copy()
                         span_data["bbox"] = tuple(bbox)
                         span_data["text"] = combined_text
