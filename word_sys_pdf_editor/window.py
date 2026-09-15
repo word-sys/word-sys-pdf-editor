@@ -26,6 +26,7 @@ from .ui_components import (
     show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog,
     SymbolsPopover, render_emoji_to_png_bytes, show_new_document_dialog
 )
+from .quick_guide_dialog import QuickGuideDialog
 from . import utils
 
 class PdfEditorWindow(Adw.ApplicationWindow):
@@ -199,10 +200,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.main_box.append(header)
 
         self.new_button = Gtk.Button(label=_("btn_new_doc"))
+        self.new_button.set_tooltip_text(f"{_('btn_new_doc')} (Ctrl+N)")
         self.new_button.connect("clicked", self.on_new_clicked)
         header.pack_start(self.new_button)
 
         self.open_button = Gtk.Button(label=_("btn_open_doc"))
+        self.open_button.set_tooltip_text(f"{_('btn_open_doc')} (Ctrl+O)")
         self.open_button.connect("clicked", self.on_open_clicked)
         header.pack_start(self.open_button)
 
@@ -248,6 +251,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu.append(_("menu_save_as"), "win.save_as")
         menu.append(_("menu_export_as"), "win.export_as")
         menu.append_section(None, Gio.Menu())
+        menu.append(_("menu_quick_guide"), "win.quick_guide")
         menu.append(_("menu_about"), "win.about")
         menu.append(_("menu_quit"), "app.quit")
         popover_menu = Gtk.PopoverMenu.new_from_model(menu)
@@ -636,6 +640,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_about.connect('activate', self.on_about_activated)
         self.add_action(action_about)
 
+        action_new = Gio.SimpleAction.new('new', None)
+        action_new.connect('activate', lambda a, p: self.on_new_clicked(None))
+        self.add_action(action_new)
+
+        action_open = Gio.SimpleAction.new('open', None)
+        action_open.connect('activate', lambda a, p: self.on_open_clicked(None))
+        self.add_action(action_open)
+
         action_quick_guide = Gio.SimpleAction.new('quick_guide', None)
         action_quick_guide.connect('activate', self._on_quick_guide_activated)
         self.add_action(action_quick_guide)
@@ -654,11 +666,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         app = self.get_application()
         if app:
+            app.set_accels_for_action("win.new", ["<Control>n"])
+            app.set_accels_for_action("win.open", ["<Control>o"])
             app.set_accels_for_action("win.save", ["<Control>s"])
             app.set_accels_for_action("win.save_as", ["<Control><Shift>s"])
             app.set_accels_for_action("win.undo", ["<Control>z"])
             app.set_accels_for_action("win.redo", ["<Control>y", "<Control><Shift>z"])
             app.set_accels_for_action("win.print", ["<Control>p"])
+            app.set_accels_for_action("win.quick_guide", ["F1"])
 
     def _update_ui_state(self):
         """Update UI state."""
@@ -2249,7 +2264,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         return False
 
-    def on_open_clicked(self, button):
+    def on_open_clicked(self, button=None):
         """Handle the open clicked event."""
         if self.check_unsaved_changes():
              return
@@ -3124,6 +3139,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     clipboard = self.get_clipboard()
                     clipboard.set(self.view_selected_text)
                 return True
+            if ctrl and keyval in (Gdk.KEY_n, Gdk.KEY_N):
+                self.on_new_clicked(None)
+                return True
+            if ctrl and keyval in (Gdk.KEY_o, Gdk.KEY_O):
+                self.on_open_clicked(None)
+                return True
             return False
 
         if keyval == Gdk.KEY_Escape:
@@ -3150,7 +3171,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                  self.on_tool_selected(None, "select")
                  return True
 
-        if ctrl and keyval in (Gdk.KEY_s, Gdk.KEY_S):
+        if keyval == Gdk.KEY_F1:
+            self.activate_action("quick_guide", None)
+            return True
+
+        if ctrl and keyval in (Gdk.KEY_n, Gdk.KEY_N):
+            self.on_new_clicked(None)
+            return True
+        elif ctrl and keyval in (Gdk.KEY_o, Gdk.KEY_O):
+            self.on_open_clicked(None)
+            return True
+        elif ctrl and keyval in (Gdk.KEY_s, Gdk.KEY_S):
             self.on_save_clicked(None)
             return True
         elif ctrl and keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
@@ -3826,56 +3857,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _on_quick_guide_activated(self, action, param):
         """Handle the quick guide activated event."""
-        dialog = Gtk.Dialog(transient_for=self, modal=True)
-        dialog.set_default_size(500, 420)
-        
-        header = Gtk.HeaderBar()
-        
-        dialog.set_titlebar(header)
-
-        title_label = Gtk.Label(label=_("guide_title"))
-        title_label.add_css_class("title-4")
-        header.set_title_widget(title_label)
-        
-        content_area = dialog.get_content_area()
-        scrolled_window = Gtk.ScrolledWindow()
-        scrolled_window.set_vexpand(True) 
-        scrolled_window.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        content_area.append(scrolled_window)
-        
-        clamp = Adw.Clamp(maximum_size=450)
-        scrolled_window.set_child(clamp)
-        
-        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
-        content_box.set_margin_top(20)
-        content_box.set_margin_bottom(20)
-        clamp.set_child(content_box)
-        
-        guide_select_label = Gtk.Label(
-            use_markup=True,
-            label=_("guide_item1"),
-            xalign=0, wrap=True
-        )
-        guide_add_text_label = Gtk.Label(
-            use_markup=True,
-            label=_("guide_item2"),
-            xalign=0, wrap=True
-        )
-        guide_add_image_label = Gtk.Label(
-            use_markup=True,
-            label=_("guide_item3"),
-            xalign=0, wrap=True
-        )
-        guide_move_label = Gtk.Label(
-            use_markup=True,
-            label=_("guide_item4"),
-            xalign=0, wrap=True
-        )
-        content_box.append(guide_select_label)
-        content_box.append(guide_add_text_label)
-        content_box.append(guide_add_image_label)
-        content_box.append(guide_move_label)
-        
+        dialog = QuickGuideDialog(self)
         dialog.present()
 
     def _update_undo_redo_buttons(self, *args):

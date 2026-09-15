@@ -87,15 +87,18 @@ class WelcomeView(Adw.Bin):
         main_box.append(button_box)
 
         new_button = Gtk.Button(label=_("btn_new"))
-        new_button.connect("clicked", lambda w: self.parent_window.on_new_clicked())
+        new_button.set_tooltip_text(f"{_('btn_new')} (Ctrl+N)")
+        new_button.set_action_name("win.new")
         button_box.append(new_button)
 
         open_button = Gtk.Button(label=_("btn_open"))
         open_button.get_style_context().add_class("suggested-action")
-        open_button.connect("clicked", self.on_open_clicked)
+        open_button.set_tooltip_text(f"{_('btn_open')} (Ctrl+O)")
+        open_button.set_action_name("win.open")
         button_box.append(open_button)
 
         guide_button = Gtk.Button(label=_("btn_guide"))
+        guide_button.set_tooltip_text(f"{_('btn_guide')} (F1)")
         guide_button.set_action_name("win.quick_guide")
         button_box.append(guide_button)
 
