@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.11.0] - 2026-09-15
+
+### Added
+- **Modern Libadwaita Customizable "New Document" Dialog**: Completely redesigned document creation dialog with 18 international paper and screen presets (A0–A6, B4–B5, US Letter/Legal/Executive, Tabloid/Ledger, 16:9/16:10/4:3 Widescreen Slides, 1:1 Square, and Custom), linked Portrait/Landscape orientation swapping, real-time unit auto-conversion (`mm`, `cm`, `in`, `pt`, `px`), and blank page count configuration (1 to 500 pages).
+- **Interactive Quick Start Guide & Manual**: Modern Libadwaita window (`Adw.Window` and `Adw.ViewSwitcher`) accessible from the Welcome screen, primary hamburger menu, and `F1` key. Categorized into Tools & Editing, Canvas & Pages, and Keyboard Shortcuts Cheatsheet with native keycap styling (`.keycap`).
+- **Global Actions & Keyboard Shortcuts**: Fully wired `Ctrl + N` (New Document), `Ctrl + O` (Open PDF), and `F1` (Help/Guide) across edit and view modes with descriptive button tooltips on both the header bar and Welcome screen.
+- **Decoupled Zoom & Precision Pointer Focal Zoom**: Smooth, instantaneous zooming centered precisely around the mouse pointer with `Ctrl + Scroll` and `Ctrl + + / - / 0`, decoupled from destructive page reloads and backed by Cairo surface memory caching for lag-free canvas redrawing.
+- **Vector Stroke Scaling & Live Previews**: Proportional resizing (`scale_to_bbox`) for freehand drawing strokes and polylines, retaining natural geometry without morphing into boxes, with full undo/redo snapshot preservation.
+- **High-Performance Linux Font Engine**: Direct font family matching via Linux Fontconfig (`fc-match`) with in-memory caching (`FONT_MATCH_CACHE`), preventing startup timeouts while preserving distinct font identities and monospace/serif attributes.
+- **Multi-Style & Multi-Colored Text Segmentation**: Intelligent line segmentation into distinct style runs based on normalized style signatures, allowing independent formatting and recoloring of individual text spans without destroying sentence flow.
+
+### Changed
+- **PyMuPDF Modernization**: Updated core PDF engine import to `import pymupdf as fitz` with graceful fallback, fully silencing deprecation warnings while retaining 100% backward compatibility.
+- **Console Logging Clean-up**: Silenced noisy startup debug prints, eliminated repetitive font scan logs, and standardized console messages to English.
+- **Calibrated Resize Handle Hitbox**: Refined handle hit tolerance to 4.0pt for drawing tools to match the visual 8x8pt square boundary, eliminating accidental handle grabbing when handwriting letters or drawing adjacent strokes.
+- **Highlighter Quality Calibration**: Square line caps (`cairo.LINE_CAP_SQUARE`, `lineCap=2`) and bevel joins keep highlighters neatly bounded within text line heights without spilling onto adjacent lines. Default width synchronized with toolbar controls.
+
+### Fixed
+- **Transparent PNG Alpha Channel Preservation**: Full soft-mask (`smask`) alpha compositing during image extraction and embedding, ensuring transparent PNGs retain full transparency without turning black.
+- **Text & Stroke Preservation on Object Deletion/Redaction**: Targeted graphics and stroke-aware redactions prevent underlying or intersecting text characters and handwriting strokes from being erased when deleting shapes or strokes.
+- **Underline Vector Detection & Clean Ghost Erasing**: Detects and aligns baseline underline drawings, erases old vector underlines cleanly during text movement without duplicating them or cutting into neighboring glyphs.
+- **Unsaved Changes Navigation Fix**: Clicking "Cancel" on the unsaved changes dialog when navigating to the homepage now cleanly aborts navigation and keeps the active document open.
+- **Turkish Localization Polish**: Localized About dialog topic tabs ("Hakkında", "Emeği Geçenler", "Lisans") and Cancel buttons, and added comprehensive bilingual translation tables.
+
+---
+
 ## [1.10.0-beta1] - 2026-08-30
 
 ### Added

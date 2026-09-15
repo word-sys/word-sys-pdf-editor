@@ -1,3 +1,19 @@
+word-sys-pdf-editor (1.11.0) bookworm; urgency=medium
+
+  * Added Modern Libadwaita customizable New Document dialog with 18 presets and unit conversion
+  * Added interactive Quick Start Guide & Manual with keyboard shortcuts cheatsheet (Adw.Window, F1)
+  * Added Ctrl+N and Ctrl+O actions, shortcuts, and descriptive tooltips
+  * Implemented decoupled precision focal pointer zoom with Cairo surface caching
+  * Added vector stroke scaling (scale_to_bbox) and freehand Bézier curve smoothing
+  * Preserved full alpha transparency for transparent PNGs via soft-mask (smask) compositing
+  * Improved font engine with Linux Fontconfig (fc-match) caching and multi-style text run segmentation
+  * Calibrated 4.0pt resize handle hitboxes and flat-cap highlighter line bounding
+  * Fixed underline detection, alignment, and clean ghost erasing without character deletion
+  * Modernized PyMuPDF imports and silenced verbose startup debug logging
+  * Fixed unsaved changes navigation cancel handling and localized About dialog tabs
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Tue, 15 Sep 2026 10:48:00 +0300
+
 word-sys-pdf-editor (1.10.0~beta1) bookworm; urgency=medium
 
   * Added Quick Save (Ctrl+S) with atomic file saving protecting against file corruption
