@@ -414,3 +414,6 @@ class SymbolsPopover(Gtk.Popover):
         self.popdown()
         if self.editor_window and hasattr(self.editor_window, 'insert_symbol_or_emoji'):
             self.editor_window.insert_symbol_or_emoji(symbol, is_emoji=is_emoji)
+
+
+from .new_document_dialog import show_new_document_dialog, NewDocumentDialog

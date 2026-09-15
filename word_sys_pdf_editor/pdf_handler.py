@@ -1411,11 +1411,15 @@ def apply_object_edit(doc, obj):
         traceback.print_exc()
         return False, f"Error while applying object edit: {e}"
     
-def create_new_pdf():
-    """Create new PDF."""
+def create_new_pdf(width=595, height=842, num_pages=1):
+    """Create new PDF with customizable dimensions and page count."""
     try:
         doc = fitz.open()
-        doc.new_page(width=595, height=842)
+        w = float(width) if width else 595.0
+        h = float(height) if height else 842.0
+        pages = max(1, int(num_pages)) if num_pages else 1
+        for _ in range(pages):
+            doc.new_page(width=w, height=h)
         return doc, None
     except Exception as e:
         return None, _("err_creating_new_pdf", e)

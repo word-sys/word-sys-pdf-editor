@@ -24,7 +24,7 @@ from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, E
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_confirm_dialog,
     show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog,
-    SymbolsPopover, render_emoji_to_png_bytes
+    SymbolsPopover, render_emoji_to_png_bytes, show_new_document_dialog
 )
 from . import utils
 
@@ -3914,27 +3914,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.before_format_change_state = None
 
     def on_new_clicked(self, widget=None):
-        """Handle the new clicked event."""
+        """Handle the new clicked event with customizable page dimensions."""
         if self.check_unsaved_changes():
             return
 
-        self.close_document()
-
-        doc, error_msg = pdf_handler.create_new_pdf()
-
-        if error_msg:
-            show_error_dialog(self, error_msg)
+        def on_create(width_pt, height_pt, num_pages):
             self.close_document()
-        elif doc:
-            self.doc = doc
-            self.current_file_path = None
-            self.current_page_index = 0
-            _untitled = _("untitled")
-            self.set_title(f"{constants.APP_NAME} - {_untitled}*")
-            self.document_modified = True
-            
-            self._load_thumbnails()
-            self.status_label.set_text(_("status_new_doc_created"))
+            doc, error_msg = pdf_handler.create_new_pdf(width=width_pt, height=height_pt, num_pages=num_pages)
+
+            if error_msg:
+                show_error_dialog(self, error_msg)
+                self.close_document()
+            elif doc:
+                self.doc = doc
+                self.current_file_path = None
+                self.current_page_index = 0
+                _untitled = _("untitled")
+                self.set_title(f"{constants.APP_NAME} - {_untitled}*")
+                self.document_modified = True
+                
+                self._load_thumbnails()
+                self.status_label.set_text(_("status_new_doc_created"))
+
+        show_new_document_dialog(self, on_create)
 
     def do_close_request(self):
         """Do close request."""
