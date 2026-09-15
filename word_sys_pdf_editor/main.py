@@ -50,6 +50,20 @@ class PdfEditorApplication(Adw.Application):
 
 def main():
     """Run the Adw application."""
+    import os, locale
+    from .i18n import get_language
+    lang = get_language()
+    if lang == "tr":
+        os.environ["LANGUAGE"] = "tr_TR:tr"
+        os.environ["LC_MESSAGES"] = "tr_TR.UTF-8"
+        try:
+            locale.setlocale(locale.LC_MESSAGES, "tr_TR.UTF-8")
+        except Exception:
+            try:
+                locale.setlocale(locale.LC_MESSAGES, "tr")
+            except Exception:
+                pass
+
     GLib.set_prgname("word-sys-pdf-editor")
     GLib.set_application_name("word-sys's PDF Editor")
     Gtk.Window.set_default_icon_name("f-pv1")

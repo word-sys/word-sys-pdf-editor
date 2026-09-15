@@ -898,6 +898,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             about_dialog.set_logo_icon_name("application-x-executable")
 
         about_dialog.set_copyright("© 2024-2026 Barın Güzeldemirci (word-sys)")
+
+        tab_map = {
+            "About": _("about_tab_about"),
+            "Credits": _("about_tab_credits"),
+            "License": _("about_tab_license"),
+        }
+        def _localize_about_tabs(widget):
+            if isinstance(widget, Gtk.Label):
+                txt = widget.get_label()
+                if txt in tab_map:
+                    widget.set_label(tab_map[txt])
+            child = widget.get_first_child() if hasattr(widget, 'get_first_child') else None
+            while child:
+                _localize_about_tabs(child)
+                child = child.get_next_sibling()
+
+        _localize_about_tabs(about_dialog)
         about_dialog.present()
 
 
@@ -1112,22 +1129,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def go_to_welcome(self):
         """Go to welcome."""
-        if self.doc and self.document_modified:
-            response = show_save_changes_dialog(self)
-            if response == "save":
-                if self.current_file_path:
-                    if self.inline_editor_widget is not None:
-                        self._apply_and_hide_editor(force_apply=True)
-                    success, err = pdf_handler.save_document(self.doc, self.current_file_path)
-                    if not success:
-                        show_error_dialog(self, _("err_pdf_save", err), _("save_error_title"))
-                        return
-                else:
-                    self.on_save_as(None, None)
-                    if self.document_modified:
-                        return
-            elif response == "cancel":
-                return
+        if self.check_unsaved_changes():
+            return
 
         self.close_document()
         old_welcome = self.stack.get_child_by_name("welcome")
