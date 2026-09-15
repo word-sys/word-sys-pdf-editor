@@ -9,8 +9,10 @@ import cairo
 import threading
 import math
 import re
-from pathlib import Path
-import fitz
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
@@ -120,25 +122,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def _on_font_scan_complete(self):
         """Handle the font scan complete event."""
         self.font_scan_in_progress = False
-        self.font_scan_in_progress = False
-        print("DEBUG: _on_font_scan_complete triggered.")
-        
-        final_utils_unicode_font_path = utils.get_default_unicode_font_path()
-        print(f"DEBUG: Value from utils.get_default_unicode_font_path(): {final_utils_unicode_font_path}")
-        print(f"DEBUG: Current utils.UNICODE_FONT_PATH (after call): {utils.UNICODE_FONT_PATH}") 
-
-        self._populate_font_combo() 
+        utils.get_default_unicode_font_path()
+        self._populate_font_combo()
 
         if not utils.UNICODE_FONT_PATH:
              show_error_dialog(self, _("font_warning_msg"), _("font_warning_title"))
-        
+
         self.status_label.set_text(_("fonts_loaded_open") if not self.doc else _("loaded").format(os.path.basename(self.current_file_path)))
         self._update_ui_state()
 
     def _populate_font_combo(self):
         """Populate font combo."""
-        print(f"DEBUG: Populating font combo. utils.FONT_SCAN_COMPLETED: {utils.FONT_SCAN_COMPLETED.is_set()}")
-        print(f"DEBUG: utils.FONT_FAMILY_LIST_SORTED has {len(utils.FONT_FAMILY_LIST_SORTED)} items.")
 
         self.font_store.clear() 
         if utils.FONT_FAMILY_LIST_SORTED:

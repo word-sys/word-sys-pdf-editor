@@ -55,7 +55,6 @@ def _get_font_dirs():
             if d_path.is_dir() and d_path not in font_dirs:
                 font_dirs.append(d_path)
 
-    print(f"DEBUG: Taranacak tüm font klasörleri: {font_dirs}")
     return font_dirs
 
 def parse_font_name(filename):
@@ -101,7 +100,7 @@ def scan_system_fonts_async(callback_on_done=None):
     def _scan():
         """Scan."""
         global SYSTEM_FONTS, FONT_FAMILY_LIST_SORTED, FONT_SCAN_COMPLETED
-        print("Sistem ve gömülü font taraması başlıyor...")
+        print("Scanning system and embedded fonts...")
         font_dirs = _get_font_dirs()
         temp_fonts_data = {}
 

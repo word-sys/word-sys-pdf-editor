@@ -1,7 +1,11 @@
 import copy
 import re
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz
 from . import pdf_handler
-from .models import EditableText, EditableShape, EditableStroke
+from .models import EditableText, EditableShape, EditableStroke, EditableImage
 from .i18n import _
 
 class Command:
@@ -23,10 +27,6 @@ class Command:
         if getattr(target_object, 'is_new', True) or getattr(target_object, '_ghost_redacted', False):
             return
             
-        import fitz
-        from . import pdf_handler
-        from .models import EditableText, EditableImage, EditableShape, EditableStroke
-        
         pdf_handler.restore_page_from_snapshot(self.window.doc, page_num)
         
         orig_bbox = getattr(target_object, 'original_bbox', target_object.bbox)
@@ -166,10 +166,6 @@ class EditObjectCommand(Command):
         if getattr(self.target_object, 'is_new', True) or getattr(self.target_object, '_ghost_redacted', False):
             return
             
-        import fitz
-        from . import pdf_handler
-        from .models import EditableText, EditableImage, EditableShape, EditableStroke
-        
         pdf_handler.restore_page_from_snapshot(self.window.doc, page_num)
         
         orig_bbox = properties_to_clear.get('bbox', getattr(self.target_object, 'original_bbox', self.target_object.bbox))

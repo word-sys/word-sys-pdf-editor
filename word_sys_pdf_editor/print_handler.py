@@ -7,7 +7,10 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Gtk, Gdk, GLib, GdkPixbuf
 import cairo
-import fitz
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz
 from .i18n import _
 
 

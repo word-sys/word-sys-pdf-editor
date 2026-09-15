@@ -1,4 +1,7 @@
-import fitz
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz
 import numpy as np
 import cairo
 import io
