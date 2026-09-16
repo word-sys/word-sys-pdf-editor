@@ -77,6 +77,7 @@ chmod +x build_tmp/linuxdeploy build_tmp/linuxdeploy-plugin-gtk.sh build_tmp/lin
 
 export PATH="$(pwd)/build_tmp:$PATH"
 export DEPLOY_GTK_VERSION=4
+export APPIMAGE_EXTRACT_AND_RUN=1
 
 # Detect libadwaita-1 location dynamically
 ADWAITA_SO="$(find /usr/lib -name "libadwaita-1.so.0" 2>/dev/null | head -n 1)"
