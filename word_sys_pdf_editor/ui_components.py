@@ -58,6 +58,8 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
 
         def on_prepare(source, x, y, idx=page_index):
             """Handle the prepare event."""
+            if self.editor_window and getattr(self.editor_window, 'view_mode', False):
+                return None
             val = GObject.Value(GObject.TYPE_INT, idx)
             return Gdk.ContentProvider.new_for_value(val)
 
@@ -76,6 +78,8 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
 
         def on_drop(target, value, x, y, to_idx=page_index):
             """Handle the drop event."""
+            if self.editor_window and getattr(self.editor_window, 'view_mode', False):
+                return False
             from_idx = value
             if from_idx == to_idx:
                 return False

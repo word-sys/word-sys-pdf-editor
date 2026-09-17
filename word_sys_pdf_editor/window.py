@@ -2656,8 +2656,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
          self.thumbnail_selection_model.set_selected(self.current_page_index)
          self._syncing_thumb = False
 
+    @property
+    def edit_mode(self):
+        """Return True if currently in edit mode."""
+        return not getattr(self, 'view_mode', True)
+
     def on_page_reorder(self, from_index, to_index):
          """Handle the page reorder event."""
+         if getattr(self, 'view_mode', False) or not self.edit_mode:
+             return
          if from_index == to_index or from_index < 0 or to_index < 0:
              return
          
