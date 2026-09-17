@@ -1,6 +1,6 @@
 import copy
 from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand
-from .i18n import _, get_language
+from .i18n import _, get_language, get_setting, set_setting
 
 import gi
 import os
@@ -244,6 +244,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu = Gio.Menu()
         menu.append(_("menu_save_as"), "win.save_as")
         menu.append(_("menu_export_as"), "win.export_as")
+        
+        pref_section = Gio.Menu()
+        pref_section.append(_("menu_confirm_delete"), "win.confirm_delete")
+        menu.append_section(None, pref_section)
+
         menu.append_section(None, Gio.Menu())
         menu.append(_("menu_quick_guide"), "win.quick_guide")
         menu.append(_("menu_about"), "win.about")
@@ -657,6 +662,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_redo = Gio.SimpleAction.new("redo", None)
         action_redo.connect("activate", lambda a, p: self.undo_manager.redo())
         self.add_action(action_redo)
+
+        current_confirm = bool(get_setting("confirm_delete_objects", True))
+        self.action_confirm_delete = Gio.SimpleAction.new_stateful(
+            'confirm_delete', None, GLib.Variant.new_boolean(current_confirm)
+        )
+        def on_confirm_delete_change(action, value):
+            new_val = value.get_boolean()
+            action.set_state(value)
+            set_setting("confirm_delete_objects", new_val)
+        self.action_confirm_delete.connect('change-state', on_confirm_delete_change)
+        self.add_action(self.action_confirm_delete)
 
         app = self.get_application()
         if app:
@@ -4408,6 +4424,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, 'context_popover') and self.context_popover:
                 self.context_popover.popdown()
 
+    def _update_confirm_delete_menu_state(self, val: bool):
+        """Update the confirm delete menu action state."""
+        if hasattr(self, 'action_confirm_delete'):
+            self.action_confirm_delete.set_state(GLib.Variant.new_boolean(val))
+
     def _handle_delete_with_confirmation(self, obj, confirmation_key):
         """Handle delete with confirmation."""
         from .ui_components import show_confirm_dialog
@@ -4426,8 +4447,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             confirm_title = _("delete_confirm_title")
         else:
             return
+
+        confirm_needed = get_setting("confirm_delete_objects", True)
+        confirmed = True
+        if confirm_needed:
+            confirmed, do_not_ask = show_confirm_dialog(
+                self, confirm_text, confirm_title, destructive=True,
+                checkbox_label=_("do_not_ask_again")
+            )
+            if confirmed and do_not_ask:
+                set_setting("confirm_delete_objects", False)
+                self._update_confirm_delete_menu_state(False)
             
-        if show_confirm_dialog(self, confirm_text, confirm_title, destructive=True):
+        if confirmed:
             command = DeleteObjectCommand(self, obj)
             command.execute()
             self.undo_manager.add_command(command)

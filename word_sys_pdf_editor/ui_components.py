@@ -105,8 +105,8 @@ def show_error_dialog(parent_window, message, title="Error"):
     dialog.connect("response", lambda d, response_id: d.destroy())
     dialog.present()
 
-def show_confirm_dialog(parent_window, message, title="Confirm", destructive=True):
-    """Show a confirmation dialog with Accept and Cancel options."""
+def show_confirm_dialog(parent_window, message, title="Confirm", destructive=True, checkbox_label=None):
+    """Show a confirmation dialog with Accept and Cancel options, and optional checkbox."""
     message_type = Gtk.MessageType.QUESTION
     if destructive:
         message_type = Gtk.MessageType.WARNING
@@ -119,6 +119,13 @@ def show_confirm_dialog(parent_window, message, title="Confirm", destructive=Tru
         text=title,
         secondary_text=message
     )
+
+    checkbox = None
+    if checkbox_label:
+        checkbox = Gtk.CheckButton(label=checkbox_label)
+        checkbox.set_margin_top(10)
+        checkbox.set_halign(Gtk.Align.START)
+        dialog.get_message_area().append(checkbox)
 
     dialog.add_buttons(
         _("btn_cancel"), Gtk.ResponseType.CANCEL,
@@ -142,7 +149,10 @@ def show_confirm_dialog(parent_window, message, title="Confirm", destructive=Tru
          context.iteration(True)
 
     dialog.destroy()
-    return response == Gtk.ResponseType.ACCEPT
+    accepted = (response == Gtk.ResponseType.ACCEPT)
+    if checkbox_label:
+        return accepted, (checkbox.get_active() if checkbox else False)
+    return accepted
 
 def show_save_changes_dialog(parent_window):
     """Show a prompt to save or discard changes before closing/opening another file."""

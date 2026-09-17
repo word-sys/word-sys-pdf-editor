@@ -91,6 +91,8 @@ _STRINGS = {
         "delete_shape_confirm": "Are you sure you want to delete the selected shape?",
         "delete_image_confirm": "Are you sure you want to delete the selected image?",
         "delete_confirm": "Delete",
+        "do_not_ask_again": "Do not ask again",
+        "menu_confirm_delete": "Confirm Before Deleting Objects",
         "menu_highlight": "Highlight",
         "menu_remove_highlight": "Remove Highlight",
         "menu_edit_text": "Edit Text",
@@ -453,6 +455,8 @@ _STRINGS = {
         "delete_shape_confirm": "Seçilen şekli silmek istediğinizden emin misiniz?",
         "delete_image_confirm": "Seçilen resmi silmek istediğinizden emin misiniz?",
         "delete_confirm": "Sil",
+        "do_not_ask_again": "Bir daha sorma",
+        "menu_confirm_delete": "Nesneleri Silerken Onayla",
         "menu_highlight": "Vurgula",
         "menu_remove_highlight": "Vurguyu Kaldır",
         "menu_edit_text": "Metni Düzenle",
@@ -761,6 +765,13 @@ def _save_settings(data: dict):
 
 _settings = _load_settings()
 _active_lang: str = _settings.get("language", "en")
+
+def get_setting(key: str, default=None):
+    return _settings.get(key, default)
+
+def set_setting(key: str, value):
+    _settings[key] = value
+    _save_settings(_settings)
 
 def get_language() -> str:
     return _active_lang

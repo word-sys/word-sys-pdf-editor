@@ -5,7 +5,7 @@ import re
 import subprocess
 import threading
 from gi.repository import GLib
-from .i18n import _
+from .i18n import _, get_setting, set_setting
 
 FONT_SCAN_COMPLETED = threading.Event()
 SYSTEM_FONTS = {}
