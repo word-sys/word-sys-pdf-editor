@@ -27,7 +27,7 @@ License: **GPL-3.0-or-later**
 
 *   Create PDF files with customizable page dimensions and unit auto-conversion (mm, cm, in, pt, px)
 *   Open and view PDF files
-*   Precision pointer-centered focal zoom (`Ctrl + Scroll` and `Ctrl + + / - / 0`)
+*   Merge PDFs
 *   Interactive Quick Start Guide & Manual with keyboard shortcuts cheatsheet (`F1`)
 *   Select existing text blocks within a page
 *   Edit or delete selected text
@@ -37,6 +37,9 @@ License: **GPL-3.0-or-later**
 *   Move/reposition objects within the PDF
 *   Change font type, size, color, and decoration
 *   Granular Word Selection and precise highlighting
+*   Add shapes to PDFs (Rectangles, Ellipses, Checkmarks, Crosses)
+*   Draw freehand Pen and Highlighter strokes with Bézier smoothing and vector scaling
+*   Special Characters, Symbols & Emojis
 *   Save edited PDFs
 *   Quick Save (`Ctrl + S`)
 *   Export PDFs to DOCX or ODT (requires LibreOffice) and TXT formats
@@ -44,11 +47,9 @@ License: **GPL-3.0-or-later**
 *   Safe Save
 *   Restricted Mode (Safe Mode)
 *   Full multi-level Undo/Redo tracking (`Ctrl + Z` / `Ctrl + Y`)
-*   Merge PDFs
+*   Precision pointer-centered focal zoom (`Ctrl + Scroll` and `Ctrl + + / - / 0`)
 *   Add/remove/rotate pages in PDFs
-*   Add shapes to PDFs (Rectangles, Ellipses, Checkmarks, Crosses)
-*   Draw freehand Pen and Highlighter strokes with Bézier smoothing and vector scaling
-*   Special Characters, Symbols & Emojis
+
 
 ---
 
