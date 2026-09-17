@@ -48,7 +48,7 @@ License: **GPL-3.0-or-later**
 *   Restricted Mode (Safe Mode)
 *   Full multi-level Undo/Redo tracking (`Ctrl + Z` / `Ctrl + Y`)
 *   Precision pointer-centered focal zoom (`Ctrl + Scroll` and `Ctrl + + / - / 0`)
-*   Add/remove/rotate pages in PDFs
+*   Add/remove pages in PDFs
 
 
 ---
