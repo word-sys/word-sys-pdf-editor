@@ -1,9 +1,4 @@
-[![Dil: TR](https://img.shields.io/badge/Dil-Türkçe-blue)](README.tr.md)
-[![Langue: FR](https://img.shields.io/badge/Langue-Français-blue)](README.fr.md)
-[![Sprache: DE](https://img.shields.io/badge/Sprache-Deutsch-blue)](README.de.md)
-[![Idioma: ES](https://img.shields.io/badge/Idioma-Español-blue)](README.es.md)
-[![Lingua: IT](https://img.shields.io/badge/Lingua-Italiano-blue)](README.it.md)
-[![Язык: RU](https://img.shields.io/badge/Язык-Русский-blue)](README.ru.md)
+**Languages:** [English](README.md) | [Türkçe](README.tr.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Italiano](README.it.md) | [Русский](README.ru.md)
 
 
 # word-sys's PDF Editor
