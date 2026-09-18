@@ -7,7 +7,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gio, GLib, Gdk, Pango
 
 from . import constants
-from .i18n import _, get_language, set_language
+from .i18n import _, get_language, set_language, get_supported_languages
 
 
 class WelcomeView(Adw.Bin):
@@ -65,18 +65,20 @@ class WelcomeView(Adw.Bin):
         lang_label.add_css_class("dim-label")
         lang_box.append(lang_label)
 
-        self._lang_en_btn = Gtk.ToggleButton(label=_("lang_en"))
-        self._lang_en_btn.set_active(get_language() == "en")
-        self._lang_en_btn.add_css_class("flat")
-        lang_box.append(self._lang_en_btn)
+        self._languages = get_supported_languages()
+        lang_names = [name for _, name in self._languages]
+        self._lang_dropdown = Gtk.DropDown.new_from_strings(lang_names)
+        self._lang_dropdown.add_css_class("flat")
 
-        self._lang_tr_btn = Gtk.ToggleButton(label=_("lang_tr"), group=self._lang_en_btn)
-        self._lang_tr_btn.set_active(get_language() == "tr")
-        self._lang_tr_btn.add_css_class("flat")
-        lang_box.append(self._lang_tr_btn)
-
-        self._lang_en_btn.connect("toggled", self._on_lang_toggled, "en")
-        self._lang_tr_btn.connect("toggled", self._on_lang_toggled, "tr")
+        cur_lang = get_language()
+        cur_idx = 0
+        for i, (code, lang_title) in enumerate(self._languages):
+            if code == cur_lang:
+                cur_idx = i
+                break
+        self._lang_dropdown.set_selected(cur_idx)
+        self._lang_dropdown_handler_id = self._lang_dropdown.connect("notify::selected", self._on_lang_selected)
+        lang_box.append(self._lang_dropdown)
 
         main_box.append(lang_box)
 
@@ -134,13 +136,25 @@ class WelcomeView(Adw.Bin):
         tip_label.set_margin_top(40)
         main_box.append(tip_label)
 
-    def _on_lang_toggled(self, button, lang_code):
-        """Handle the lang toggled event."""
-        if not button.get_active():
-            return
-        if lang_code == get_language():
-            return
-        self._confirm_language_switch(lang_code)
+    def _on_lang_selected(self, dropdown, _param):
+        """Handle language selection change from dropdown."""
+        idx = dropdown.get_selected()
+        if 0 <= idx < len(self._languages):
+            lang_code = self._languages[idx][0]
+            if lang_code != get_language():
+                self._confirm_language_switch(lang_code)
+
+    def _set_dropdown_lang_code(self, lang_code):
+        """Revert or update dropdown selection without triggering signal callback."""
+        target_idx = 0
+        for i, (code, lang_title) in enumerate(self._languages):
+            if code == lang_code:
+                target_idx = i
+                break
+        if self._lang_dropdown.get_selected() != target_idx:
+            self._lang_dropdown.handler_block(self._lang_dropdown_handler_id)
+            self._lang_dropdown.set_selected(target_idx)
+            self._lang_dropdown.handler_unblock(self._lang_dropdown_handler_id)
 
     def _confirm_language_switch(self, lang_code):
         """Confirm language switch."""
@@ -154,13 +168,7 @@ class WelcomeView(Adw.Bin):
                 _("unsaved_title"),
                 destructive=False,
             ):
-                cur = get_language()
-                self._lang_en_btn.handler_block_by_func(self._on_lang_toggled)
-                self._lang_tr_btn.handler_block_by_func(self._on_lang_toggled)
-                self._lang_en_btn.set_active(cur == "en")
-                self._lang_tr_btn.set_active(cur == "tr")
-                self._lang_en_btn.handler_unblock_by_func(self._on_lang_toggled)
-                self._lang_tr_btn.handler_unblock_by_func(self._on_lang_toggled)
+                self._set_dropdown_lang_code(get_language())
                 return
 
         dialog = Gtk.MessageDialog(
@@ -177,13 +185,7 @@ class WelcomeView(Adw.Bin):
             if response_id == Gtk.ResponseType.OK:
                 set_language(lang_code)
             else:
-                cur = get_language()
-                self._lang_en_btn.handler_block_by_func(self._on_lang_toggled)
-                self._lang_tr_btn.handler_block_by_func(self._on_lang_toggled)
-                self._lang_en_btn.set_active(cur == "en")
-                self._lang_tr_btn.set_active(cur == "tr")
-                self._lang_en_btn.handler_unblock_by_func(self._on_lang_toggled)
-                self._lang_tr_btn.handler_unblock_by_func(self._on_lang_toggled)
+                self._set_dropdown_lang_code(get_language())
 
         dialog.connect("response", on_response)
         dialog.present()

@@ -117,9 +117,14 @@ _STRINGS = {
         "home_confirm_title": "Return to Start Screen",
         "export_success": "Exported successfully.",
         "export_error": "Export failed: {}",
-        "lang_label": "Language / Dil",
+        "lang_label": "Language",
         "lang_en": "English",
         "lang_tr": "Türkçe",
+        "lang_fr": "Français",
+        "lang_de": "Deutsch",
+        "lang_es": "Español",
+        "lang_it": "Italiano",
+        "lang_ru": "Русский",
         "lang_restart_msg": "The application will restart to apply the language change.",
         "lang_restart_title": "Restart Required",
         "btn_new_doc": "New",
@@ -481,9 +486,14 @@ _STRINGS = {
         "home_confirm_title": "Başlangıç Ekranına Dön",
         "export_success": "Başarıyla dışa aktarıldı.",
         "export_error": "Dışa aktarma başarısız: {}",
-        "lang_label": "Language / Dil",
+        "lang_label": "Dil",
         "lang_en": "English",
         "lang_tr": "Türkçe",
+        "lang_fr": "Français",
+        "lang_de": "Deutsch",
+        "lang_es": "Español",
+        "lang_it": "Italiano",
+        "lang_ru": "Русский",
         "lang_restart_msg": "Dil değişikliğini uygulamak için uygulama yeniden başlatılacak.",
         "lang_restart_title": "Yeniden Başlatma Gerekli",
         "btn_new_doc": "Yeni",
@@ -786,6 +796,27 @@ def set_language(lang: str):
     import sys, os
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
+from .locales import STRINGS_FR, STRINGS_DE, STRINGS_ES, STRINGS_IT, STRINGS_RU
+
+_STRINGS["fr"] = STRINGS_FR
+_STRINGS["de"] = STRINGS_DE
+_STRINGS["es"] = STRINGS_ES
+_STRINGS["it"] = STRINGS_IT
+_STRINGS["ru"] = STRINGS_RU
+
+SUPPORTED_LANGUAGES = [
+    ("en", "English"),
+    ("tr", "Türkçe"),
+    ("fr", "Français"),
+    ("de", "Deutsch"),
+    ("es", "Español"),
+    ("it", "Italiano"),
+    ("ru", "Русский"),
+]
+
+def get_supported_languages():
+    return SUPPORTED_LANGUAGES
+
 def _(key: str, *args) -> str:
     table = _STRINGS.get(_active_lang, _STRINGS["en"])
     text = table.get(key, _STRINGS["en"].get(key, key))
@@ -795,3 +826,4 @@ def _(key: str, *args) -> str:
         except Exception:
             return text
     return text
+
