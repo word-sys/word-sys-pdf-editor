@@ -1,3 +1,9 @@
+![Dil TR](https://github.com/word-sys/word-sys-pdf-editor/blob/main/README.tr.md)
+![Langue FR](https://github.com/word-sys/word-sys-pdf-editor/blob/main/README.fr.md)
+![Idioma ES](https://github.com/word-sys/word-sys-pdf-editor/blob/main/README.es.md)
+![Lingua IT](https://github.com/word-sys/word-sys-pdf-editor/blob/main/README.it.md)
+![Язык RU](https://github.com/word-sys/word-sys-pdf-editor/blob/main/README.ru.md)
+
 # word-sys's PDF Editor
 <img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/word_sys_pdf_editor/img/f-pv1.svg" width="256" height="256"/>
 
