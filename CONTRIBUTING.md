@@ -62,6 +62,23 @@ sudo pacman -S python python-pip python-gobject gtk4 libadwaita \
    python3 run-editor.py
    ```
 
+### VS Code
+
+Open `word-sys-pdf-editor.code-workspace` to load the recommended Python,
+Pylance, YAML, and TOML extensions and enable pytest discovery automatically.
+
+### Tests and coverage
+
+Install the test dependencies and run the suite from the repository root:
+
+```bash
+pip install -e '.[test]'
+pytest --cov=word_sys_pdf_editor --cov-report=term-missing
+```
+
+Pull requests run the same tests on GitHub Actions. The generated XML coverage
+report is attached to each workflow run as the `coverage-report` artifact.
+
 ## Project Structure
 
 All core logic resides inside the `word_sys_pdf_editor/` package:

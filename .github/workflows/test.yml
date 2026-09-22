@@ -1,0 +1,52 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python tests and coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gir1.2-gtk-4.0 \
+            libgirepository1.0-dev \
+            python3-gi \
+            python3-gi-cairo \
+            python3-venv
+
+      - name: Create test environment
+        run: |
+          python3 -m venv --system-site-packages venv
+          venv/bin/python -m pip install --upgrade pip
+          venv/bin/python -m pip install PyMuPDF numpy pytest pytest-cov
+          venv/bin/python -m pip install --no-deps --editable .
+
+      - name: Run tests with coverage
+        run: |
+          venv/bin/python -m pytest \
+            --cov=word_sys_pdf_editor \
+            --cov-report=term-missing \
+            --cov-report=xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          if-no-files-found: warn

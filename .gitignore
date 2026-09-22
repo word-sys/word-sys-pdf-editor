@@ -3,7 +3,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 venv/
+.venv/
 .env
+.coverage
+coverage.xml
+htmlcov/
 dist/
 build/
 .build_venv

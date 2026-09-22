@@ -19,6 +19,12 @@ dependencies = [
     "pygobject"
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-cov>=5",
+]
+
 [project.urls]
 Homepage = "https://github.com/word-sys/word-sys-pdf-editor/"
 Source = "https://github.com/word-sys/word-sys-pdf-editor/"
@@ -33,3 +39,14 @@ version = {attr = "word_sys_pdf_editor.constants.APP_VERSION"}
 
 [project.gui-scripts]
 word-sys-pdf-editor = "word_sys_pdf_editor.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["word_sys_pdf_editor"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

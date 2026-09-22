@@ -410,7 +410,10 @@ class EditableStroke:
         dx = new_x - self.x
         dy = new_y - self.y
         self.points = [(px + dx, py + dy) for px, py in self.points]
-        self.recalculate_bbox()
+        x1, y1, x2, y2 = self.bbox
+        self.bbox = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
+        self.x = new_x
+        self.y = new_y
 
 class PdfPage(GObject.GObject):
     """The PdfPage class."""

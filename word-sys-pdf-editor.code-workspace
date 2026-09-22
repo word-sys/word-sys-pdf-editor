@@ -1,0 +1,31 @@
+{
+    "folders": [
+        {
+            "name": "word-sys-pdf-editor",
+            "path": "."
+        }
+    ],
+    "settings": {
+        "python.analysis.extraPaths": [
+            "${workspaceFolder}"
+        ],
+        "python.testing.pytestArgs": [
+            "tests"
+        ],
+        "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false,
+        "files.exclude": {
+            "**/__pycache__": true,
+            "**/.coverage": true,
+            "**/.pytest_cache": true
+        }
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-python.python",
+            "ms-python.vscode-pylance",
+            "redhat.vscode-yaml",
+            "tamasfe.even-better-toml"
+        ]
+    }
+}
