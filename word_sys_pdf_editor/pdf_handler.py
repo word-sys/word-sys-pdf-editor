@@ -7,6 +7,7 @@ import cairo
 import io
 import os
 from pathlib import Path
+import math
 import subprocess
 import shutil
 import tempfile
@@ -36,6 +37,24 @@ def invalidate_page_cache(doc=None, page_index=None):
         keys_to_del = [k for k in _cairo_page_cache if k[0] == doc_id and k[1] == page_index]
     for k in keys_to_del:
         _cairo_page_cache.pop(k, None)
+
+def rotate_point(x, y, cx, cy, angle_degrees):
+    """Rotate point (x, y) around pivot (cx, cy) by angle_degrees clockwise."""
+    if angle_degrees == 0:
+        return x, y
+    rad = math.radians(angle_degrees)
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    nx = cx + (x - cx) * cos_a - (y - cy) * sin_a
+    ny = cy + (x - cx) * sin_a + (y - cy) * cos_a
+    return nx, ny
+
+def get_rotation_matrix(cx, cy, angle_degrees):
+    """Return fitz.Matrix rotating around (cx, cy) by angle_degrees."""
+    t1 = fitz.Matrix(1, 0, 0, 1, -cx, -cy)
+    rot = fitz.Matrix(angle_degrees)
+    t2 = fitz.Matrix(1, 0, 0, 1, cx, cy)
+    return t1 * rot * t2
 
 def get_page_cairo_surface(doc, page_index, zoom_level):
     """Get or render cached Cairo ImageSurface for the given page and zoom level."""
@@ -1215,6 +1234,8 @@ def release_page_snapshots(doc):
 
 def _apply_single_object_to_page(doc, page, obj):
     """Apply single object to page."""
+    rot = getattr(obj, "rotation", 0.0) % 360.0
+
     if isinstance(obj, EditableText):
         if obj.text:
             font_arg, error_msg = _get_font_args_for_pymupdf(obj)
@@ -1236,13 +1257,18 @@ def _apply_single_object_to_page(doc, page, obj):
             except Exception:
                 pass
 
+            cx = (obj.bbox[0] + obj.bbox[2]) / 2.0 if obj.bbox else obj.x
+            cy = (obj.bbox[1] + obj.bbox[3]) / 2.0 if obj.bbox else obj.y
+            morph = (fitz.Point(cx, cy), fitz.Matrix(rot)) if rot != 0.0 else None
+            mat = get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
+
             for i, line in enumerate(lines):
                 links = list(re.finditer(r'(https?://[^\s]+|www\.[^\s]+)', line))
                 
                 if not links:
                     pos = fitz.Point(obj.x, obj.baseline + (i * line_height))
                     page.insert_text(pos, line, fontsize=obj.font_size,
-                                     color=obj.color, overlay=True, **font_arg)
+                                     color=obj.color, overlay=True, morph=morph, **font_arg)
                     
                     if font_obj:
                         try:
@@ -1255,6 +1281,9 @@ def _apply_single_object_to_page(doc, page, obj):
                     if getattr(obj, 'is_underline', False):
                         p1 = fitz.Point(obj.x, obj.baseline + (i * line_height) + 1.5)
                         p2 = fitz.Point(obj.x + text_len, obj.baseline + (i * line_height) + 1.5)
+                        if mat:
+                            p1 = p1 * mat
+                            p2 = p2 * mat
                         page.draw_line(p1, p2, color=obj.color, width=0.8)
                 else:
                     segments = []
@@ -1276,7 +1305,7 @@ def _apply_single_object_to_page(doc, page, obj):
                         seg_color = (0.0, 0.33, 0.8) if is_seg_link else obj.color
                         pos = fitz.Point(current_x, obj.baseline + (i * line_height))
                         page.insert_text(pos, seg_text, fontsize=obj.font_size,
-                                         color=seg_color, overlay=True, **font_arg)
+                                         color=seg_color, overlay=True, morph=morph, **font_arg)
                         
                         if font_obj:
                             try:
@@ -1289,6 +1318,9 @@ def _apply_single_object_to_page(doc, page, obj):
                         if is_seg_link or getattr(obj, 'is_underline', False):
                             p1 = fitz.Point(current_x, obj.baseline + (i * line_height) + 1.5)
                             p2 = fitz.Point(current_x + seg_len, obj.baseline + (i * line_height) + 1.5)
+                            if mat:
+                                p1 = p1 * mat
+                                p2 = p2 * mat
                             page.draw_line(p1, p2, color=seg_color, width=0.8)
                             
                         if is_seg_link:
@@ -1300,43 +1332,95 @@ def _apply_single_object_to_page(doc, page, obj):
                             if not uri.startswith(("http://", "https://")):
                                 uri = "https://" + uri
                                 
-                            link_data = {"kind": fitz.LINK_URI, "from": link_rect, "uri": uri}
+                            link_data = {"kind": fitz.LINK_URI, "from": link_rect.quad * mat if mat else link_rect, "uri": uri}
                             page.insert_link(link_data)
                             
                         current_x += seg_len
                         
     elif isinstance(obj, EditableImage):
-        page.insert_image(obj.bbox, stream=obj.image_bytes, keep_proportion=False)
+        if rot == 0.0:
+            page.insert_image(obj.bbox, stream=obj.image_bytes, keep_proportion=False)
+        elif rot % 90 == 0:
+            page.insert_image(obj.bbox, stream=obj.image_bytes, rotate=int(rot), keep_proportion=False)
+        else:
+            try:
+                from PIL import Image
+                im = Image.open(io.BytesIO(obj.image_bytes))
+                rotated_im = im.rotate(-rot, expand=True, resample=Image.BICUBIC)
+                buf = io.BytesIO()
+                rotated_im.save(buf, format="PNG")
+                stream = buf.getvalue()
+                cx = (obj.bbox[0] + obj.bbox[2]) / 2.0
+                cy = (obj.bbox[1] + obj.bbox[3]) / 2.0
+                w = obj.bbox[2] - obj.bbox[0]
+                h = obj.bbox[3] - obj.bbox[1]
+                rad = math.radians(rot)
+                nw = abs(w * math.cos(rad)) + abs(h * math.sin(rad))
+                nh = abs(w * math.sin(rad)) + abs(h * math.cos(rad))
+                rot_rect = fitz.Rect(cx - nw / 2.0, cy - nh / 2.0, cx + nw / 2.0, cy + nh / 2.0)
+                page.insert_image(rot_rect, stream=stream, keep_proportion=False)
+            except Exception:
+                page.insert_image(obj.bbox, stream=obj.image_bytes, keep_proportion=False)
     elif isinstance(obj, EditableShape):
         rect = fitz.Rect(obj.bbox)
         shape = page.new_shape()
         stroke = tuple(float(c) for c in obj.stroke_color)
         fill = tuple(float(c) for c in obj.fill_color) if not obj.is_transparent else None
+        cx = (rect.x0 + rect.x1) / 2.0
+        cy = (rect.y0 + rect.y1) / 2.0
+        mat = get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
 
         if obj.shape_type == EditableShape.SHAPE_RECTANGLE:
-            shape.draw_rect(rect)
+            if mat:
+                shape.draw_quad(rect.quad * mat)
+            else:
+                shape.draw_rect(rect)
             shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
         elif obj.shape_type == EditableShape.SHAPE_ELLIPSE:
-            shape.draw_oval(rect)
+            if mat:
+                k = 0.5522847498307935
+                rx = (rect.x1 - rect.x0) / 2.0
+                ry = (rect.y1 - rect.y0) / 2.0
+                beziers = [
+                    (fitz.Point(cx + rx, cy), fitz.Point(cx + rx, cy - k * ry), fitz.Point(cx + k * rx, cy - ry), fitz.Point(cx, cy - ry)),
+                    (fitz.Point(cx, cy - ry), fitz.Point(cx - k * rx, cy - ry), fitz.Point(cx - rx, cy - k * ry), fitz.Point(cx - rx, cy)),
+                    (fitz.Point(cx - rx, cy), fitz.Point(cx - rx, cy + k * ry), fitz.Point(cx - k * rx, cy + ry), fitz.Point(cx, cy + ry)),
+                    (fitz.Point(cx, cy + ry), fitz.Point(cx + k * rx, cy + ry), fitz.Point(cx + rx, cy + k * ry), fitz.Point(cx + rx, cy))
+                ]
+                for p0, c1, c2, p1 in beziers:
+                    shape.draw_bezier(p0 * mat, c1 * mat, c2 * mat, p1 * mat)
+            else:
+                shape.draw_oval(rect)
             shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
         elif obj.shape_type == EditableShape.SHAPE_CHECKMARK:
             pts = obj.get_checkmark_points()
-            fitz_pts = [fitz.Point(p[0], p[1]) for p in pts]
+            fitz_pts = [fitz.Point(p[0], p[1]) * mat if mat else fitz.Point(p[0], p[1]) for p in pts]
             shape.draw_polyline(fitz_pts)
             shape.finish(color=stroke, fill=None, width=obj.stroke_width, lineCap=1, lineJoin=1, closePath=False)
         elif obj.shape_type == EditableShape.SHAPE_CROSS:
             lines = obj.get_cross_lines()
             for (p1, p2) in lines:
-                shape.draw_line(fitz.Point(p1[0], p1[1]), fitz.Point(p2[0], p2[1]))
+                pt1 = fitz.Point(p1[0], p1[1]) * mat if mat else fitz.Point(p1[0], p1[1])
+                pt2 = fitz.Point(p2[0], p2[1]) * mat if mat else fitz.Point(p2[0], p2[1])
+                shape.draw_line(pt1, pt2)
             shape.finish(color=stroke, fill=None, width=obj.stroke_width, lineCap=1, lineJoin=1, closePath=False)
         else:
-            shape.draw_rect(rect)
+            if mat:
+                shape.draw_quad(rect.quad * mat)
+            else:
+                shape.draw_rect(rect)
             shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
         shape.commit()
     elif isinstance(obj, EditableStroke):
         if obj.points and len(obj.points) >= 2:
             shape = page.new_shape()
-            pts = [fitz.Point(p[0], p[1]) for p in obj.points]
+            if rot != 0.0 and obj.bbox:
+                cx = (obj.bbox[0] + obj.bbox[2]) / 2.0
+                cy = (obj.bbox[1] + obj.bbox[3]) / 2.0
+                mat = get_rotation_matrix(cx, cy, rot)
+                pts = [fitz.Point(p[0], p[1]) * mat for p in obj.points]
+            else:
+                pts = [fitz.Point(p[0], p[1]) for p in obj.points]
             shape.draw_polyline(pts)
             stroke = tuple(float(c) for c in obj.stroke_color)
             is_hl = getattr(obj, 'tool_type', None) in (EditableStroke.TOOL_HIGHLIGHTER, "highlighter") or obj.stroke_width >= 8.0
@@ -1353,6 +1437,10 @@ def _apply_single_object_to_page(doc, page, obj):
             shape.commit()
         elif obj.points and len(obj.points) == 1:
             p = obj.points[0]
+            if rot != 0.0 and obj.bbox:
+                cx = (obj.bbox[0] + obj.bbox[2]) / 2.0
+                cy = (obj.bbox[1] + obj.bbox[3]) / 2.0
+                p = rotate_point(p[0], p[1], cx, cy, rot)
             r = max(obj.stroke_width / 2.0, 1.0)
             rect = fitz.Rect(p[0] - r, p[1] - r, p[0] + r, p[1] + r)
             shape = page.new_shape()

@@ -1283,6 +1283,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             ghost_h = (y2 - y1) * self.zoom_level
 
             cr.save()
+            rot = getattr(self.dragged_object, 'rotation', 0.0) % 360.0
+            if rot != 0.0:
+                cx = ghost_x + ghost_w / 2.0
+                cy = ghost_y + ghost_h / 2.0
+                cr.translate(cx, cy)
+                cr.rotate(math.radians(rot))
+                cr.translate(-cx, -cy)
             if isinstance(self.dragged_object, EditableImage) and self.dragged_object.image_bytes:
                 try:
                     loader = GdkPixbuf.PixbufLoader.new()
@@ -1420,8 +1427,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 continue
             x1, y1, x2, y2 = text_obj.bbox
             draw_x = page_offset_x + (x1 * self.zoom_level)
-            draw_y = page_offset_y + (y1 * self.zoom_level)
             cr.save()
+            rot = getattr(text_obj, 'rotation', 0.0) % 360.0
+            if rot != 0.0:
+                cx = draw_x + ((x2 - x1) * self.zoom_level) / 2.0
+                cy = draw_y + ((y2 - y1) * self.zoom_level) / 2.0
+                cr.translate(cx, cy)
+                cr.rotate(math.radians(rot))
+                cr.translate(-cx, -cy)
             layout = PangoCairo.create_layout(cr)
             font_family = f"{text_obj.font_family_base}, DejaVu Sans, FreeSans, sans-serif"
             font_desc = Pango.FontDescription.from_string(font_family)
@@ -1493,6 +1506,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 continue
             
             cr.save()
+            rot = getattr(shape, 'rotation', 0.0) % 360.0
+            if rot != 0.0:
+                cx = draw_x + draw_w / 2.0
+                cy = draw_y + draw_h / 2.0
+                cr.translate(cx, cy)
+                cr.rotate(math.radians(rot))
+                cr.translate(-cx, -cy)
             if not shape.is_transparent:
                 fill_r, fill_g, fill_b = shape.fill_color
                 cr.set_source_rgba(fill_r, fill_g, fill_b, 1.0)
@@ -1612,9 +1632,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 continue
             if stroke is self.dragged_object:
                 continue
-            if not stroke.points:
-                continue
             cr.save()
+            rot = getattr(stroke, 'rotation', 0.0) % 360.0
+            if rot != 0.0 and stroke.bbox:
+                sx1, sy1, sx2, sy2 = stroke.bbox
+                cx = page_offset_x + ((sx1 + sx2) / 2.0) * self.zoom_level
+                cy = page_offset_y + ((sy1 + sy2) / 2.0) * self.zoom_level
+                cr.translate(cx, cy)
+                cr.rotate(math.radians(rot))
+                cr.translate(-cx, -cy)
             r, g, b = stroke.stroke_color
             opacity = getattr(stroke, 'opacity', 1.0)
             cr.set_source_rgba(r, g, b, opacity)
@@ -1708,6 +1734,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             rect_h = (y2 - y1) * self.zoom_level + (2 * padding)
 
             cr.save()
+            rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
+            if rot != 0.0:
+                cx = rect_x + rect_w / 2.0
+                cy = rect_y + rect_h / 2.0
+                cr.translate(cx, cy)
+                cr.rotate(math.radians(rot))
+                cr.translate(-cx, -cy)
+
             cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.95)
             cr.set_line_width(2.5 if is_image else 2.0)
             if is_image:
@@ -1721,7 +1755,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.arc(rect_x + radius, rect_y + rect_h - radius, radius, 0.5 * math.pi, math.pi)
             cr.close_path()
             cr.stroke()
-            cr.restore()
 
             is_text = isinstance(selected_obj, EditableText)
             if not is_text:
@@ -1739,17 +1772,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     ("e", rect_x + rect_w, rect_y + rect_h / 2.0),            # right
                 ]
                 
-                cr.save()
-                cr.set_source_rgba(handle_color_rgba.red, handle_color_rgba.green, handle_color_rgba.blue, 1.0)
                 for handle_name, handle_x, handle_y in handles:
+                    cr.set_source_rgba(handle_color_rgba.red, handle_color_rgba.green, handle_color_rgba.blue, 1.0)
                     cr.rectangle(handle_x - handle_size / 2.0, handle_y - handle_size / 2.0, handle_size, handle_size)
                     cr.fill()
                     cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
                     cr.rectangle(handle_x - handle_size / 2.0, handle_y - handle_size / 2.0, handle_size, handle_size)
                     cr.set_line_width(1.0)
                     cr.stroke()
-                    cr.set_source_rgba(handle_color_rgba.red, handle_color_rgba.green, handle_color_rgba.blue, 1.0)
-                cr.restore()
+            cr.restore()
 
         if self.view_mode and self.view_sel_rect:
             sx1, sy1, sx2, sy2 = self.view_sel_rect
@@ -1772,9 +1803,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         for text_obj in reversed(self.editable_texts):
             if not text_obj.bbox: continue
             x1, y1, x2, y2 = text_obj.bbox
+            rot = getattr(text_obj, 'rotation', 0.0) % 360.0
+            px, py = page_x, page_y
+            if rot != 0.0:
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
             tolerance = 2 / self.zoom_level
-            if (x1 - tolerance) <= page_x <= (x2 + tolerance) and \
-               (y1 - tolerance) <= page_y <= (y2 + tolerance):
+            if (x1 - tolerance) <= px <= (x2 + tolerance) and \
+               (y1 - tolerance) <= py <= (y2 + tolerance):
                 return text_obj
         return None
 
@@ -1783,7 +1820,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         for img_obj in reversed(self.editable_images):
             if not img_obj.bbox: continue
             x1, y1, x2, y2 = img_obj.bbox
-            if x1 <= page_x <= x2 and y1 <= page_y <= y2:
+            rot = getattr(img_obj, 'rotation', 0.0) % 360.0
+            px, py = page_x, page_y
+            if rot != 0.0:
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
+            if x1 <= px <= x2 and y1 <= py <= y2:
                 return img_obj
         return None
 
@@ -1795,9 +1838,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if not shape_obj.bbox: 
                 continue
             x1, y1, x2, y2 = shape_obj.bbox
+            rot = getattr(shape_obj, 'rotation', 0.0) % 360.0
+            px, py = page_x, page_y
+            if rot != 0.0:
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
             tolerance = 3 / self.zoom_level
-            if (x1 - tolerance) <= page_x <= (x2 + tolerance) and \
-               (y1 - tolerance) <= page_y <= (y2 + tolerance):
+            if (x1 - tolerance) <= px <= (x2 + tolerance) and \
+               (y1 - tolerance) <= py <= (y2 + tolerance):
                 return shape_obj
         return None
 
@@ -1809,9 +1858,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if not stroke.bbox:
                 continue
             x1, y1, x2, y2 = stroke.bbox
+            rot = getattr(stroke, 'rotation', 0.0) % 360.0
+            px, py = page_x, page_y
+            if rot != 0.0:
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
             tolerance = max(stroke.stroke_width, 8.0) / self.zoom_level
-            if (x1 - tolerance) <= page_x <= (x2 + tolerance) and \
-               (y1 - tolerance) <= page_y <= (y2 + tolerance):
+            if (x1 - tolerance) <= px <= (x2 + tolerance) and \
+               (y1 - tolerance) <= py <= (y2 + tolerance):
                 return stroke
         return None
 
@@ -1846,6 +1901,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             ("w", rect_x, rect_y + rect_h / 2.0),
             ("e", rect_x + rect_w, rect_y + rect_h / 2.0),
         ]
+
+        rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
+        if rot != 0.0:
+            cx = rect_x + rect_w / 2.0
+            cy = rect_y + rect_h / 2.0
+            handles = [
+                (handle_name, *pdf_handler.rotate_point(hx, hy, cx, cy, rot))
+                for (handle_name, hx, hy) in handles
+            ]
         
         for handle_name, handle_x, handle_y in handles:
             if abs(drawn_x - handle_x) < handle_tolerance and abs(drawn_y - handle_y) < handle_tolerance:

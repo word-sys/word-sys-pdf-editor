@@ -26,7 +26,7 @@ BASE14_FALLBACK_MAP = {
 class EditableText:
     """The EditableText class."""
     def __init__(self, x, y, text, font_size=11, font_family="Liberation Sans",
-                 color=(0, 0, 0), span_data=None, is_new=False, baseline=None):
+                 color=(0, 0, 0), span_data=None, is_new=False, baseline=None, rotation=0.0):
         
         """Initialize the EditableText."""
         self.x = x
@@ -35,6 +35,7 @@ class EditableText:
         self.original_text = text if not is_new else ""
         self.font_size = float(font_size)
         self.is_new = is_new
+        self.rotation = float(rotation) % 360.0
 
         self.original_bbox = span_data.get("bbox") if span_data else None
 
@@ -182,6 +183,10 @@ class EditableText:
         self.drag_start_y = 0
         
         self.text_spans = []
+        
+    def set_rotation(self, angle):
+        """Set rotation in degrees (0-360)."""
+        self.rotation = float(angle) % 360.0
 
     @property
     def is_link(self):
@@ -233,7 +238,7 @@ class EditableText:
 
 class EditableImage:
     """The EditableImage class."""
-    def __init__(self, bbox, page_number, xref, image_bytes, is_new=False):
+    def __init__(self, bbox, page_number, xref, image_bytes, is_new=False, rotation=0.0):
         """Initialize the EditableImage."""
         self.bbox = bbox
         self.original_bbox = bbox
@@ -243,6 +248,11 @@ class EditableImage:
         self.is_new = is_new
         self.selected = False
         self.modified = False
+        self.rotation = float(rotation) % 360.0
+
+    def set_rotation(self, angle):
+        """Set rotation in degrees (0-360)."""
+        self.rotation = float(angle) % 360.0
 
 class EditableShape:
     """The EditableShape class."""
@@ -253,7 +263,7 @@ class EditableShape:
     SHAPE_CROSS = "cross"
     
     def __init__(self, shape_type, bbox, fill_color=(255, 255, 255), 
-                 stroke_color=(0, 0, 0), stroke_width=2.0, page_number=None, is_new=False, is_transparent=True):
+                 stroke_color=(0, 0, 0), stroke_width=2.0, page_number=None, is_new=False, is_transparent=True, rotation=0.0):
         """Initialize the EditableShape."""
         self.shape_type = shape_type
         self.bbox = bbox
@@ -267,6 +277,7 @@ class EditableShape:
         self.stroke_width = float(stroke_width)
         self.original_stroke_width = self.stroke_width
         self.is_transparent = is_transparent
+        self.rotation = float(rotation) % 360.0
         
         self.page_number = page_number
         self.is_new = is_new
@@ -301,6 +312,10 @@ class EditableShape:
         self.x = x
         self.y = y
 
+    def set_rotation(self, angle):
+        """Set rotation in degrees (0-360)."""
+        self.rotation = float(angle) % 360.0
+
     def get_checkmark_points(self):
         """Calculate vector vertex points for checkmark shape within its bounding box."""
         x1, y1, x2, y2 = self.bbox
@@ -328,7 +343,7 @@ class EditableStroke:
     TOOL_HIGHLIGHTER = "highlighter"
 
     def __init__(self, points=None, stroke_color=(0, 0, 0), stroke_width=2.0,
-                 opacity=1.0, tool_type="pen", page_number=None, is_new=True):
+                 opacity=1.0, tool_type="pen", page_number=None, is_new=True, rotation=0.0):
         """Initialize the EditableStroke."""
         self.points = list(points) if points else []
         self.stroke_color = normalize_color(stroke_color)
@@ -341,6 +356,7 @@ class EditableStroke:
         self.is_new = is_new
         self.selected = False
         self.modified = is_new
+        self.rotation = float(rotation) % 360.0
         self.dragging = False
         self.drag_start_x = 0
         self.drag_start_y = 0
@@ -411,6 +427,10 @@ class EditableStroke:
         dy = new_y - self.y
         self.points = [(px + dx, py + dy) for px, py in self.points]
         self.recalculate_bbox()
+
+    def set_rotation(self, angle):
+        """Set rotation in degrees (0-360)."""
+        self.rotation = float(angle) % 360.0
 
 class PdfPage(GObject.GObject):
     """The PdfPage class."""
