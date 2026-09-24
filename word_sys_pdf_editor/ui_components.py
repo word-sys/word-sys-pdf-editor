@@ -90,6 +90,14 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         drop_target.connect("drop", on_drop)
         box.add_controller(drop_target)
 
+        right_click = Gtk.GestureClick.new()
+        right_click.set_button(3)
+        def on_right_click(gesture, n_press, rx, ry, idx=page_index):
+            if self.editor_window and hasattr(self.editor_window, 'show_thumbnail_context_menu'):
+                self.editor_window.show_thumbnail_context_menu(box, rx, ry, idx)
+        right_click.connect("pressed", on_right_click)
+        box.add_controller(right_click)
+
 
 def show_error_dialog(parent_window, message, title="Error"):
     """Show a simple error modal dialog."""

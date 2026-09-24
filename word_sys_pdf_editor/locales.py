@@ -1914,3 +1914,49 @@ STRINGS_RU = {   'app_subtitle': 'Простой, быстрый и свобод
     'preset_slide_4_3': 'Слайд 4:3 (1024 × 768 pt)',
     'preset_square': 'Квадрат (1080 × 1080 pt)',
     'preset_custom': 'Пользовательский...'}
+
+STRINGS_FR.update({
+    'rotate_page_cw_tip': 'Pivoter la page de 90° sens horaire (Ctrl+Shift+R)',
+    'rotate_page_ccw_tip': 'Pivoter la page de 90° sens anti-horaire (Ctrl+Shift+L)',
+    'rotate_cw': 'Pivoter de 90° sens horaire',
+    'rotate_ccw': 'Pivoter de 90° sens anti-horaire',
+    'status_page_rotated_cw': 'Page {0} pivotée de 90° dans le sens horaire.',
+    'status_page_rotated_ccw': 'Page {0} pivotée de 90° dans le sens anti-horaire.',
+})
+
+STRINGS_DE.update({
+    'rotate_page_cw_tip': 'Seite um 90° im Uhrzeigersinn drehen (Strg+Umschalt+R)',
+    'rotate_page_ccw_tip': 'Seite um 90° gegen den Uhrzeigersinn drehen (Strg+Umschalt+L)',
+    'rotate_cw': '90° im Uhrzeigersinn drehen',
+    'rotate_ccw': '90° gegen den Uhrzeigersinn drehen',
+    'status_page_rotated_cw': 'Seite {0} um 90° im Uhrzeigersinn gedreht.',
+    'status_page_rotated_ccw': 'Seite {0} um 90° gegen den Uhrzeigersinn gedreht.',
+})
+
+STRINGS_ES.update({
+    'rotate_page_cw_tip': 'Girar página 90° en sentido horario (Ctrl+Shift+R)',
+    'rotate_page_ccw_tip': 'Girar página 90° en sentido antihorario (Ctrl+Shift+L)',
+    'rotate_cw': 'Girar 90° en sentido horario',
+    'rotate_ccw': 'Girar 90° en sentido antihorario',
+    'status_page_rotated_cw': 'Página {0} girada 90° en sentido horario.',
+    'status_page_rotated_ccw': 'Página {0} girada 90° en sentido antihorario.',
+})
+
+STRINGS_IT.update({
+    'rotate_page_cw_tip': 'Ruota pagina di 90° in senso orario (Ctrl+Shift+R)',
+    'rotate_page_ccw_tip': 'Ruota pagina di 90° in senso antiorario (Ctrl+Shift+L)',
+    'rotate_cw': 'Ruota di 90° in senso orario',
+    'rotate_ccw': 'Ruota di 90° in senso antiorario',
+    'status_page_rotated_cw': 'Pagina {0} ruotata di 90° in senso orario.',
+    'status_page_rotated_ccw': 'Pagina {0} ruotata di 90° in senso antiorario.',
+})
+
+STRINGS_RU.update({
+    'rotate_page_cw_tip': 'Повернуть страницу на 90° по часовой стрелке (Ctrl+Shift+R)',
+    'rotate_page_ccw_tip': 'Повернуть страницу на 90° против часовой стрелки (Ctrl+Shift+L)',
+    'rotate_cw': 'Повернуть на 90° по часовой',
+    'rotate_ccw': 'Повернуть на 90° против часовой',
+    'status_page_rotated_cw': 'Страница {0} повернута на 90° по часовой стрелке.',
+    'status_page_rotated_ccw': 'Страница {0} повернута на 90° против часовой стрелки.',
+})
+

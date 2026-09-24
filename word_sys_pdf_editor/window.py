@@ -368,6 +368,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         thumbnails_label.add_css_class('title-4')
         pages_header.append(thumbnails_label)
 
+        self.rotate_page_ccw_button = Gtk.Button.new_from_icon_name("object-rotate-left-symbolic")
+        self.rotate_page_ccw_button.set_tooltip_text(_("rotate_page_ccw_tip"))
+        self.rotate_page_ccw_button.connect('clicked', lambda b: self.rotate_current_page(-90))
+        self.rotate_page_ccw_button.add_css_class('flat')
+        pages_header.append(self.rotate_page_ccw_button)
+
+        self.rotate_page_cw_button = Gtk.Button.new_from_icon_name("object-rotate-right-symbolic")
+        self.rotate_page_cw_button.set_tooltip_text(_("rotate_page_cw_tip"))
+        self.rotate_page_cw_button.connect('clicked', lambda b: self.rotate_current_page(90))
+        self.rotate_page_cw_button.add_css_class('flat')
+        pages_header.append(self.rotate_page_cw_button)
+
         self.delete_page_button = Gtk.Button.new_from_icon_name("user-trash-symbolic")
         self.delete_page_button.set_tooltip_text(_("delete_page_tip"))
         self.delete_page_button.connect('clicked', self.on_delete_page)
@@ -684,6 +696,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             app.set_accels_for_action("win.redo", ["<Control>y", "<Control><Shift>z"])
             app.set_accels_for_action("win.print", ["<Control>p"])
             app.set_accels_for_action("win.quick_guide", ["F1"])
+            app.set_accels_for_action("win.rotate_page_cw", ["<Control><Shift>r"])
+            app.set_accels_for_action("win.rotate_page_ccw", ["<Control><Shift>l"])
+
+        action_rotate_cw = Gio.SimpleAction.new('rotate_page_cw', None)
+        action_rotate_cw.connect('activate', lambda a, p: self.rotate_current_page(90))
+        self.add_action(action_rotate_cw)
+
+        action_rotate_ccw = Gio.SimpleAction.new('rotate_page_ccw', None)
+        action_rotate_ccw.connect('activate', lambda a, p: self.rotate_current_page(-90))
+        self.add_action(action_rotate_ccw)
 
     def _update_ui_state(self):
         """Update UI state."""
@@ -724,8 +746,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, 'add_page_button'):
             self.add_page_button.set_sensitive(in_edit and has_doc)
 
+        if hasattr(self, 'rotate_page_cw_button'):
+            self.rotate_page_cw_button.set_sensitive(has_doc and has_pages)
+        if hasattr(self, 'rotate_page_ccw_button'):
+            self.rotate_page_ccw_button.set_sensitive(has_doc and has_pages)
+        if self.lookup_action("rotate_page_cw"):
+            self.lookup_action("rotate_page_cw").set_enabled(has_doc and has_pages)
+        if self.lookup_action("rotate_page_ccw"):
+            self.lookup_action("rotate_page_ccw").set_enabled(has_doc and has_pages)
+
         if hasattr(self, 'delete_page_button'):
-            self.delete_page_button.set_sensitive(in_edit and has_doc)
+            self.delete_page_button.set_sensitive(in_edit and has_doc and page_count > 1)
 
         if hasattr(self, 'symbols_button'):
             self.symbols_button.set_sensitive(in_edit and has_doc)
@@ -2619,6 +2650,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def on_delete_page(self, button):
         """Handle the delete page event."""
+        self._delete_page_at_index(self.current_page_index)
+
+    def _delete_page_at_index(self, page_to_delete):
+        """Delete the specified page index with confirmation."""
         if not self.doc:
             show_error_dialog(self, _("err_no_doc_open_msg"), _("err_no_doc_title"))
             return
@@ -2628,7 +2663,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             show_error_dialog(self, _("err_cannot_delete_last_page"), _("err_cannot_delete_last_page_title"))
             return
 
-        page_to_delete = self.current_page_index
         confirmed = show_confirm_dialog(
             self,
             _("delete_page_warn_msg", page_to_delete + 1),
@@ -2652,6 +2686,79 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._update_ui_state()
         else:
             show_error_dialog(self, message, _("err_delete_page_title"))
+
+    def rotate_current_page(self, angle_delta, page_index=None):
+        """Rotate the specified or current page by angle_delta degrees (+90 or -90)."""
+        if not self.doc:
+            return
+        target_idx = self.current_page_index if page_index is None else page_index
+        if not (0 <= target_idx < pdf_handler.get_page_count(self.doc)):
+            return
+        from .undo_manager import RotatePageCommand
+        cmd = RotatePageCommand(self, target_idx, angle_delta)
+        cmd.execute()
+        self.undo_manager.add_command(cmd)
+        msg_key = "status_page_rotated_cw" if angle_delta > 0 else "status_page_rotated_ccw"
+        self.status_label.set_text(_(msg_key, target_idx + 1))
+
+    def show_thumbnail_context_menu(self, parent_widget, x, y, page_index):
+        """Show context menu for a page thumbnail with rotation and deletion options."""
+        if not self.doc:
+            return
+
+        if hasattr(self, '_thumb_context_popover') and self._thumb_context_popover:
+            self._thumb_context_popover.popdown()
+            self._thumb_context_popover.unparent()
+            self._thumb_context_popover = None
+
+        popover = Gtk.Popover(autohide=True, has_arrow=True)
+        popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        popover_box.set_margin_start(6)
+        popover_box.set_margin_end(6)
+        popover_box.set_margin_top(6)
+        popover_box.set_margin_bottom(6)
+
+        btn_cw = Gtk.Button(label=_("rotate_cw"))
+        btn_cw.add_css_class("flat")
+        btn_cw.set_tooltip_text("Ctrl+Shift+R")
+        def on_cw(b):
+            popover.popdown()
+            self.rotate_current_page(90, page_index=page_index)
+        btn_cw.connect("clicked", on_cw)
+        popover_box.append(btn_cw)
+
+        btn_ccw = Gtk.Button(label=_("rotate_ccw"))
+        btn_ccw.add_css_class("flat")
+        btn_ccw.set_tooltip_text("Ctrl+Shift+L")
+        def on_ccw(b):
+            popover.popdown()
+            self.rotate_current_page(-90, page_index=page_index)
+        btn_ccw.connect("clicked", on_ccw)
+        popover_box.append(btn_ccw)
+
+        in_edit = not getattr(self, 'view_mode', False)
+        page_count = pdf_handler.get_page_count(self.doc) if self.doc else 0
+        if in_edit and page_count > 1:
+            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+            btn_del = Gtk.Button(label=_("delete_page_title"))
+            btn_del.add_css_class("flat")
+            btn_del.add_css_class("destructive-action")
+            def on_del(b):
+                popover.popdown()
+                self._delete_page_at_index(page_index)
+            btn_del.connect("clicked", on_del)
+            popover_box.append(btn_del)
+
+        popover.set_child(popover_box)
+        popover.set_parent(parent_widget)
+        rect = Gdk.Rectangle()
+        rect.x = int(x)
+        rect.y = int(y)
+        rect.width = 1
+        rect.height = 1
+        popover.set_pointing_to(rect)
+        self._thumb_context_popover = popover
+        popover.popup()
 
     def update_page_label(self):
         """Update page label."""

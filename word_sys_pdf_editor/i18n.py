@@ -378,6 +378,12 @@ _STRINGS = {
         "preset_slide_4_3": "Slide 4:3 (1024 × 768 pt)",
         "preset_square": "Square (1080 × 1080 pt)",
         "preset_custom": "Custom...",
+        "rotate_page_cw_tip": "Rotate Page 90° Clockwise (Ctrl+Shift+R)",
+        "rotate_page_ccw_tip": "Rotate Page 90° Counterclockwise (Ctrl+Shift+L)",
+        "rotate_cw": "Rotate 90° Clockwise",
+        "rotate_ccw": "Rotate 90° Counterclockwise",
+        "status_page_rotated_cw": "Page {0} rotated 90° clockwise.",
+        "status_page_rotated_ccw": "Page {0} rotated 90° counterclockwise.",
     },
 
     "tr": {
@@ -753,6 +759,12 @@ _STRINGS = {
         "preset_slide_4_3": "Slayt 4:3 (1024 × 768 pt)",
         "preset_square": "Kare (1080 × 1080 pt)",
         "preset_custom": "Özel...",
+        "rotate_page_cw_tip": "Sayfayı Saat Yönünde 90° Döndür (Ctrl+Shift+R)",
+        "rotate_page_ccw_tip": "Sayfayı Saat Yönünün Tersine 90° Döndür (Ctrl+Shift+L)",
+        "rotate_cw": "Saat Yönünde 90° Döndür",
+        "rotate_ccw": "Saat Yönünün Tersine 90° Döndür",
+        "status_page_rotated_cw": "Sayfa {0} saat yönünde 90° döndürüldü.",
+        "status_page_rotated_ccw": "Sayfa {0} saat yönünün tersine 90° döndürüldü.",
     },
 }
 
