@@ -519,3 +519,42 @@ class CompositeCommand(Command):
         """Undo the command."""
         for command in reversed(self.commands):
             command.undo()
+
+class RotatePageCommand(Command):
+    """Command to rotate a page 90 degrees clockwise or counterclockwise with undo/redo."""
+    def __init__(self, window, page_index: int, angle_delta: int):
+        super().__init__(window)
+        self.page_index = page_index
+        self.angle_delta = angle_delta
+
+    def execute(self):
+        """Rotate page by angle_delta degrees and update display."""
+        success, _res = pdf_handler.rotate_page(self.window.doc, self.page_index, self.angle_delta)
+        if success:
+            self._apply_rotation_ui()
+
+    def undo(self):
+        """Revert page rotation by -angle_delta degrees and update display."""
+        success, _res = pdf_handler.rotate_page(self.window.doc, self.page_index, -self.angle_delta)
+        if success:
+            self._apply_rotation_ui()
+
+    def _apply_rotation_ui(self):
+        self.window.document_modified = True
+        if hasattr(self.window, '_refresh_thumbnail'):
+            self.window._refresh_thumbnail(self.page_index)
+        if hasattr(self.window, 'current_page_index') and self.window.current_page_index == self.page_index:
+            try:
+                page = self.window.doc.load_page(self.page_index)
+                zoom = getattr(self.window, 'zoom_level', 1.0)
+                self.window.current_pdf_page_width = int(page.rect.width * zoom)
+                self.window.current_pdf_page_height = int(page.rect.height * zoom)
+                if hasattr(self.window, 'pdf_view'):
+                    self.window.pdf_view.set_content_width(self.window.current_pdf_page_width)
+                    self.window.pdf_view.set_content_height(self.window.current_pdf_page_height)
+            except Exception as e:
+                print(f"Warning updating page dimensions on rotation: {e}")
+            if hasattr(self.window, 'pdf_view'):
+                self.window.pdf_view.queue_draw()
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()

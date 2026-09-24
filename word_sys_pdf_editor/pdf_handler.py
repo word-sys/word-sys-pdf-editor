@@ -1509,6 +1509,30 @@ def delete_page(doc, page_index):
     except Exception as e:
         return False, _("err_deleting_page", e)
 
+def rotate_page(doc, page_index: int, angle_delta: int):
+    """Rotate the specified page by angle_delta degrees (e.g. 90 or -90)."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return False, _("err_invalid_page_index")
+    try:
+        page = doc.load_page(page_index)
+        cur_rot = getattr(page, 'rotation', 0) or 0
+        new_rot = (cur_rot + angle_delta) % 360
+        page.set_rotation(new_rot)
+        invalidate_page_cache(doc, page_index)
+        return True, new_rot
+    except Exception as e:
+        return False, str(e)
+
+def get_page_rotation(doc, page_index: int) -> int:
+    """Get the current rotation of the specified page in degrees."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return 0
+    try:
+        page = doc.load_page(page_index)
+        return getattr(page, 'rotation', 0) or 0
+    except Exception:
+        return 0
+
 def add_highlight_annotation(doc, page_index, rect_unzoomed, color=(1, 0.93, 0)):
     """Add highlight annotation."""
     if not doc or not (0 <= page_index < doc.page_count):
