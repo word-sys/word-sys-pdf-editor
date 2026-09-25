@@ -52,10 +52,14 @@ class Command:
                     or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', getattr(target_object, 'text', '')))
                 )
                 x0, y0, x1, y1 = orig_bbox
-                baseline = getattr(target_object, 'baseline', y1)
+                baseline = getattr(target_object, 'original_baseline', getattr(target_object, 'baseline', y1))
+                rot = getattr(target_object, 'rotation', 0.0)
+                cx = (x0 + x1) / 2.0
+                cy = (y0 + y1) / 2.0
+                mat = pdf_handler.get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
                 
                 if not is_underlined:
-                    strip_test = fitz.Rect(x0, baseline - 1.0, x1, baseline + 3.0)
+                    strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.0)
                     try:
                         for d in page.get_drawings():
                             d_rect = d.get('rect')
@@ -71,8 +75,11 @@ class Command:
                     lines = getattr(target_object, 'text', '').split('\n')
                     line_height = getattr(target_object, 'font_size', 12.0) * 1.2
                     for i in range(len(lines)):
-                        strip_rect = fitz.Rect(x0, baseline + (i * line_height) - 0.5, x1, baseline + (i * line_height) + 3.0)
-                        page.add_redact_annot(strip_rect)
+                        strip_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 4.0)
+                        if mat:
+                            page.add_redact_annot(strip_rect.quad * mat)
+                        else:
+                            page.add_redact_annot(strip_rect)
                     try:
                         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
                     except Exception:
@@ -197,10 +204,14 @@ class EditObjectCommand(Command):
                     or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', properties_to_clear.get('text', '')))
                 )
                 x0, y0, x1, y1 = orig_bbox
-                baseline = getattr(self.target_object, 'baseline', y1)
+                baseline = properties_to_clear.get('baseline', getattr(self.target_object, 'original_baseline', getattr(self.target_object, 'baseline', y1)))
+                rot = properties_to_clear.get('rotation', getattr(self.target_object, 'rotation', 0.0))
+                cx = (x0 + x1) / 2.0
+                cy = (y0 + y1) / 2.0
+                mat = pdf_handler.get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
                 
                 if not is_underlined:
-                    strip_test = fitz.Rect(x0, baseline - 1.0, x1, baseline + 3.0)
+                    strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.0)
                     try:
                         for d in page.get_drawings():
                             d_rect = d.get('rect')
@@ -215,10 +226,14 @@ class EditObjectCommand(Command):
                 if is_underlined:
                     text_val = properties_to_clear.get('text', getattr(self.target_object, 'text', ''))
                     lines = text_val.split('\n')
-                    line_height = getattr(self.target_object, 'font_size', 12.0) * 1.2
+                    font_sz = properties_to_clear.get('font_size', getattr(self.target_object, 'font_size', 12.0))
+                    line_height = font_sz * 1.2
                     for i in range(len(lines)):
-                        strip_rect = fitz.Rect(x0, baseline + (i * line_height) - 0.5, x1, baseline + (i * line_height) + 3.0)
-                        page.add_redact_annot(strip_rect)
+                        strip_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 4.0)
+                        if mat:
+                            page.add_redact_annot(strip_rect.quad * mat)
+                        else:
+                            page.add_redact_annot(strip_rect)
                     try:
                         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
                     except Exception:

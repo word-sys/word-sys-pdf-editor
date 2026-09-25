@@ -177,6 +177,7 @@ class EditableText:
         else: 
             self.baseline = float(self.y + (self.font_size * 0.9))
 
+        self.original_baseline = self.baseline
         self.page_number = page_number
         self.dragging = False
         self.drag_start_x = 0

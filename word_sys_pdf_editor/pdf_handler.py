@@ -447,6 +447,8 @@ def extract_editable_text(doc, page_index):
                             rotation=0.0
                         )
                         editable.bbox = tuple(bbox)
+                        editable.original_bbox = editable.bbox
+                        editable.original_baseline = editable.baseline
                         editable.page_number = page_index
                         if page_drawings:
                             for d in page_drawings:
@@ -1661,18 +1663,25 @@ def get_page_rotation(doc, page_index: int) -> int:
     except Exception:
         return 0
 
-def add_highlight_annotation(doc, page_index, rect_unzoomed, color=(1, 0.93, 0)):
+def add_highlight_annotation(doc, page_index, rect_unzoomed, color=(1, 0.93, 0), is_visual=False, rotation=0.0):
     """Add highlight annotation."""
     if not doc or not (0 <= page_index < doc.page_count):
         return False, "Invalid document or page index."
     try:
         page = doc.load_page(page_index)
         r = fitz.Rect(*rect_unzoomed)
-        if page.rotation % 360 != 0:
+        if is_visual and page.rotation % 360 != 0:
             r = (r * (~page.rotation_matrix)).normalize()
         if r.is_empty or not r.is_valid:
             return False, "Empty or invalid rect."
-        annot = page.add_highlight_annot(r)
+        rot = float(rotation) % 360.0
+        if rot != 0.0:
+            cx = (r.x0 + r.x1) / 2.0
+            cy = (r.y0 + r.y1) / 2.0
+            mat = get_rotation_matrix(cx, cy, rot)
+            annot = page.add_highlight_annot(quads=r.quad * mat)
+        else:
+            annot = page.add_highlight_annot(r)
         annot.set_colors(stroke=color)
         annot.update()
         invalidate_page_cache(doc, page_index)
@@ -1681,7 +1690,7 @@ def add_highlight_annotation(doc, page_index, rect_unzoomed, color=(1, 0.93, 0))
         traceback.print_exc()
         return False, f"Highlight annotation error: {e}"
 
-def remove_highlight_annotations(doc, page_index, rect_unzoomed=None):
+def remove_highlight_annotations(doc, page_index, rect_unzoomed=None, is_visual=False):
     """Remove highlight annotations."""
     if not doc or not (0 <= page_index < doc.page_count):
         return False, "Invalid document or page index."
@@ -1694,7 +1703,7 @@ def remove_highlight_annotations(doc, page_index, rect_unzoomed=None):
             target_rect = None
             if rect_unzoomed:
                 target_rect = fitz.Rect(*rect_unzoomed)
-                if page.rotation % 360 != 0:
+                if is_visual and page.rotation % 360 != 0:
                     target_rect = (target_rect * (~page.rotation_matrix)).normalize()
             
             for annot in annots:

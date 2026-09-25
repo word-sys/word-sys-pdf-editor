@@ -3996,6 +3996,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.dragged_object:
             if not hasattr(self.dragged_object, 'original_bbox') or not self.dragged_object.original_bbox:
                 self.dragged_object.original_bbox = self.dragged_object.bbox
+            if not hasattr(self.dragged_object, 'original_baseline') or self.dragged_object.original_baseline is None:
+                self.dragged_object.original_baseline = getattr(self.dragged_object, 'baseline', None)
 
             x1, y1, _, _ = self.dragged_object.bbox
             self.drag_object_start_pos = (x1, y1)
@@ -4560,8 +4562,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         color = (rgba.red, rgba.green, rgba.blue)
         
         target_rect = None
+        is_visual = False
+        rot = 0.0
         if self.view_mode and self.view_sel_rect:
             target_rect = self.view_sel_rect
+            is_visual = True
         elif not self.view_mode and self.selected_text and self.selected_text.bbox:
             if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char'):
                 text = self.selected_text.text
@@ -4571,13 +4576,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 target_rect = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
             else:
                 target_rect = self.selected_text.bbox
+            is_visual = False
+            rot = getattr(self.selected_text, 'rotation', 0.0)
             
         if not target_rect:
             return
             
         x1, y1, x2, y2 = target_rect
         success, err = pdf_handler.add_highlight_annotation(
-            self.doc, self.current_page_index, (x1, y1, x2, y2), color=color
+            self.doc, self.current_page_index, (x1, y1, x2, y2), color=color, is_visual=is_visual, rotation=rot
         )
         if success:
             pdf_handler.invalidate_page_cache(self.doc, self.current_page_index)
@@ -4595,8 +4602,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def on_remove_highlight_clicked(self, button):
         """Handle the remove highlight clicked event."""
         target_rect = None
+        is_visual = False
         if self.view_mode and self.view_sel_rect:
             target_rect = self.view_sel_rect
+            is_visual = True
         elif not self.view_mode and self.selected_text and self.selected_text.bbox:
             if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char'):
                 text = self.selected_text.text
@@ -4606,11 +4615,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 target_rect = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
             else:
                 target_rect = self.selected_text.bbox
+            is_visual = False
             
         if not target_rect:
             return
             
-        self._remove_highlight_at_region(target_rect)
+        self._remove_highlight_at_region(target_rect, is_visual=is_visual)
 
     def _extract_word_at_position(self, text, click_pos_in_text):
         """Extract word at position."""
@@ -5055,26 +5065,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
             self.status_label.set_text(_("object_deleted"))
 
-    def _remove_highlight_at_region(self, bbox):
+    def _remove_highlight_at_region(self, bbox, is_visual=False):
         """Remove highlight at region."""
         if not self.doc:
             return
         try:
-            page = self.doc.load_page(self.current_page_index)
-            x1, y1, x2, y2 = bbox
-            rect = fitz.Rect(x1, y1, x2, y2)
-            annots = page.annots()
-            removed_count = 0
-            if annots:
-                for annot in annots:
-                    annot_type = annot.type[0]
-                    if annot_type == 8:
-                        annot_rect = annot.rect
-                        if rect.intersects(annot_rect):
-                            page.delete_annot(annot)
-                            removed_count += 1
-            
-            if removed_count > 0:
+            success, removed_count = pdf_handler.remove_highlight_annotations(
+                self.doc, self.current_page_index, bbox, is_visual=is_visual
+            )
+            if success and removed_count > 0:
                 pdf_handler.invalidate_page_cache(self.doc, self.current_page_index)
                 self.document_modified = True
                 self._refresh_thumbnail(self.current_page_index)
