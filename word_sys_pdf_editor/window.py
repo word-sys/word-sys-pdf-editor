@@ -3811,7 +3811,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
 
         if self.resize_handle:
-            self._handle_resize_update(offset_x, offset_y)
+            if self.resize_handle == "rotate":
+                self._handle_rotate_update(gesture, offset_x, offset_y)
+            else:
+                self._handle_resize_update(offset_x, offset_y)
             return
         if self.tool_mode != "drag":
             gesture.set_state(Gtk.EventSequenceState.DENIED)
@@ -3857,6 +3860,48 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_shape = None
             self.selected_image = None
             self.selected_text = None
+
+        self.pdf_view.queue_draw()
+
+    def _handle_rotate_update(self, gesture, offset_x, offset_y):
+        """Handle dynamic rotation update while dragging the stalk rotation handle."""
+        if not self.dragged_object or not hasattr(self, 'rotate_center') or not hasattr(self, 'rotate_pointer_start_angle'):
+            return
+
+        current_x = self.drag_start_pos[0] + offset_x
+        current_y = self.drag_start_pos[1] + offset_y
+        cx, cy = self.rotate_center
+
+        cur_dx = current_x - cx
+        cur_dy = current_y - cy
+
+        if math.hypot(cur_dx, cur_dy) < 2.0:
+            return
+
+        cur_pointer_angle = math.degrees(math.atan2(cur_dy, cur_dx))
+        angle_delta = cur_pointer_angle - self.rotate_pointer_start_angle
+        new_rot = (self.rotate_start_angle + angle_delta) % 360.0
+
+        # Check Shift key modifier for 15-degree increment snapping
+        shift_pressed = False
+        try:
+            state = gesture.get_current_event_state()
+            shift_pressed = bool(state & Gdk.ModifierType.SHIFT_MASK)
+        except Exception:
+            pass
+
+        if shift_pressed:
+            new_rot = round(new_rot / 15.0) * 15.0 % 360.0
+        else:
+            new_rot = round(new_rot, 1) % 360.0
+
+        if hasattr(self.dragged_object, 'set_rotation'):
+            self.dragged_object.set_rotation(new_rot)
+        else:
+            self.dragged_object.rotation = new_rot
+
+        if hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(_("status_object_rotation", f"{new_rot:.1f}°"))
 
         self.pdf_view.queue_draw()
 
@@ -4025,6 +4070,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.dragged_object = None
             self.resize_handle = None
             self.resize_start_bbox = None
+            if hasattr(self, 'rotate_center'):
+                del self.rotate_center
+            if hasattr(self, 'rotate_start_angle'):
+                del self.rotate_start_angle
+            if hasattr(self, 'rotate_pointer_start_angle'):
+                del self.rotate_pointer_start_angle
             self.pdf_view.queue_draw()
             return
 
@@ -4039,8 +4090,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.resize_handle = None
         self.resize_start_bbox = None
         del self.drag_begin_state
+        if hasattr(self, 'rotate_center'):
+            del self.rotate_center
+        if hasattr(self, 'rotate_start_angle'):
+            del self.rotate_start_angle
+        if hasattr(self, 'rotate_pointer_start_angle'):
+            del self.rotate_pointer_start_angle
         
-        if abs(offset_x) < 1 and abs(offset_y) < 1:
+        rot_changed = (old_properties.get('rotation', 0.0) != new_properties.get('rotation', 0.0))
+        if abs(offset_x) < 1 and abs(offset_y) < 1 and not rot_changed:
             self.pdf_view.queue_draw()
             return
 
