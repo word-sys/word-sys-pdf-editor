@@ -18,7 +18,7 @@ _STRINGS = {
         "btn_paste": "Paste",
         "btn_paste_new": "Paste as New Text",
         "btn_dont_save": "Don't Save",
-        "recent_header": "<b>PDF Files on System</b>",
+        "recent_header": "<b>Recently Opened Files</b>",
         "tip_prefix": "Tip:",
         "tips": [
             "Tip: Double-click a text block to edit it.",
@@ -398,7 +398,7 @@ _STRINGS = {
         "btn_guide": "Hızlı Başlangıç Kılavuzu",
         "btn_cancel": "İptal",
         "btn_dont_save": "Kaydetme",
-        "recent_header": "<b>Sistemdeki PDF Dosyaları</b>",
+        "recent_header": "<b>Son Açılan Dosyalar</b>",
         "tip_prefix": "İpucu:",
         "tips": [
             "İpucu: Metin kutularını düzenlemek için üzerine çift tıklayabilirsiniz.",

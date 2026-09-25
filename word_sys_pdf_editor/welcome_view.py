@@ -7,7 +7,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gio, GLib, Gdk, Pango
 
 from . import constants
-from .i18n import _, get_language, set_language, get_supported_languages
+from .i18n import _, get_language, set_language, get_supported_languages, get_setting, set_setting
 
 
 class WelcomeView(Adw.Bin):
@@ -17,10 +17,8 @@ class WelcomeView(Adw.Bin):
         super().__init__(**kwargs)
         self.parent_window = parent_window
 
-        self.recent_manager = Gtk.RecentManager.get_default()
         self._build_ui()
         self._populate_recent_files()
-        self.recent_manager.connect("changed", self._populate_recent_files)
 
     def _build_ui(self):
         """Build widgets for the welcome screen layout."""
@@ -190,52 +188,80 @@ class WelcomeView(Adw.Bin):
         dialog.connect("response", on_response)
         dialog.present()
 
+    def refresh_recent_files(self):
+        """Public helper to refresh the recent files list."""
+        self._populate_recent_files()
+
     def _populate_recent_files(self, *args):
-        """Populate the list of recently opened PDF files."""
+        """Populate the list of recently opened PDF files from settings."""
         child = self.recent_list_box.get_first_child()
         while child:
             self.recent_list_box.remove(child)
             child = self.recent_list_box.get_first_child()
 
-        items = self.recent_manager.get_items()
-        pdf_files_found = 0
-        for item in items:
-            if item.get_mime_type() == "application/pdf":
-                row = self._create_recent_file_row(item)
-                self.recent_list_box.append(row)
-                pdf_files_found += 1
+        recent_files = get_setting("recent_opened_files", [])
+        if not isinstance(recent_files, list):
+            recent_files = []
 
-        self.recent_box.set_visible(pdf_files_found > 0)
+        valid_files = []
+        for file_path_str in recent_files:
+            if not file_path_str or not isinstance(file_path_str, str):
+                continue
+            p = Path(file_path_str)
+            if p.is_file():
+                valid_files.append(file_path_str)
 
-    def _create_recent_file_row(self, item):
-        """Create a list row widget for a recent file entry."""
+        if len(valid_files) != len(recent_files):
+            set_setting("recent_opened_files", valid_files)
+
+        displayed_count = 0
+        for file_path_str in valid_files[:15]:
+            row = self._create_recent_file_row(file_path_str)
+            self.recent_list_box.append(row)
+            displayed_count += 1
+
+        self.recent_box.set_visible(displayed_count > 0)
+
+    def _create_recent_file_row(self, file_path_str):
+        """Create a list row widget for a recent file entry with universal document icon."""
         row = Gtk.ListBoxRow()
-        row._uri = item.get_uri()
+        row._file_path = str(file_path_str)
+        try:
+            row._uri = Path(file_path_str).as_uri()
+        except Exception:
+            row._uri = ""
         row.set_activatable(True)
 
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12,
-                      margin_start=12, margin_end=12, margin_top=8, margin_bottom=8)
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=12,
+            margin_start=12,
+            margin_end=12,
+            margin_top=8,
+            margin_bottom=8,
+        )
 
-        display = Gdk.Display.get_default()
-        theme = Gtk.IconTheme.get_for_display(display) if display else None
-        if theme and theme.has_icon("application-pdf-symbolic"):
-            paintable = theme.lookup_icon("application-pdf-symbolic", None, 24, 1, Gtk.TextDirection.NONE, Gtk.IconLookupFlags.PRELOAD)
-            if paintable:
-                pic = Gtk.Picture.new_for_paintable(paintable)
-                pic.set_valign(Gtk.Align.CENTER)
-                box.append(pic)
+        icon = Gio.ThemedIcon.new_from_names([
+            "application-pdf-symbolic",
+            "x-office-document-symbolic",
+            "text-x-generic-symbolic",
+            "application-x-generic-symbolic",
+            "document-symbolic",
+        ])
+        icon_img = Gtk.Image.new_from_gicon(icon)
+        icon_img.set_pixel_size(28)
+        icon_img.set_valign(Gtk.Align.CENTER)
+        icon_img.add_css_class("accent")
+        box.append(icon_img)
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
-        title_lbl = Gtk.Label(label=item.get_display_name(), xalign=0.0, ellipsize=Pango.EllipsizeMode.END)
+        file_path = Path(file_path_str)
+        filename = file_path.name
+        title_lbl = Gtk.Label(label=filename, xalign=0.0, ellipsize=Pango.EllipsizeMode.END)
         title_lbl.add_css_class("heading")
         vbox.append(title_lbl)
 
-        try:
-            file_path = Path(item.get_uri_display())
-            subtitle_text = str(file_path.parent)
-        except Exception:
-            subtitle_text = item.get_uri_display()
-
+        subtitle_text = str(file_path.parent)
         subtitle_lbl = Gtk.Label(label=subtitle_text, xalign=0.0, ellipsize=Pango.EllipsizeMode.MIDDLE)
         subtitle_lbl.add_css_class("dim-label")
         subtitle_lbl.add_css_class("caption")
@@ -252,6 +278,10 @@ class WelcomeView(Adw.Bin):
 
     def _on_recent_row_activated(self, list_box, row):
         """Handle recent file row activation."""
-        if hasattr(row, '_uri') and self.parent_window:
+        if not self.parent_window:
+            return
+        if hasattr(row, '_file_path') and row._file_path:
+            self.parent_window.load_document(row._file_path)
+        elif hasattr(row, '_uri') and row._uri:
             gfile = Gio.File.new_for_uri(row._uri)
             self.parent_window.load_document(gfile.get_path())

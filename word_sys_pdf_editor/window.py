@@ -1018,11 +1018,32 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         about_dialog.present()
 
 
+    def _record_recent_file(self, filepath):
+        """Prepend filepath to recent_opened_files setting, deduplicate, and limit to 15."""
+        if not filepath:
+            return
+        try:
+            filepath_str = str(filepath)
+            norm_path = os.path.abspath(os.path.normpath(filepath_str))
+            recents = get_setting("recent_opened_files", [])
+            if not isinstance(recents, list):
+                recents = []
+            updated = [
+                p for p in recents
+                if isinstance(p, str) and os.path.abspath(os.path.normpath(p)) != norm_path
+            ]
+            updated.insert(0, norm_path)
+            updated = updated[:15]
+            set_setting("recent_opened_files", updated)
+        except Exception as e:
+            print(f"Warning: Failed to record recent file {filepath}: {e}")
+
     def load_document(self, filepath, target_page=0):
         """Load document."""
         if self.check_unsaved_changes():
             return
 
+        self._record_recent_file(filepath)
         self.close_document()
 
         self.status_label.set_text(_("loading").format(os.path.basename(filepath)))
@@ -1067,6 +1088,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.current_file_path = filepath
             self.original_file_path = filepath
             self.allow_incremental_save = True
+            self._record_recent_file(filepath)
             
             self.current_page_index = target_page 
             
