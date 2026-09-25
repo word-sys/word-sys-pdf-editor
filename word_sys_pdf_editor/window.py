@@ -1,5 +1,5 @@
 import copy
-from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand
+from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand
 from .i18n import _, get_language, get_setting, set_setting
 
 import gi
@@ -557,6 +557,41 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.toolbar_row2.append(self.stroke_toolbar_box)
         self.stroke_toolbar_box.set_visible(False)
 
+        self.rotation_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
+        self.toolbar_row2.append(self.rotation_toolbar_sep)
+        self.rotation_toolbar_sep.set_visible(False)
+
+        self.rotation_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+
+        self.rotate_obj_ccw_button = Gtk.Button.new_from_icon_name("object-rotate-left-symbolic")
+        self.rotate_obj_ccw_button.set_tooltip_text(_("rotate_obj_ccw_tip"))
+        self.rotate_obj_ccw_button.connect("clicked", self.on_rotate_object_ccw_clicked)
+        self.rotation_toolbar_box.append(self.rotate_obj_ccw_button)
+
+        self.rotate_obj_cw_button = Gtk.Button.new_from_icon_name("object-rotate-right-symbolic")
+        self.rotate_obj_cw_button.set_tooltip_text(_("rotate_obj_cw_tip"))
+        self.rotate_obj_cw_button.connect("clicked", self.on_rotate_object_cw_clicked)
+        self.rotation_toolbar_box.append(self.rotate_obj_cw_button)
+
+        rot_adj = Gtk.Adjustment.new(0.0, 0.0, 360.0, 1.0, 15.0, 0.0)
+        self.rotation_spin = Gtk.SpinButton(adjustment=rot_adj, climb_rate=1.0, digits=0)
+        self.rotation_spin.set_wrap(True)
+        self.rotation_spin.set_tooltip_text(_("rotation_angle_tip"))
+        self.rotation_spin.connect("value-changed", self.on_object_rotation_spin_changed)
+        self.rotation_toolbar_box.append(self.rotation_spin)
+
+        rot_deg_lbl = Gtk.Label(label="°")
+        rot_deg_lbl.add_css_class("dim-label")
+        self.rotation_toolbar_box.append(rot_deg_lbl)
+
+        self.rotate_obj_reset_button = Gtk.Button(label="0°")
+        self.rotate_obj_reset_button.set_tooltip_text(_("rotation_reset_tip"))
+        self.rotate_obj_reset_button.connect("clicked", self.on_rotate_object_reset_clicked)
+        self.rotation_toolbar_box.append(self.rotate_obj_reset_button)
+
+        self.toolbar_row2.append(self.rotation_toolbar_box)
+        self.rotation_toolbar_box.set_visible(False)
+
         self.view_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
         self.toolbar_row1.append(self.view_toolbar_sep)
         self.view_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -774,7 +809,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.toolbar_row2.set_visible(in_edit and has_doc)
 
         if hasattr(self, 'text_format_box'):
-            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active)
+            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active and self.selected_image is None)
             self.text_format_sep.set_visible(False)
 
         self.font_combo.set_sensitive(format_enabled_base and not self.font_scan_in_progress)
@@ -802,6 +837,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.stroke_color_button.set_sensitive(stroke_controls_active)
         if hasattr(self, 'stroke_width_spin'):
             self.stroke_width_spin.set_sensitive(stroke_controls_active)
+
+        selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
+        has_selected_obj = in_edit and (selected_obj is not None)
+
+        if hasattr(self, 'rotation_toolbar_box'):
+            self.rotation_toolbar_box.set_visible(has_selected_obj)
+            self.rotation_toolbar_sep.set_visible(has_selected_obj)
+            self.rotation_toolbar_box.set_sensitive(has_selected_obj)
+            self._update_rotation_controls(selected_obj)
 
         if hasattr(self, 'view_toolbar_box'):
             self.view_toolbar_box.set_visible(has_doc)
@@ -2159,6 +2203,89 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         finally:
             self.stroke_color_button.handler_unblock_by_func(self.on_stroke_format_changed)
             self.stroke_width_spin.handler_unblock_by_func(self.on_stroke_format_changed)
+
+    def _update_rotation_controls(self, selected_obj):
+        """Sync rotation spin button and reset button with selected object's rotation angle."""
+        if not hasattr(self, 'rotation_spin'):
+            return
+
+        self.rotation_spin.handler_block_by_func(self.on_object_rotation_spin_changed)
+        try:
+            if selected_obj:
+                rot = round(getattr(selected_obj, 'rotation', 0.0)) % 360
+                self.rotation_spin.set_value(rot)
+                if hasattr(self, 'rotate_obj_reset_button'):
+                    self.rotate_obj_reset_button.set_sensitive(rot != 0)
+                if hasattr(self, 'rotate_obj_cw_button'):
+                    self.rotate_obj_cw_button.set_sensitive(True)
+                if hasattr(self, 'rotate_obj_ccw_button'):
+                    self.rotate_obj_ccw_button.set_sensitive(True)
+            else:
+                self.rotation_spin.set_value(0)
+                if hasattr(self, 'rotate_obj_reset_button'):
+                    self.rotate_obj_reset_button.set_sensitive(False)
+                if hasattr(self, 'rotate_obj_cw_button'):
+                    self.rotate_obj_cw_button.set_sensitive(False)
+                if hasattr(self, 'rotate_obj_ccw_button'):
+                    self.rotate_obj_ccw_button.set_sensitive(False)
+        finally:
+            self.rotation_spin.handler_unblock_by_func(self.on_object_rotation_spin_changed)
+
+    def on_rotate_object_cw_clicked(self, button=None):
+        """Rotate the currently selected object 90 degrees clockwise."""
+        selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
+        if not selected_obj:
+            return
+
+        old_rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
+        new_rot = (old_rot + 90.0) % 360.0
+
+        command = RotateObjectCommand(self, selected_obj, old_rot, new_rot)
+        command.execute()
+        self.undo_manager.add_command(command)
+
+    def on_rotate_object_ccw_clicked(self, button=None):
+        """Rotate the currently selected object 90 degrees counterclockwise."""
+        selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
+        if not selected_obj:
+            return
+
+        old_rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
+        new_rot = (old_rot - 90.0) % 360.0
+
+        command = RotateObjectCommand(self, selected_obj, old_rot, new_rot)
+        command.execute()
+        self.undo_manager.add_command(command)
+
+    def on_rotate_object_reset_clicked(self, button=None):
+        """Reset rotation of selected object to 0 degrees."""
+        selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
+        if not selected_obj:
+            return
+
+        old_rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
+        if old_rot == 0.0:
+            return
+
+        command = RotateObjectCommand(self, selected_obj, old_rot, 0.0)
+        command.execute()
+        self.undo_manager.add_command(command)
+
+    def on_object_rotation_spin_changed(self, spin_button):
+        """Handle numeric spin button changes for object rotation."""
+        selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
+        if not selected_obj:
+            return
+
+        old_rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
+        new_rot = float(spin_button.get_value()) % 360.0
+
+        if abs(old_rot - new_rot) < 0.1:
+            return
+
+        command = RotateObjectCommand(self, selected_obj, old_rot, new_rot)
+        command.execute()
+        self.undo_manager.add_command(command)
 
     def _show_inline_editor(self, text_obj, click_x=None, click_y=None):
         """Show inline editor."""
@@ -3903,6 +4030,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, 'status_label') and self.status_label:
             self.status_label.set_text(_("status_object_rotation", f"{new_rot:.1f}°"))
 
+        if hasattr(self, '_update_rotation_controls'):
+            self._update_rotation_controls(self.dragged_object)
+
         self.pdf_view.queue_draw()
 
     def _handle_resize_update(self, offset_x, offset_y):
@@ -4102,11 +4232,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
             return
 
-        print(_("dbg_creating_drag_command"))
-        command = EditObjectCommand(self, dragged_obj_ref, old_properties, new_properties)
-        
-        command.execute()
-        self.undo_manager.add_command(command)
+        if rot_changed:
+            old_rot = old_properties.get('rotation', 0.0)
+            new_rot = new_properties.get('rotation', 0.0)
+            command = RotateObjectCommand(self, dragged_obj_ref, old_rot, new_rot)
+            command.execute()
+            self.undo_manager.add_command(command)
+        else:
+            print(_("dbg_creating_drag_command"))
+            command = EditObjectCommand(self, dragged_obj_ref, old_properties, new_properties)
+            command.execute()
+            self.undo_manager.add_command(command)
 
         if isinstance(dragged_obj_ref, EditableText):
             self.selected_text = dragged_obj_ref

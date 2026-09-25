@@ -558,3 +558,61 @@ class RotatePageCommand(Command):
                 self.window.pdf_view.queue_draw()
             if hasattr(self.window, '_update_ui_state'):
                 self.window._update_ui_state()
+
+class RotateObjectCommand(Command):
+    """Command to rotate an object (text, image, shape, stroke) with full undo/redo."""
+    def __init__(self, window, target_object, old_rotation: float, new_rotation: float):
+        super().__init__(window)
+        self.target_object = target_object
+        self.old_rotation = float(old_rotation) % 360.0
+        self.new_rotation = float(new_rotation) % 360.0
+
+    def _apply_rotation(self, angle: float):
+        """Bake the rotation into the PDF page and update live object and UI."""
+        if hasattr(self.target_object, 'set_rotation'):
+            self.target_object.set_rotation(angle)
+        else:
+            self.target_object.rotation = float(angle) % 360.0
+
+        page_num = getattr(self.target_object, 'page_number', None)
+        if page_num is not None and getattr(self.window, 'doc', None):
+            self._erase_ghost_if_needed(self.target_object, page_num)
+
+            strokes = getattr(self.window, 'editable_strokes', [])
+            pdf_handler.rebuild_page(
+                self.window.doc, page_num,
+                getattr(self.window, 'editable_texts', []),
+                getattr(self.window, 'editable_shapes', []),
+                getattr(self.window, 'editable_images', []),
+                exclude_obj=self.target_object,
+                all_strokes=strokes
+            )
+            success, msg = pdf_handler.apply_object_edit(self.window.doc, self.target_object)
+            if success:
+                self.target_object.is_baked = True
+                self.target_object._ghost_redacted = True
+                if hasattr(self.window, '_refresh_thumbnail'):
+                    self.window._refresh_thumbnail(page_num)
+            else:
+                from .ui_components import show_error_dialog
+                show_error_dialog(self.window, _("err_during_op", msg))
+
+        self.window.document_modified = True
+        if hasattr(self.window, '_update_rotation_controls'):
+            self.window._update_rotation_controls(self.target_object)
+        if hasattr(self.window, '_update_ui_state'):
+            self.window._update_ui_state()
+        if hasattr(self.window, 'pdf_view'):
+            self.window.pdf_view.queue_draw()
+
+    def execute(self):
+        """Apply new rotation angle."""
+        self._apply_rotation(self.new_rotation)
+        if hasattr(self.window, 'status_label') and self.window.status_label:
+            self.window.status_label.set_text(_("status_object_rotation", f"{self.new_rotation:.1f}°"))
+
+    def undo(self):
+        """Revert back to old rotation angle."""
+        self._apply_rotation(self.old_rotation)
+        if hasattr(self.window, 'status_label') and self.window.status_label:
+            self.window.status_label.set_text(_("status_object_rotation", f"{self.old_rotation:.1f}°"))
