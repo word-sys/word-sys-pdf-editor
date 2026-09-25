@@ -1756,6 +1756,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.close_path()
             cr.stroke()
 
+            # Stalk rotation handle
+            stalk_len = 22.0
+            stalk_x = rect_x + rect_w / 2.0
+            stalk_base_y = rect_y
+            stalk_tip_y = rect_y - stalk_len
+            rot_handle_r = 5.0
+
+            cr.save()
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.9)
+            cr.set_line_width(1.5)
+            cr.set_dash([])
+            cr.move_to(stalk_x, stalk_base_y)
+            cr.line_to(stalk_x, stalk_tip_y)
+            cr.stroke()
+
+            cr.arc(stalk_x, stalk_tip_y, rot_handle_r, 0, 2 * math.pi)
+            cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+            cr.fill_preserve()
+            cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 1.0)
+            cr.set_line_width(1.5)
+            cr.stroke()
+            cr.restore()
+
             is_text = isinstance(selected_obj, EditableText)
             if not is_text:
                 handle_size = 8.0
@@ -1871,11 +1894,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return None
 
     def _find_resize_handle_at_pos(self, drawn_x, drawn_y, selected_obj):
-        """Find resize handle at pos."""
+        """Find resize handle or rotation stalk handle at pos."""
         if not selected_obj or not selected_obj.bbox:
-            return None
-        
-        if isinstance(selected_obj, EditableText):
             return None
         
         x1, y1, x2, y2 = selected_obj.bbox
@@ -1887,6 +1907,24 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         rect_y = page_offset_y + (y1 * self.zoom_level) - padding
         rect_w = (x2 - x1) * self.zoom_level + (2 * padding)
         rect_h = (y2 - y1) * self.zoom_level + (2 * padding)
+
+        rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
+        cx = rect_x + rect_w / 2.0
+        cy = rect_y + rect_h / 2.0
+
+        # Check rotation stalk handle (available on all selectable objects)
+        stalk_len = 22.0
+        rot_hx = rect_x + rect_w / 2.0
+        rot_hy = rect_y - stalk_len
+        if rot != 0.0:
+            rot_hx, rot_hy = pdf_handler.rotate_point(rot_hx, rot_hy, cx, cy, rot)
+
+        rot_tolerance = 8.0
+        if math.hypot(drawn_x - rot_hx, drawn_y - rot_hy) <= rot_tolerance:
+            return "rotate"
+        
+        if isinstance(selected_obj, EditableText):
+            return None
         
         handle_size = 8.0
         handle_tolerance = 4.0 if getattr(self, 'tool_mode', None) in ("pen", "highlighter") else 4.5  
@@ -1902,10 +1940,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             ("e", rect_x + rect_w, rect_y + rect_h / 2.0),
         ]
 
-        rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
         if rot != 0.0:
-            cx = rect_x + rect_w / 2.0
-            cy = rect_y + rect_h / 2.0
             handles = [
                 (handle_name, *pdf_handler.rotate_point(hx, hy, cx, cy, rot))
                 for (handle_name, hx, hy) in handles
