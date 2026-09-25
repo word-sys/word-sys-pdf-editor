@@ -3,6 +3,10 @@
 # word-sys's PDF Editor
 <img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/word_sys_pdf_editor/img/f-pv1.svg" width="256" height="256"/>
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPLv3+-blue.svg)](LICENSE)
+[![GitHub All Releases](https://img.shields.io/github/downloads/word-sys/word-sys-pdf-editor/total)](https://github.com/word-sys/word-sys-pdf-editor/releases)
+
 **word-sys's PDF Editor** ist ein einfaches und benutzerfreundliches Werkzeug für Pardus, Debian und andere Linux-Distributionen, das auf das Bearbeiten von Text-, Bild- und Objektinhalten in PDF-Dateien spezialisiert ist. Entwickelt von Grund auf im Geiste von #MilliTeknolojiHamlesi und TEKNOFEST 2025, um den Bedarf an einem einfachen, freien und quelloffenen PDF-Editor im Linux-Ökosystem zu decken, richtet sich word-sys's PDF Editor sowohl an Unternehmen als auch an Privatanwender. Er erledigt die meisten wichtigen und gängigen Aufgaben kostenpflichtiger PDF-Editoren, bietet zahlreiche benutzerfreundliche Funktionen und wurde mit dem **1. PLATZ** beim TEKNOFEST 2025 Pardus-Entwicklungswettbewerb ausgezeichnet.
 
 Entwickler: **Barın Güzeldemirci (word-sys)**  
