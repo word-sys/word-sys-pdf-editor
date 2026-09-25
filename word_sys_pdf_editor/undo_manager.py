@@ -527,16 +527,73 @@ class RotatePageCommand(Command):
         self.page_index = page_index
         self.angle_delta = angle_delta
 
+    def _get_page_dims(self):
+        try:
+            page = self.window.doc.load_page(self.page_index)
+            return float(page.rect.width), float(page.rect.height)
+        except Exception:
+            return 595.0, 842.0
+
+    def _transform_objects(self, old_w: float, old_h: float, angle_delta: int):
+        """Rotate all objects on this page to match the new page orientation."""
+        from .pdf_handler import transform_point_page_rot, transform_bbox_page_rot
+
+        # 1. Texts
+        for t in getattr(self.window, 'editable_texts', []):
+            if getattr(t, 'page_number', -1) == self.page_index:
+                if t.bbox:
+                    new_bbox = transform_bbox_page_rot(t.bbox, old_w, old_h, angle_delta)
+                    t.bbox = new_bbox
+                    t.x = new_bbox[0]
+                    t.y = new_bbox[1]
+                    t.baseline = new_bbox[1] + (new_bbox[3] - new_bbox[1]) * 0.8
+                t.rotation = (getattr(t, 'rotation', 0.0) + angle_delta) % 360.0
+                if hasattr(t, 'original_bbox') and t.original_bbox:
+                    t.original_bbox = transform_bbox_page_rot(t.original_bbox, old_w, old_h, angle_delta)
+
+        # 2. Images
+        for img in getattr(self.window, 'editable_images', []):
+            if getattr(img, 'page_number', -1) == self.page_index:
+                if img.bbox:
+                    img.bbox = transform_bbox_page_rot(img.bbox, old_w, old_h, angle_delta)
+                img.rotation = (getattr(img, 'rotation', 0.0) + angle_delta) % 360.0
+                if hasattr(img, 'original_bbox') and img.original_bbox:
+                    img.original_bbox = transform_bbox_page_rot(img.original_bbox, old_w, old_h, angle_delta)
+
+        # 3. Shapes
+        for s in getattr(self.window, 'editable_shapes', []):
+            if getattr(s, 'page_number', -1) == self.page_index:
+                if s.bbox:
+                    s.bbox = transform_bbox_page_rot(s.bbox, old_w, old_h, angle_delta)
+                s.rotation = (getattr(s, 'rotation', 0.0) + angle_delta) % 360.0
+                if hasattr(s, 'original_bbox') and s.original_bbox:
+                    s.original_bbox = transform_bbox_page_rot(s.original_bbox, old_w, old_h, angle_delta)
+
+        # 4. Strokes
+        for st in getattr(self.window, 'editable_strokes', []):
+            if getattr(st, 'page_number', -1) == self.page_index:
+                if st.points:
+                    st.points = [transform_point_page_rot(px, py, old_w, old_h, angle_delta) for (px, py) in st.points]
+                if getattr(st, 'bbox', None):
+                    st.bbox = transform_bbox_page_rot(st.bbox, old_w, old_h, angle_delta)
+                st.rotation = (getattr(st, 'rotation', 0.0) + angle_delta) % 360.0
+                if hasattr(st, 'original_bbox') and st.original_bbox:
+                    st.original_bbox = transform_bbox_page_rot(st.original_bbox, old_w, old_h, angle_delta)
+
     def execute(self):
         """Rotate page by angle_delta degrees and update display."""
+        old_w, old_h = self._get_page_dims()
         success, _res = pdf_handler.rotate_page(self.window.doc, self.page_index, self.angle_delta)
         if success:
+            self._transform_objects(old_w, old_h, self.angle_delta)
             self._apply_rotation_ui()
 
     def undo(self):
         """Revert page rotation by -angle_delta degrees and update display."""
+        old_w, old_h = self._get_page_dims()
         success, _res = pdf_handler.rotate_page(self.window.doc, self.page_index, -self.angle_delta)
         if success:
+            self._transform_objects(old_w, old_h, -self.angle_delta)
             self._apply_rotation_ui()
 
     def _apply_rotation_ui(self):
@@ -554,6 +611,9 @@ class RotatePageCommand(Command):
                     self.window.pdf_view.set_content_height(self.window.current_pdf_page_height)
             except Exception as e:
                 print(f"Warning updating page dimensions on rotation: {e}")
+            if hasattr(self.window, '_update_rotation_controls'):
+                selected_obj = getattr(self.window, 'get_selected_object', lambda: None)()
+                self.window._update_rotation_controls(selected_obj)
             if hasattr(self.window, 'pdf_view'):
                 self.window.pdf_view.queue_draw()
             if hasattr(self.window, '_update_ui_state'):

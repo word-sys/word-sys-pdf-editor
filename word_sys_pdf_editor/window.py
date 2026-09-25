@@ -1493,6 +1493,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 continue
             x1, y1, x2, y2 = text_obj.bbox
             draw_x = page_offset_x + (x1 * self.zoom_level)
+            draw_y = page_offset_y + (y1 * self.zoom_level)
             cr.save()
             rot = getattr(text_obj, 'rotation', 0.0) % 360.0
             if rot != 0.0:

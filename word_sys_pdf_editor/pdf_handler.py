@@ -56,6 +56,31 @@ def get_rotation_matrix(cx, cy, angle_degrees):
     t2 = fitz.Matrix(1, 0, 0, 1, cx, cy)
     return t1 * rot * t2
 
+def transform_point_page_rot(x: float, y: float, w: float, h: float, angle_delta: int):
+    """Transform a point (x, y) on a page of dimensions (w, h) when rotated by angle_delta degrees."""
+    delta = angle_delta % 360
+    if delta == 90:
+        return h - y, x
+    elif delta == 180:
+        return w - x, h - y
+    elif delta == 270:
+        return y, w - x
+    return x, y
+
+def transform_bbox_page_rot(bbox, w: float, h: float, angle_delta: int):
+    """Transform bounding box (x1, y1, x2, y2) on a page of dimensions (w, h) when rotated by angle_delta degrees."""
+    if not bbox:
+        return bbox
+    x1, y1, x2, y2 = bbox
+    delta = angle_delta % 360
+    if delta == 90:
+        return (h - y2, x1, h - y1, x2)
+    elif delta == 180:
+        return (w - x2, h - y2, w - x1, h - y1)
+    elif delta == 270:
+        return (y1, w - x2, y2, w - x1)
+    return (x1, y1, x2, y2)
+
 def get_page_cairo_surface(doc, page_index, zoom_level):
     """Get or render cached Cairo ImageSurface for the given page and zoom level."""
     global _cairo_page_cache
@@ -334,6 +359,8 @@ def extract_editable_text(doc, page_index):
         return [], "Invalid document or page index for text extraction."
     try:
         page = doc.load_page(page_index)
+        page_rot = getattr(page, 'rotation', 0) or 0
+        rot_mat = page.rotation_matrix if page_rot % 360 != 0 else None
         text_dict = page.get_text("rawdict", flags=0)
 
         page_drawings = None
@@ -409,23 +436,35 @@ def extract_editable_text(doc, page_index):
                         span_data = first_span.copy()
                         span_data["bbox"] = tuple(bbox)
                         span_data["text"] = combined_text
+
+                        orig_origin = first_span.get("origin", (0, bbox[3]))
+                        if rot_mat:
+                            r = fitz.Rect(bbox) * rot_mat
+                            vis_bbox = [r.x0, r.y0, r.x1, r.y1]
+                            rot_pt = fitz.Point(orig_origin) * rot_mat
+                            baseline_val = rot_pt.y
+                        else:
+                            vis_bbox = bbox
+                            baseline_val = orig_origin[1]
                         
                         editable = EditableText(
-                            x=bbox[0], y=bbox[1], text=combined_text,
+                            x=vis_bbox[0], y=vis_bbox[1], text=combined_text,
                             font_size=first_span.get("size", 11) if first_span else 11,
                             font_family=first_span.get("font", "Liberation Sans") if first_span else "Liberation Sans",
                             color=first_span.get("color", 0) if first_span else 0,
                             span_data=span_data,
-                            baseline=first_span.get("origin", (0, bbox[3]))[1] if first_span else bbox[3]
+                            baseline=baseline_val,
+                            rotation=float(page_rot % 360)
                         )
+                        editable.bbox = tuple(vis_bbox)
                         editable.page_number = page_index
                         if page_drawings:
                             for d in page_drawings:
-                                if _is_underline_drawing(d, [(bbox[0], bbox[2], editable.baseline)]):
+                                if _is_underline_drawing(d, [(bbox[0], bbox[2], orig_origin[1])]):
                                     editable.is_underline = True
                                     break
                         editable_texts.append(editable)
-                        print(f"DEBUG: Extracted text segment: '{combined_text}' font='{editable.font_family_base}' color={editable.color} bbox={bbox}")
+                        print(f"DEBUG: Extracted text segment: '{combined_text}' font='{editable.font_family_base}' color={editable.color} bbox={editable.bbox}")
         
         print(f"DEBUG: Total text objects extracted from page {page_index}: {len(editable_texts)}")
         return editable_texts, None
@@ -849,6 +888,8 @@ def extract_editable_images(doc, page_index):
     
     try:
         page = doc.load_page(page_index)
+        page_rot = getattr(page, 'rotation', 0) or 0
+        rot_mat = page.rotation_matrix if page_rot % 360 != 0 else None
         image_info_list = page.get_image_info(xrefs=True)
         
         if not image_info_list:
@@ -866,6 +907,8 @@ def extract_editable_images(doc, page_index):
                 rect = fitz.Rect(bbox)
                 if rect.is_empty or not rect.is_valid:
                     continue
+                if rot_mat:
+                    rect = rect * rot_mat
  
                 try:
                     image_bytes = get_image_rgba_bytes(doc, xref)
@@ -874,10 +917,11 @@ def extract_editable_images(doc, page_index):
                         continue
                     
                     image_obj = EditableImage(
-                        bbox=bbox,
+                        bbox=(rect.x0, rect.y0, rect.x1, rect.y1),
                         page_number=page_index,
                         xref=xref,
-                        image_bytes=image_bytes
+                        image_bytes=image_bytes,
+                        rotation=float(page_rot % 360)
                     )
                     editable_images.append(image_obj)
                 except Exception as extract_error:
@@ -1000,6 +1044,8 @@ def extract_editable_shapes(doc, page_index):
         return [], "Invalid document or page index for shape extraction."
     try:
         page = doc.load_page(page_index)
+        page_rot = getattr(page, 'rotation', 0) or 0
+        rot_mat = page.rotation_matrix if page_rot % 360 != 0 else None
         drawings = page.get_drawings()
         baselines = _get_page_text_baselines(page)
         for drawing in drawings:
@@ -1022,6 +1068,8 @@ def extract_editable_shapes(doc, page_index):
                 if len(items) == 1 and items[0][0] == 're':
                     r = fitz.Rect(items[0][1])
                     if r.width >= 2 and r.height >= 2:
+                        if rot_mat:
+                            r = r * rot_mat
                         shape_obj = EditableShape(
                             shape_type=EditableShape.SHAPE_RECTANGLE,
                             bbox=(r.x0, r.y0, r.x1, r.y1),
@@ -1030,7 +1078,8 @@ def extract_editable_shapes(doc, page_index):
                             stroke_width=stroke_width,
                             page_number=page_index,
                             is_new=False,
-                            is_transparent=is_transparent
+                            is_transparent=is_transparent,
+                            rotation=float(page_rot % 360)
                         )
                         shape_obj.is_baked = True
                         editable_shapes.append(shape_obj)
@@ -1042,6 +1091,8 @@ def extract_editable_shapes(doc, page_index):
                     if rect:
                         r = fitz.Rect(rect)
                         if r.width >= 2 and r.height >= 2:
+                            if rot_mat:
+                                r = r * rot_mat
                             shape_obj = EditableShape(
                                 shape_type=EditableShape.SHAPE_ELLIPSE,
                                 bbox=(r.x0, r.y0, r.x1, r.y1),
@@ -1050,7 +1101,8 @@ def extract_editable_shapes(doc, page_index):
                                 stroke_width=stroke_width,
                                 page_number=page_index,
                                 is_new=False,
-                                is_transparent=is_transparent
+                                is_transparent=is_transparent,
+                                rotation=float(page_rot % 360)
                             )
                             shape_obj.is_baked = True
                             editable_shapes.append(shape_obj)
@@ -1062,6 +1114,8 @@ def extract_editable_shapes(doc, page_index):
                     if rect:
                         r = fitz.Rect(rect)
                         if r.width >= 2 and r.height >= 2:
+                            if rot_mat:
+                                r = r * rot_mat
                             shape_obj = EditableShape(
                                 shape_type=EditableShape.SHAPE_RECTANGLE,
                                 bbox=(r.x0, r.y0, r.x1, r.y1),
@@ -1070,7 +1124,8 @@ def extract_editable_shapes(doc, page_index):
                                 stroke_width=stroke_width,
                                 page_number=page_index,
                                 is_new=False,
-                                is_transparent=False
+                                is_transparent=False,
+                                rotation=float(page_rot % 360)
                             )
                             shape_obj.is_baked = True
                             editable_shapes.append(shape_obj)
@@ -1093,6 +1148,8 @@ def extract_editable_strokes(doc, page_index):
         return [], "Invalid document or page index for stroke extraction."
     try:
         page = doc.load_page(page_index)
+        page_rot = getattr(page, 'rotation', 0) or 0
+        rot_mat = page.rotation_matrix if page_rot % 360 != 0 else None
         drawings = page.get_drawings()
         baselines = _get_page_text_baselines(page)
         for drawing in drawings:
@@ -1129,6 +1186,8 @@ def extract_editable_strokes(doc, page_index):
                         pts.append((p4.x, p4.y))
 
                 if pts and len(pts) >= 1:
+                    if rot_mat:
+                        pts = [(p.x, p.y) for p in (fitz.Point(pt) * rot_mat for pt in pts)]
                     stroke_width = float(raw_width) if raw_width else 2.0
                     is_hl = (stroke_width >= 8.0) or (raw_opacity is not None and raw_opacity < 0.9)
                     tool_type = EditableStroke.TOOL_HIGHLIGHTER if is_hl else EditableStroke.TOOL_PEN
@@ -1142,7 +1201,8 @@ def extract_editable_strokes(doc, page_index):
                         opacity=opacity,
                         tool_type=tool_type,
                         page_number=page_index,
-                        is_new=False
+                        is_new=False,
+                        rotation=float(page_rot % 360)
                     )
                     stroke_obj.is_baked = True
                     editable_strokes.append(stroke_obj)
@@ -1235,6 +1295,9 @@ def release_page_snapshots(doc):
 def _apply_single_object_to_page(doc, page, obj):
     """Apply single object to page."""
     rot = getattr(obj, "rotation", 0.0) % 360.0
+    page_rot = getattr(page, 'rotation', 0) or 0
+    inv_mat = (~page.rotation_matrix) if page_rot % 360 != 0 else None
+    net_rot = (rot - page_rot) % 360.0
 
     if isinstance(obj, EditableText):
         if obj.text:
@@ -1259,7 +1322,8 @@ def _apply_single_object_to_page(doc, page, obj):
 
             cx = (obj.bbox[0] + obj.bbox[2]) / 2.0 if obj.bbox else obj.x
             cy = (obj.bbox[1] + obj.bbox[3]) / 2.0 if obj.bbox else obj.y
-            morph = (fitz.Point(cx, cy), fitz.Matrix(rot)) if rot != 0.0 else None
+            unrot_center = fitz.Point(cx, cy) * inv_mat if inv_mat else fitz.Point(cx, cy)
+            morph = (unrot_center, fitz.Matrix(-net_rot)) if net_rot != 0.0 else None
             mat = get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
 
             for i, line in enumerate(lines):
@@ -1267,7 +1331,8 @@ def _apply_single_object_to_page(doc, page, obj):
                 
                 if not links:
                     pos = fitz.Point(obj.x, obj.baseline + (i * line_height))
-                    page.insert_text(pos, line, fontsize=obj.font_size,
+                    unrot_pos = pos * inv_mat if inv_mat else pos
+                    page.insert_text(unrot_pos, line, fontsize=obj.font_size,
                                      color=obj.color, overlay=True, morph=morph, **font_arg)
                     
                     if font_obj:
@@ -1284,6 +1349,9 @@ def _apply_single_object_to_page(doc, page, obj):
                         if mat:
                             p1 = p1 * mat
                             p2 = p2 * mat
+                        if inv_mat:
+                            p1 = p1 * inv_mat
+                            p2 = p2 * inv_mat
                         page.draw_line(p1, p2, color=obj.color, width=0.8)
                 else:
                     segments = []
@@ -1304,7 +1372,8 @@ def _apply_single_object_to_page(doc, page, obj):
                         
                         seg_color = (0.0, 0.33, 0.8) if is_seg_link else obj.color
                         pos = fitz.Point(current_x, obj.baseline + (i * line_height))
-                        page.insert_text(pos, seg_text, fontsize=obj.font_size,
+                        unrot_pos = pos * inv_mat if inv_mat else pos
+                        page.insert_text(unrot_pos, seg_text, fontsize=obj.font_size,
                                          color=seg_color, overlay=True, morph=morph, **font_arg)
                         
                         if font_obj:
@@ -1321,6 +1390,9 @@ def _apply_single_object_to_page(doc, page, obj):
                             if mat:
                                 p1 = p1 * mat
                                 p2 = p2 * mat
+                            if inv_mat:
+                                p1 = p1 * inv_mat
+                                p2 = p2 * inv_mat
                             page.draw_line(p1, p2, color=seg_color, width=0.8)
                             
                         if is_seg_link:
@@ -1332,55 +1404,61 @@ def _apply_single_object_to_page(doc, page, obj):
                             if not uri.startswith(("http://", "https://")):
                                 uri = "https://" + uri
                                 
-                            link_data = {"kind": fitz.LINK_URI, "from": link_rect.quad * mat if mat else link_rect, "uri": uri}
+                            link_from = link_rect.quad * mat if mat else link_rect.quad
+                            if inv_mat:
+                                link_from = link_from * inv_mat
+                            link_data = {"kind": fitz.LINK_URI, "from": link_from, "uri": uri}
                             page.insert_link(link_data)
                             
                         current_x += seg_len
                         
     elif isinstance(obj, EditableImage):
-        if rot == 0.0:
-            page.insert_image(obj.bbox, stream=obj.image_bytes, keep_proportion=False)
-        elif rot % 90 == 0:
-            page.insert_image(obj.bbox, stream=obj.image_bytes, rotate=int(rot), keep_proportion=False)
+        vis_rect = fitz.Rect(obj.bbox)
+        unrot_rect = vis_rect * inv_mat if inv_mat else vis_rect
+        if net_rot == 0.0:
+            page.insert_image(unrot_rect, stream=obj.image_bytes, keep_proportion=False)
+        elif net_rot % 90 == 0:
+            page.insert_image(unrot_rect, stream=obj.image_bytes, rotate=int(net_rot), keep_proportion=False)
         else:
             try:
                 from PIL import Image
                 im = Image.open(io.BytesIO(obj.image_bytes))
-                rotated_im = im.rotate(-rot, expand=True, resample=Image.BICUBIC)
+                rotated_im = im.rotate(-net_rot, expand=True, resample=Image.BICUBIC)
                 buf = io.BytesIO()
                 rotated_im.save(buf, format="PNG")
                 stream = buf.getvalue()
-                cx = (obj.bbox[0] + obj.bbox[2]) / 2.0
-                cy = (obj.bbox[1] + obj.bbox[3]) / 2.0
-                w = obj.bbox[2] - obj.bbox[0]
-                h = obj.bbox[3] - obj.bbox[1]
-                rad = math.radians(rot)
+                cx = (unrot_rect.x0 + unrot_rect.x1) / 2.0
+                cy = (unrot_rect.y0 + unrot_rect.y1) / 2.0
+                w = unrot_rect.x1 - unrot_rect.x0
+                h = unrot_rect.y1 - unrot_rect.y0
+                rad = math.radians(net_rot)
                 nw = abs(w * math.cos(rad)) + abs(h * math.sin(rad))
                 nh = abs(w * math.sin(rad)) + abs(h * math.cos(rad))
                 rot_rect = fitz.Rect(cx - nw / 2.0, cy - nh / 2.0, cx + nw / 2.0, cy + nh / 2.0)
                 page.insert_image(rot_rect, stream=stream, keep_proportion=False)
             except Exception:
-                page.insert_image(obj.bbox, stream=obj.image_bytes, keep_proportion=False)
+                page.insert_image(unrot_rect, stream=obj.image_bytes, keep_proportion=False)
     elif isinstance(obj, EditableShape):
-        rect = fitz.Rect(obj.bbox)
+        vis_rect = fitz.Rect(obj.bbox)
+        unrot_rect = vis_rect * inv_mat if inv_mat else vis_rect
         shape = page.new_shape()
         stroke = tuple(float(c) for c in obj.stroke_color)
         fill = tuple(float(c) for c in obj.fill_color) if not obj.is_transparent else None
-        cx = (rect.x0 + rect.x1) / 2.0
-        cy = (rect.y0 + rect.y1) / 2.0
-        mat = get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
+        cx = (unrot_rect.x0 + unrot_rect.x1) / 2.0
+        cy = (unrot_rect.y0 + unrot_rect.y1) / 2.0
+        mat = get_rotation_matrix(cx, cy, net_rot) if net_rot != 0.0 else None
 
         if obj.shape_type == EditableShape.SHAPE_RECTANGLE:
             if mat:
-                shape.draw_quad(rect.quad * mat)
+                shape.draw_quad(unrot_rect.quad * mat)
             else:
-                shape.draw_rect(rect)
+                shape.draw_rect(unrot_rect)
             shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
         elif obj.shape_type == EditableShape.SHAPE_ELLIPSE:
             if mat:
                 k = 0.5522847498307935
-                rx = (rect.x1 - rect.x0) / 2.0
-                ry = (rect.y1 - rect.y0) / 2.0
+                rx = (unrot_rect.x1 - unrot_rect.x0) / 2.0
+                ry = (unrot_rect.y1 - unrot_rect.y0) / 2.0
                 beziers = [
                     (fitz.Point(cx + rx, cy), fitz.Point(cx + rx, cy - k * ry), fitz.Point(cx + k * rx, cy - ry), fitz.Point(cx, cy - ry)),
                     (fitz.Point(cx, cy - ry), fitz.Point(cx - k * rx, cy - ry), fitz.Point(cx - rx, cy - k * ry), fitz.Point(cx - rx, cy)),
@@ -1390,37 +1468,40 @@ def _apply_single_object_to_page(doc, page, obj):
                 for p0, c1, c2, p1 in beziers:
                     shape.draw_bezier(p0 * mat, c1 * mat, c2 * mat, p1 * mat)
             else:
-                shape.draw_oval(rect)
+                shape.draw_oval(unrot_rect)
             shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
         elif obj.shape_type == EditableShape.SHAPE_CHECKMARK:
             pts = obj.get_checkmark_points()
-            fitz_pts = [fitz.Point(p[0], p[1]) * mat if mat else fitz.Point(p[0], p[1]) for p in pts]
+            unrot_pts = [fitz.Point(p[0], p[1]) * inv_mat if inv_mat else fitz.Point(p[0], p[1]) for p in pts]
+            fitz_pts = [p * mat if mat else p for p in unrot_pts]
             shape.draw_polyline(fitz_pts)
             shape.finish(color=stroke, fill=None, width=obj.stroke_width, lineCap=1, lineJoin=1, closePath=False)
         elif obj.shape_type == EditableShape.SHAPE_CROSS:
             lines = obj.get_cross_lines()
             for (p1, p2) in lines:
-                pt1 = fitz.Point(p1[0], p1[1]) * mat if mat else fitz.Point(p1[0], p1[1])
-                pt2 = fitz.Point(p2[0], p2[1]) * mat if mat else fitz.Point(p2[0], p2[1])
+                pt1 = fitz.Point(p1[0], p1[1]) * inv_mat if inv_mat else fitz.Point(p1[0], p1[1])
+                pt2 = fitz.Point(p2[0], p2[1]) * inv_mat if inv_mat else fitz.Point(p2[0], p2[1])
+                pt1 = pt1 * mat if mat else pt1
+                pt2 = pt2 * mat if mat else pt2
                 shape.draw_line(pt1, pt2)
             shape.finish(color=stroke, fill=None, width=obj.stroke_width, lineCap=1, lineJoin=1, closePath=False)
         else:
             if mat:
-                shape.draw_quad(rect.quad * mat)
+                shape.draw_quad(unrot_rect.quad * mat)
             else:
-                shape.draw_rect(rect)
+                shape.draw_rect(unrot_rect)
             shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
         shape.commit()
     elif isinstance(obj, EditableStroke):
         if obj.points and len(obj.points) >= 2:
             shape = page.new_shape()
-            if rot != 0.0 and obj.bbox:
-                cx = (obj.bbox[0] + obj.bbox[2]) / 2.0
-                cy = (obj.bbox[1] + obj.bbox[3]) / 2.0
-                mat = get_rotation_matrix(cx, cy, rot)
-                pts = [fitz.Point(p[0], p[1]) * mat for p in obj.points]
-            else:
-                pts = [fitz.Point(p[0], p[1]) for p in obj.points]
+            pts = [fitz.Point(p[0], p[1]) * inv_mat if inv_mat else fitz.Point(p[0], p[1]) for p in obj.points]
+            if net_rot != 0.0 and obj.bbox:
+                unrot_bbox = fitz.Rect(obj.bbox) * inv_mat if inv_mat else fitz.Rect(obj.bbox)
+                cx = (unrot_bbox.x0 + unrot_bbox.x1) / 2.0
+                cy = (unrot_bbox.y0 + unrot_bbox.y1) / 2.0
+                mat = get_rotation_matrix(cx, cy, net_rot)
+                pts = [p * mat for p in pts]
             shape.draw_polyline(pts)
             stroke = tuple(float(c) for c in obj.stroke_color)
             is_hl = getattr(obj, 'tool_type', None) in (EditableStroke.TOOL_HIGHLIGHTER, "highlighter") or obj.stroke_width >= 8.0
@@ -1436,13 +1517,15 @@ def _apply_single_object_to_page(doc, page, obj):
             )
             shape.commit()
         elif obj.points and len(obj.points) == 1:
-            p = obj.points[0]
-            if rot != 0.0 and obj.bbox:
-                cx = (obj.bbox[0] + obj.bbox[2]) / 2.0
-                cy = (obj.bbox[1] + obj.bbox[3]) / 2.0
-                p = rotate_point(p[0], p[1], cx, cy, rot)
+            p = fitz.Point(obj.points[0][0], obj.points[0][1]) * inv_mat if inv_mat else fitz.Point(obj.points[0][0], obj.points[0][1])
+            if net_rot != 0.0 and obj.bbox:
+                unrot_bbox = fitz.Rect(obj.bbox) * inv_mat if inv_mat else fitz.Rect(obj.bbox)
+                cx = (unrot_bbox.x0 + unrot_bbox.x1) / 2.0
+                cy = (unrot_bbox.y0 + unrot_bbox.y1) / 2.0
+                nx, ny = rotate_point(p.x, p.y, cx, cy, net_rot)
+                p = fitz.Point(nx, ny)
             r = max(obj.stroke_width / 2.0, 1.0)
-            rect = fitz.Rect(p[0] - r, p[1] - r, p[0] + r, p[1] + r)
+            rect = fitz.Rect(p.x - r, p.y - r, p.x + r, p.y + r)
             shape = page.new_shape()
             is_hl = getattr(obj, 'tool_type', None) in (EditableStroke.TOOL_HIGHLIGHTER, "highlighter") or obj.stroke_width >= 8.0
             if is_hl:

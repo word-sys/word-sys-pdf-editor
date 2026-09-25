@@ -26,7 +26,7 @@ BASE14_FALLBACK_MAP = {
 class EditableText:
     """The EditableText class."""
     def __init__(self, x, y, text, font_size=11, font_family="Liberation Sans",
-                 color=(0, 0, 0), span_data=None, is_new=False, baseline=None, rotation=0.0):
+                 color=(0, 0, 0), span_data=None, is_new=False, baseline=None, rotation=0.0, page_number=None):
         
         """Initialize the EditableText."""
         self.x = x
@@ -177,7 +177,7 @@ class EditableText:
         else: 
             self.baseline = float(self.y + (self.font_size * 0.9))
 
-        self.page_number = None 
+        self.page_number = page_number
         self.dragging = False
         self.drag_start_x = 0
         self.drag_start_y = 0
