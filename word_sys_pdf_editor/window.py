@@ -2588,9 +2588,44 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             else:
                 self.status_label.set_text(_("print_cancelled"))
 
+    def _update_cursor_for_tool(self):
+        """Restore cursor based on active tool mode."""
+        if getattr(self, 'view_mode', False):
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
+        elif self.tool_mode == "select":
+            self.pdf_view.set_cursor(None)
+        elif self.tool_mode in ("add_text", "add_ellipse", "add_rectangle", "add_checkmark", "add_cross", "pen", "highlighter"):
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "add_image":
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("cell"))
+        elif self.tool_mode == "drag":
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("move"))
+        else:
+            self.pdf_view.set_cursor(None)
+
     def _on_pointer_motion(self, controller, x, y):
-        """Track last pointer position on pdf_view for focal zoom."""
+        """Track last pointer position on pdf_view for focal zoom and update handle cursor."""
         self._last_pointer_pos = (x, y)
+        if not getattr(self, 'view_mode', False) and not getattr(self, 'dragged_object', None):
+            selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
+            if selected_obj:
+                handle = self._find_resize_handle_at_pos(x, y, selected_obj)
+                if handle == "rotate":
+                    self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+                    return
+                elif handle in ("nw", "se"):
+                    self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("nwse-resize"))
+                    return
+                elif handle in ("ne", "sw"):
+                    self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("nesw-resize"))
+                    return
+                elif handle in ("n", "s"):
+                    self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("ns-resize"))
+                    return
+                elif handle in ("w", "e"):
+                    self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("ew-resize"))
+                    return
+            self._update_cursor_for_tool()
 
     def _update_inline_editor_position(self):
         """Update inline editor position and size after zoom changes."""
@@ -3571,6 +3606,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)
                 self.drag_start_pos = (start_x, start_y)
                 self.drag_begin_state = copy.deepcopy(selected_obj.__dict__)
+
+                if resize_handle == "rotate":
+                    x1, y1, x2, y2 = selected_obj.bbox
+                    cx = page_offset_x + ((x1 + x2) / 2.0) * self.zoom_level
+                    cy = page_offset_y + ((y1 + y2) / 2.0) * self.zoom_level
+                    self.rotate_center = (cx, cy)
+                    self.rotate_start_angle = getattr(selected_obj, 'rotation', 0.0) % 360.0
+                    start_dx = start_x - cx
+                    start_dy = start_y - cy
+                    self.rotate_pointer_start_angle = math.degrees(math.atan2(start_dy, start_dx))
                 return
 
         if self.tool_mode in ("pen", "highlighter"):
