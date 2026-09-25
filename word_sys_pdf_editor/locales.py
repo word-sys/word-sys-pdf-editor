@@ -1922,6 +1922,7 @@ STRINGS_FR.update({
     'rotate_ccw': 'Pivoter de 90° sens anti-horaire',
     'status_page_rotated_cw': 'Page {0} pivotée de 90° dans le sens horaire.',
     'status_page_rotated_ccw': 'Page {0} pivotée de 90° dans le sens anti-horaire.',
+    'status_object_rotation': 'Rotation : {0} (Maintenez Maj pour aligner à 15°)',
 })
 
 STRINGS_DE.update({
@@ -1931,6 +1932,7 @@ STRINGS_DE.update({
     'rotate_ccw': '90° gegen den Uhrzeigersinn drehen',
     'status_page_rotated_cw': 'Seite {0} um 90° im Uhrzeigersinn gedreht.',
     'status_page_rotated_ccw': 'Seite {0} um 90° gegen den Uhrzeigersinn gedreht.',
+    'status_object_rotation': 'Drehung: {0} (Umschalttaste gedrückt halten für 15°-Schritte)',
 })
 
 STRINGS_ES.update({
@@ -1940,6 +1942,7 @@ STRINGS_ES.update({
     'rotate_ccw': 'Girar 90° en sentido antihorario',
     'status_page_rotated_cw': 'Página {0} girada 90° en sentido horario.',
     'status_page_rotated_ccw': 'Página {0} girada 90° en sentido antihorario.',
+    'status_object_rotation': 'Rotación: {0} (Mantenga Mayús para ajustar a 15°)',
 })
 
 STRINGS_IT.update({
@@ -1949,6 +1952,7 @@ STRINGS_IT.update({
     'rotate_ccw': 'Ruota di 90° in senso antiorario',
     'status_page_rotated_cw': 'Pagina {0} ruotata di 90° in senso orario.',
     'status_page_rotated_ccw': 'Pagina {0} ruotata di 90° in senso antiorario.',
+    'status_object_rotation': 'Rotazione: {0} (Tieni premuto Maiusc per scatti di 15°)',
 })
 
 STRINGS_RU.update({
@@ -1958,5 +1962,6 @@ STRINGS_RU.update({
     'rotate_ccw': 'Повернуть на 90° против часовой',
     'status_page_rotated_cw': 'Страница {0} повернута на 90° по часовой стрелке.',
     'status_page_rotated_ccw': 'Страница {0} повернута на 90° против часовой стрелки.',
+    'status_object_rotation': 'Поворот: {0} (Удерживайте Shift для шага 15°)',
 })
 

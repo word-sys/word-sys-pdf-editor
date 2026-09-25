@@ -384,6 +384,7 @@ _STRINGS = {
         "rotate_ccw": "Rotate 90° Counterclockwise",
         "status_page_rotated_cw": "Page {0} rotated 90° clockwise.",
         "status_page_rotated_ccw": "Page {0} rotated 90° counterclockwise.",
+        "status_object_rotation": "Rotation: {0} (Hold Shift to snap to 15°)",
     },
 
     "tr": {
@@ -765,6 +766,7 @@ _STRINGS = {
         "rotate_ccw": "Saat Yönünün Tersine 90° Döndür",
         "status_page_rotated_cw": "Sayfa {0} saat yönünde 90° döndürüldü.",
         "status_page_rotated_ccw": "Sayfa {0} saat yönünün tersine 90° döndürüldü.",
+        "status_object_rotation": "Döndürme: {0} (15° basamaklar için Shift tuşuna basılı tutun)",
     },
 }
 
