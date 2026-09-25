@@ -34,6 +34,9 @@ class Command:
             pad = max(getattr(target_object, 'stroke_width', 2.0) / 2.0 + 1.5, 2.0)
             x0, y0, x1, y1 = orig_bbox
             redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+        elif isinstance(target_object, EditableImage):
+            x0, y0, x1, y1 = orig_bbox
+            redact_rect = fitz.Rect(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0)
         else:
             redact_rect = fitz.Rect(orig_bbox)
         try:
@@ -57,7 +60,7 @@ class Command:
                         for d in page.get_drawings():
                             d_rect = d.get('rect')
                             if d_rect and d_rect.intersects(strip_test) and d_rect.height <= 3.5:
-                                overlap = min(d_rect.x1, x1) - max(d_rect.x0, x0)
+                                overlap = min(d_rect.x1, strip_test.x1) - max(d_rect.x0, strip_test.x0)
                                 if overlap >= min(4.0, (x1 - x0) * 0.4):
                                     is_underlined = True
                                     break
@@ -77,7 +80,8 @@ class Command:
                     
                     try:
                         for link in list(page.get_links()):
-                            if fitz.Rect(link.get('from', (0, 0, 0, 0))).intersects(fitz.Rect(orig_bbox)):
+                            link_rect = fitz.Rect(link.get('from', (0, 0, 0, 0)))
+                            if link_rect.intersects(redact_rect):
                                 page.delete_link(link)
                     except Exception as link_err:
                         print(f"Warning: could not delete old link: {link_err}")
@@ -93,7 +97,7 @@ class Command:
                         page.apply_redactions()
 
                 # If redacting graphics, any intersecting shapes or strokes must be re-applied on rebuild
-                redact_fitz = fitz.Rect(redact_rect)
+                redact_fitz = redact_rect
                 other_objs = [o for o in getattr(self.window, 'editable_shapes', []) if o is not target_object]
                 other_objs += [s for s in getattr(self.window, 'editable_strokes', []) if s is not target_object]
                 for other in other_objs:
@@ -173,6 +177,9 @@ class EditObjectCommand(Command):
             pad = max(getattr(self.target_object, 'stroke_width', 2.0) / 2.0 + 1.5, 2.0)
             x0, y0, x1, y1 = orig_bbox
             redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+        elif isinstance(self.target_object, EditableImage):
+            x0, y0, x1, y1 = orig_bbox
+            redact_rect = fitz.Rect(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0)
         else:
             redact_rect = fitz.Rect(orig_bbox)
         try:
@@ -198,7 +205,7 @@ class EditObjectCommand(Command):
                         for d in page.get_drawings():
                             d_rect = d.get('rect')
                             if d_rect and d_rect.intersects(strip_test) and d_rect.height <= 3.5:
-                                overlap = min(d_rect.x1, x1) - max(d_rect.x0, x0)
+                                overlap = min(d_rect.x1, strip_test.x1) - max(d_rect.x0, strip_test.x0)
                                 if overlap >= min(4.0, (x1 - x0) * 0.4):
                                     is_underlined = True
                                     break
@@ -219,7 +226,8 @@ class EditObjectCommand(Command):
                     
                     try:
                         for link in list(page.get_links()):
-                            if fitz.Rect(link.get('from', (0, 0, 0, 0))).intersects(fitz.Rect(orig_bbox)):
+                            link_rect = fitz.Rect(link.get('from', (0, 0, 0, 0)))
+                            if link_rect.intersects(redact_rect):
                                 page.delete_link(link)
                     except Exception as link_err:
                         print(f"Warning: could not delete old link: {link_err}")
@@ -235,7 +243,7 @@ class EditObjectCommand(Command):
                         page.apply_redactions()
 
                 # If redacting graphics, any intersecting shapes or strokes must be re-applied on rebuild
-                redact_fitz = fitz.Rect(redact_rect)
+                redact_fitz = redact_rect
                 other_objs = [o for o in getattr(self.window, 'editable_shapes', []) if o is not self.target_object]
                 other_objs += [s for s in getattr(self.window, 'editable_strokes', []) if s is not self.target_object]
                 for other in other_objs:
@@ -310,7 +318,7 @@ class EditObjectCommand(Command):
             
         temp_obj_for_pdf = copy.deepcopy(self.target_object)
         temp_obj_for_pdf.__dict__.update(copy.deepcopy(properties_to_apply))
-        temp_obj_for_pdf.original_bbox = properties_to_clear['bbox']
+        temp_obj_for_pdf.original_bbox = properties_to_clear.get('bbox', getattr(self.target_object, 'original_bbox', temp_obj_for_pdf.bbox))
         
         page_num_fallback = getattr(self.target_object, 'page_number', None)
         if page_num_fallback is not None:
@@ -324,8 +332,12 @@ class EditObjectCommand(Command):
             )
         
         success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj_for_pdf)
-        
-        if not success:
+        if success:
+            self.target_object.is_baked = True
+            self.target_object._ghost_redacted = True
+            if page_num_fallback is not None:
+                self.window._refresh_thumbnail(page_num_fallback)
+        else:
             from .ui_components import show_error_dialog
             show_error_dialog(self.window, _("err_during_op", msg))
         
@@ -527,73 +539,16 @@ class RotatePageCommand(Command):
         self.page_index = page_index
         self.angle_delta = angle_delta
 
-    def _get_page_dims(self):
-        try:
-            page = self.window.doc.load_page(self.page_index)
-            return float(page.rect.width), float(page.rect.height)
-        except Exception:
-            return 595.0, 842.0
-
-    def _transform_objects(self, old_w: float, old_h: float, angle_delta: int):
-        """Rotate all objects on this page to match the new page orientation."""
-        from .pdf_handler import transform_point_page_rot, transform_bbox_page_rot
-
-        # 1. Texts
-        for t in getattr(self.window, 'editable_texts', []):
-            if getattr(t, 'page_number', -1) == self.page_index:
-                if t.bbox:
-                    new_bbox = transform_bbox_page_rot(t.bbox, old_w, old_h, angle_delta)
-                    t.bbox = new_bbox
-                    t.x = new_bbox[0]
-                    t.y = new_bbox[1]
-                    t.baseline = new_bbox[1] + (new_bbox[3] - new_bbox[1]) * 0.8
-                t.rotation = (getattr(t, 'rotation', 0.0) + angle_delta) % 360.0
-                if hasattr(t, 'original_bbox') and t.original_bbox:
-                    t.original_bbox = transform_bbox_page_rot(t.original_bbox, old_w, old_h, angle_delta)
-
-        # 2. Images
-        for img in getattr(self.window, 'editable_images', []):
-            if getattr(img, 'page_number', -1) == self.page_index:
-                if img.bbox:
-                    img.bbox = transform_bbox_page_rot(img.bbox, old_w, old_h, angle_delta)
-                img.rotation = (getattr(img, 'rotation', 0.0) + angle_delta) % 360.0
-                if hasattr(img, 'original_bbox') and img.original_bbox:
-                    img.original_bbox = transform_bbox_page_rot(img.original_bbox, old_w, old_h, angle_delta)
-
-        # 3. Shapes
-        for s in getattr(self.window, 'editable_shapes', []):
-            if getattr(s, 'page_number', -1) == self.page_index:
-                if s.bbox:
-                    s.bbox = transform_bbox_page_rot(s.bbox, old_w, old_h, angle_delta)
-                s.rotation = (getattr(s, 'rotation', 0.0) + angle_delta) % 360.0
-                if hasattr(s, 'original_bbox') and s.original_bbox:
-                    s.original_bbox = transform_bbox_page_rot(s.original_bbox, old_w, old_h, angle_delta)
-
-        # 4. Strokes
-        for st in getattr(self.window, 'editable_strokes', []):
-            if getattr(st, 'page_number', -1) == self.page_index:
-                if st.points:
-                    st.points = [transform_point_page_rot(px, py, old_w, old_h, angle_delta) for (px, py) in st.points]
-                if getattr(st, 'bbox', None):
-                    st.bbox = transform_bbox_page_rot(st.bbox, old_w, old_h, angle_delta)
-                st.rotation = (getattr(st, 'rotation', 0.0) + angle_delta) % 360.0
-                if hasattr(st, 'original_bbox') and st.original_bbox:
-                    st.original_bbox = transform_bbox_page_rot(st.original_bbox, old_w, old_h, angle_delta)
-
     def execute(self):
         """Rotate page by angle_delta degrees and update display."""
-        old_w, old_h = self._get_page_dims()
         success, _res = pdf_handler.rotate_page(self.window.doc, self.page_index, self.angle_delta)
         if success:
-            self._transform_objects(old_w, old_h, self.angle_delta)
             self._apply_rotation_ui()
 
     def undo(self):
         """Revert page rotation by -angle_delta degrees and update display."""
-        old_w, old_h = self._get_page_dims()
         success, _res = pdf_handler.rotate_page(self.window.doc, self.page_index, -self.angle_delta)
         if success:
-            self._transform_objects(old_w, old_h, -self.angle_delta)
             self._apply_rotation_ui()
 
     def _apply_rotation_ui(self):
@@ -658,6 +613,11 @@ class RotateObjectCommand(Command):
                 show_error_dialog(self.window, _("err_during_op", msg))
 
         self.window.document_modified = True
+        if getattr(self.window, 'selected_text', None) == self.target_object:
+            self.window.pending_format_change_obj = self.target_object
+            self.window.before_format_change_state = copy.deepcopy(self.target_object.__dict__)
+            if hasattr(self.window, '_update_text_format_controls'):
+                self.window._update_text_format_controls(self.target_object)
         if hasattr(self.window, '_update_rotation_controls'):
             self.window._update_rotation_controls(self.target_object)
         if hasattr(self.window, '_update_ui_state'):
