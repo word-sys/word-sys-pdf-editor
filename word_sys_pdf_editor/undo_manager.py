@@ -8,6 +8,168 @@ from . import pdf_handler
 from .models import EditableText, EditableShape, EditableStroke, EditableImage
 from .i18n import _
 
+def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=None):
+    """Redact original object from snapshot and protect intersecting objects from collateral deletion."""
+    if getattr(target_object, 'is_new', True) or getattr(target_object, '_ghost_redacted', False):
+        return
+
+    pdf_handler.restore_page_from_snapshot(window.doc, page_num)
+
+    props = properties_to_clear or {}
+    orig_bbox = props.get('bbox', getattr(target_object, 'original_bbox', target_object.bbox))
+    rot = props.get('rotation', getattr(target_object, 'rotation', 0.0))
+
+    if isinstance(target_object, (EditableShape, EditableStroke)):
+        sw = props.get('stroke_width', getattr(target_object, 'stroke_width', 2.0))
+        pad = max(sw / 2.0 + 1.5, 2.0)
+        x0, y0, x1, y1 = orig_bbox
+        redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+    elif isinstance(target_object, EditableImage):
+        x0, y0, x1, y1 = orig_bbox
+        redact_rect = fitz.Rect(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0)
+    else:
+        redact_rect = fitz.Rect(orig_bbox)
+
+    cx = (orig_bbox[0] + orig_bbox[2]) / 2.0
+    cy = (orig_bbox[1] + orig_bbox[3]) / 2.0
+    mat = pdf_handler.get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
+
+    applied_rects = []
+    if mat:
+        applied_rects.append((redact_rect.quad * mat).rect)
+    else:
+        applied_rects.append(redact_rect)
+
+    try:
+        page = window.doc.load_page(page_num)
+
+        # Underline strip check for text
+        strip_rects = []
+        is_underlined = False
+        if isinstance(target_object, EditableText):
+            is_underlined = (
+                getattr(target_object, 'is_underline', False)
+                or props.get('is_underline', False)
+                or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', getattr(target_object, 'text', '')))
+                or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', props.get('text', '')))
+            )
+            x0, y0, x1, y1 = orig_bbox
+            baseline = props.get('baseline', getattr(target_object, 'original_baseline', getattr(target_object, 'baseline', y1)))
+            
+            if not is_underlined:
+                strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.0)
+                strip_test_rect = (strip_test.quad * mat).rect if mat else strip_test
+                try:
+                    for d in page.get_drawings():
+                        d_rect = d.get('rect')
+                        if d_rect and d_rect.intersects(strip_test_rect) and d_rect.height <= 3.5:
+                            overlap = min(d_rect.x1, strip_test_rect.x1) - max(d_rect.x0, strip_test_rect.x0)
+                            if overlap >= min(4.0, (x1 - x0) * 0.4):
+                                is_underlined = True
+                                break
+                except Exception:
+                    pass
+
+            if is_underlined:
+                text_val = props.get('text', getattr(target_object, 'text', ''))
+                lines = text_val.split('\n')
+                font_sz = props.get('font_size', getattr(target_object, 'font_size', 12.0))
+                line_height = font_sz * 1.2
+                for i in range(len(lines)):
+                    s_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 4.0)
+                    strip_rects.append(s_rect)
+                    if mat:
+                        applied_rects.append((s_rect.quad * mat).rect)
+                    else:
+                        applied_rects.append(s_rect)
+
+        # Check ALL other objects on page for intersection with target's redactions
+        all_other = []
+        all_other += [t for t in getattr(window, 'editable_texts', []) if t is not target_object and getattr(t, 'page_number', None) == page_num]
+        all_other += [s for s in getattr(window, 'editable_shapes', []) if s is not target_object and getattr(s, 'page_number', None) == page_num]
+        all_other += [st for st in getattr(window, 'editable_strokes', []) if st is not target_object and getattr(st, 'page_number', None) == page_num]
+        all_other += [im for im in getattr(window, 'editable_images', []) if im is not target_object and getattr(im, 'page_number', None) == page_num]
+
+        intersecting_others = []
+        for other in all_other:
+            if hasattr(other, 'bbox') and other.bbox:
+                ox0, oy0, ox1, oy1 = other.bbox
+                opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0) if isinstance(other, (EditableShape, EditableStroke)) else 0.5
+                other_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
+                orot = getattr(other, 'rotation', 0.0)
+                if orot != 0.0:
+                    ocx = (ox0 + ox1) / 2.0
+                    ocy = (oy0 + oy1) / 2.0
+                    omat = pdf_handler.get_rotation_matrix(ocx, ocy, orot)
+                    other_rect = (other_rect.quad * omat).rect
+                for ar in applied_rects:
+                    if ar.intersects(other_rect):
+                        other._ghost_redacted = True
+                        intersecting_others.append(other)
+                        break
+
+        # Apply redaction for target_object
+        if mat:
+            page.add_redact_annot(redact_rect.quad * mat)
+        else:
+            page.add_redact_annot(redact_rect)
+
+        # Also add redactions for any intersecting objects so their entire original ghost is cleanly removed
+        for other in intersecting_others:
+            if hasattr(other, 'bbox') and other.bbox:
+                ox0, oy0, ox1, oy1 = other.bbox
+                opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0) if isinstance(other, (EditableShape, EditableStroke)) else 0.5
+                o_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
+                orot = getattr(other, 'rotation', 0.0)
+                if orot != 0.0:
+                    ocx = (ox0 + ox1) / 2.0
+                    ocy = (oy0 + oy1) / 2.0
+                    omat = pdf_handler.get_rotation_matrix(ocx, ocy, orot)
+                    page.add_redact_annot(o_rect.quad * omat)
+                else:
+                    page.add_redact_annot(o_rect)
+
+        # Execute redactions
+        has_images = isinstance(target_object, EditableImage) or any(isinstance(o, EditableImage) for o in intersecting_others)
+        has_graphics = isinstance(target_object, (EditableShape, EditableStroke)) or bool(strip_rects) or any(isinstance(o, (EditableShape, EditableStroke)) for o in intersecting_others)
+
+        img_param = fitz.PDF_REDACT_IMAGE_REMOVE if has_images else fitz.PDF_REDACT_IMAGE_NONE
+        gfx_param = 2 if has_graphics else 0
+        try:
+            page.apply_redactions(images=img_param, graphics=gfx_param, text=0)
+        except Exception:
+            page.apply_redactions()
+
+        # Underline strip redaction if needed
+        if strip_rects:
+            for s_rect in strip_rects:
+                if mat:
+                    page.add_redact_annot(s_rect.quad * mat)
+                else:
+                    page.add_redact_annot(s_rect)
+            try:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
+            except Exception:
+                pass
+
+        # Clean old links
+        try:
+            for link in list(page.get_links()):
+                link_rect = fitz.Rect(link.get('from', (0, 0, 0, 0)))
+                for ar in applied_rects:
+                    if link_rect.intersects(ar):
+                        page.delete_link(link)
+                        break
+        except Exception as link_err:
+            print(f"Warning: could not delete old link: {link_err}")
+
+        window.doc.load_page(page_num)
+        pdf_handler.save_page_snapshot(window.doc, page_num, force=True)
+        pdf_handler.invalidate_page_cache(window.doc, page_num)
+        target_object._ghost_redacted = True
+    except Exception as e:
+        print(f"Warning: could not erase ghost from snapshot for page {page_num}: {e}")
+
 class Command:
     """Base class for undoable/redoable actions."""
     def __init__(self, window):
@@ -24,103 +186,7 @@ class Command:
 
     def _erase_ghost_if_needed(self, target_object, page_num):
         """Redact original object from snapshot if edited/moved."""
-        if getattr(target_object, 'is_new', True) or getattr(target_object, '_ghost_redacted', False):
-            return
-            
-        pdf_handler.restore_page_from_snapshot(self.window.doc, page_num)
-        
-        orig_bbox = getattr(target_object, 'original_bbox', target_object.bbox)
-        if isinstance(target_object, (EditableShape, EditableStroke)):
-            pad = max(getattr(target_object, 'stroke_width', 2.0) / 2.0 + 1.5, 2.0)
-            x0, y0, x1, y1 = orig_bbox
-            redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
-        elif isinstance(target_object, EditableImage):
-            x0, y0, x1, y1 = orig_bbox
-            redact_rect = fitz.Rect(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0)
-        else:
-            redact_rect = fitz.Rect(orig_bbox)
-        try:
-            page = self.window.doc.load_page(page_num)
-            page.add_redact_annot(redact_rect)
-            
-            if isinstance(target_object, EditableText):
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
-
-                # If text has underline or links, redact vector underline lines cleanly
-                is_underlined = (
-                    getattr(target_object, 'is_underline', False)
-                    or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', getattr(target_object, 'text', '')))
-                )
-                x0, y0, x1, y1 = orig_bbox
-                baseline = getattr(target_object, 'original_baseline', getattr(target_object, 'baseline', y1))
-                rot = getattr(target_object, 'rotation', 0.0)
-                cx = (x0 + x1) / 2.0
-                cy = (y0 + y1) / 2.0
-                mat = pdf_handler.get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
-                
-                if not is_underlined:
-                    strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.0)
-                    try:
-                        for d in page.get_drawings():
-                            d_rect = d.get('rect')
-                            if d_rect and d_rect.intersects(strip_test) and d_rect.height <= 3.5:
-                                overlap = min(d_rect.x1, strip_test.x1) - max(d_rect.x0, strip_test.x0)
-                                if overlap >= min(4.0, (x1 - x0) * 0.4):
-                                    is_underlined = True
-                                    break
-                    except Exception:
-                        pass
-                        
-                if is_underlined:
-                    lines = getattr(target_object, 'text', '').split('\n')
-                    line_height = getattr(target_object, 'font_size', 12.0) * 1.2
-                    for i in range(len(lines)):
-                        strip_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 4.0)
-                        if mat:
-                            page.add_redact_annot(strip_rect.quad * mat)
-                        else:
-                            page.add_redact_annot(strip_rect)
-                    try:
-                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
-                    except Exception:
-                        pass
-                    
-                    try:
-                        for link in list(page.get_links()):
-                            link_rect = fitz.Rect(link.get('from', (0, 0, 0, 0)))
-                            if link_rect.intersects(redact_rect):
-                                page.delete_link(link)
-                    except Exception as link_err:
-                        print(f"Warning: could not delete old link: {link_err}")
-            elif isinstance(target_object, EditableImage):
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
-            else:
-                try:
-                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
-                except TypeError:
-                    try:
-                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
-                    except Exception:
-                        page.apply_redactions()
-
-                # If redacting graphics, any intersecting shapes or strokes must be re-applied on rebuild
-                redact_fitz = redact_rect
-                other_objs = [o for o in getattr(self.window, 'editable_shapes', []) if o is not target_object]
-                other_objs += [s for s in getattr(self.window, 'editable_strokes', []) if s is not target_object]
-                for other in other_objs:
-                    if hasattr(other, 'bbox') and other.bbox:
-                        ox0, oy0, ox1, oy1 = other.bbox
-                        opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0)
-                        other_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
-                        if redact_fitz.intersects(other_rect):
-                            other._ghost_redacted = True
-                    
-            self.window.doc.load_page(page_num)
-            pdf_handler.save_page_snapshot(self.window.doc, page_num, force=True)
-            pdf_handler.invalidate_page_cache(self.window.doc, page_num)
-            target_object._ghost_redacted = True
-        except Exception as e:
-            print(f"Warning: could not erase ghost from snapshot for page {page_num}: {e}")
+        _perform_ghost_erasure(self.window, target_object, page_num)
 
 class UndoManager:
     """Manager class that stores undo and redo action stacks."""
@@ -174,107 +240,7 @@ class EditObjectCommand(Command):
 
     def _erase_ghost_if_needed(self, page_num, properties_to_clear):
         """Erase ghost if needed."""
-        if getattr(self.target_object, 'is_new', True) or getattr(self.target_object, '_ghost_redacted', False):
-            return
-            
-        pdf_handler.restore_page_from_snapshot(self.window.doc, page_num)
-        
-        orig_bbox = properties_to_clear.get('bbox', getattr(self.target_object, 'original_bbox', self.target_object.bbox))
-        if isinstance(self.target_object, (EditableShape, EditableStroke)):
-            pad = max(getattr(self.target_object, 'stroke_width', 2.0) / 2.0 + 1.5, 2.0)
-            x0, y0, x1, y1 = orig_bbox
-            redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
-        elif isinstance(self.target_object, EditableImage):
-            x0, y0, x1, y1 = orig_bbox
-            redact_rect = fitz.Rect(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0)
-        else:
-            redact_rect = fitz.Rect(orig_bbox)
-        try:
-            page = self.window.doc.load_page(page_num)
-            page.add_redact_annot(redact_rect)
-            
-            if isinstance(self.target_object, EditableText):
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
-
-                # If text has underline or links, redact vector underline lines cleanly
-                is_underlined = (
-                    getattr(self.target_object, 'is_underline', False)
-                    or properties_to_clear.get('is_underline', False)
-                    or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', getattr(self.target_object, 'text', '')))
-                    or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', properties_to_clear.get('text', '')))
-                )
-                x0, y0, x1, y1 = orig_bbox
-                baseline = properties_to_clear.get('baseline', getattr(self.target_object, 'original_baseline', getattr(self.target_object, 'baseline', y1)))
-                rot = properties_to_clear.get('rotation', getattr(self.target_object, 'rotation', 0.0))
-                cx = (x0 + x1) / 2.0
-                cy = (y0 + y1) / 2.0
-                mat = pdf_handler.get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
-                
-                if not is_underlined:
-                    strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.0)
-                    try:
-                        for d in page.get_drawings():
-                            d_rect = d.get('rect')
-                            if d_rect and d_rect.intersects(strip_test) and d_rect.height <= 3.5:
-                                overlap = min(d_rect.x1, strip_test.x1) - max(d_rect.x0, strip_test.x0)
-                                if overlap >= min(4.0, (x1 - x0) * 0.4):
-                                    is_underlined = True
-                                    break
-                    except Exception:
-                        pass
-                        
-                if is_underlined:
-                    text_val = properties_to_clear.get('text', getattr(self.target_object, 'text', ''))
-                    lines = text_val.split('\n')
-                    font_sz = properties_to_clear.get('font_size', getattr(self.target_object, 'font_size', 12.0))
-                    line_height = font_sz * 1.2
-                    for i in range(len(lines)):
-                        strip_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 4.0)
-                        if mat:
-                            page.add_redact_annot(strip_rect.quad * mat)
-                        else:
-                            page.add_redact_annot(strip_rect)
-                    try:
-                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
-                    except Exception:
-                        pass
-                    
-                    try:
-                        for link in list(page.get_links()):
-                            link_rect = fitz.Rect(link.get('from', (0, 0, 0, 0)))
-                            if link_rect.intersects(redact_rect):
-                                page.delete_link(link)
-                    except Exception as link_err:
-                        print(f"Warning: could not delete old link: {link_err}")
-            elif isinstance(self.target_object, EditableImage):
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
-            else:
-                try:
-                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
-                except TypeError:
-                    try:
-                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
-                    except Exception:
-                        page.apply_redactions()
-
-                # If redacting graphics, any intersecting shapes or strokes must be re-applied on rebuild
-                redact_fitz = redact_rect
-                other_objs = [o for o in getattr(self.window, 'editable_shapes', []) if o is not self.target_object]
-                other_objs += [s for s in getattr(self.window, 'editable_strokes', []) if s is not self.target_object]
-                for other in other_objs:
-                    if hasattr(other, 'bbox') and other.bbox:
-                        ox0, oy0, ox1, oy1 = other.bbox
-                        opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0)
-                        other_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
-                        if redact_fitz.intersects(other_rect):
-                            other._ghost_redacted = True
-                    
-            self.window.doc.load_page(page_num)
-            pdf_handler.save_page_snapshot(self.window.doc, page_num, force=True)
-            pdf_handler.invalidate_page_cache(self.window.doc, page_num)
-            self.target_object._ghost_redacted = True
-        except Exception as e:
-            print(f"Warning: could not erase ghost from snapshot for page {page_num}: {e}")
+        _perform_ghost_erasure(self.window, self.target_object, page_num, properties_to_clear)
 
     def _apply_properties_to_pdf(self, properties_to_apply, properties_to_clear):
         """Apply properties to PDF."""

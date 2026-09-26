@@ -437,6 +437,11 @@ def extract_editable_text(doc, page_index):
 
                         orig_origin = first_span.get("origin", (0, bbox[3]))
                         
+                        line_dir = line.get("dir", (1.0, 0.0))
+                        line_rot = 0.0
+                        if line_dir and (abs(line_dir[0] - 1.0) > 1e-3 or abs(line_dir[1]) > 1e-3):
+                            line_rot = round(math.degrees(math.atan2(line_dir[1], line_dir[0])), 1) % 360.0
+
                         editable = EditableText(
                             x=bbox[0], y=bbox[1], text=combined_text,
                             font_size=first_span.get("size", 11) if first_span else 11,
@@ -444,7 +449,7 @@ def extract_editable_text(doc, page_index):
                             color=first_span.get("color", 0) if first_span else 0,
                             span_data=span_data,
                             baseline=orig_origin[1],
-                            rotation=0.0
+                            rotation=line_rot
                         )
                         editable.bbox = tuple(bbox)
                         editable.original_bbox = editable.bbox
@@ -1574,7 +1579,30 @@ def insert_blank_page(doc, page_index=None, width=None, height=None):
             if height is None:
                 height = default_height
         
-        doc.new_page(width=width, height=height)
+        doc_id = id(doc)
+        global _page_snapshots, _page_original_links
+        if page_index is not None and 0 <= page_index <= doc.page_count:
+            target_pno = int(page_index)
+            new_snapshots = {}
+            for (did, pno), content in _page_snapshots.items():
+                if did == doc_id and pno >= target_pno:
+                    new_snapshots[(did, pno + 1)] = content
+                else:
+                    new_snapshots[(did, pno)] = content
+            _page_snapshots = new_snapshots
+
+            new_links = {}
+            for (did, pno), links in _page_original_links.items():
+                if did == doc_id and pno >= target_pno:
+                    new_links[(did, pno + 1)] = links
+                else:
+                    new_links[(did, pno)] = links
+            _page_original_links = new_links
+
+            doc.new_page(pno=target_pno, width=width, height=height)
+        else:
+            doc.new_page(width=width, height=height)
+
         invalidate_page_cache(doc)
         return True, _("success_blank_page_added", doc.page_count)
     
@@ -1612,7 +1640,39 @@ def move_page(doc, from_index, to_index):
         if from_index == to_index:
             return True, _("success_page_already_there")
         
-        doc.move_page(from_index, to_index)
+        if from_index < to_index:
+            fitz_target = -1 if to_index >= doc.page_count - 1 else to_index + 1
+        else:
+            fitz_target = to_index
+        doc.move_page(from_index, fitz_target)
+        
+        doc_id = id(doc)
+        global _page_snapshots, _page_original_links
+        def _remap_index(p):
+            if from_index < to_index:
+                if p == from_index: return to_index
+                if from_index < p <= to_index: return p - 1
+            else:
+                if p == from_index: return to_index
+                if to_index <= p < from_index: return p + 1
+            return p
+
+        new_snapshots = {}
+        for (did, pno), content in _page_snapshots.items():
+            if did == doc_id:
+                new_snapshots[(did, _remap_index(pno))] = content
+            else:
+                new_snapshots[(did, pno)] = content
+        _page_snapshots = new_snapshots
+
+        new_links = {}
+        for (did, pno), links in _page_original_links.items():
+            if did == doc_id:
+                new_links[(did, _remap_index(pno))] = links
+            else:
+                new_links[(did, pno)] = links
+        _page_original_links = new_links
+
         invalidate_page_cache(doc)
         
         return True, _("success_page_moved", from_index + 1, to_index + 1)
@@ -1633,6 +1693,35 @@ def delete_page(doc, page_index):
             return False, _("err_invalid_page_index_val", page_index + 1)
         
         doc.delete_page(page_index)
+        
+        doc_id = id(doc)
+        global _page_snapshots, _page_original_links
+        new_snapshots = {}
+        for (did, pno), content in _page_snapshots.items():
+            if did == doc_id:
+                if pno == page_index:
+                    continue
+                elif pno > page_index:
+                    new_snapshots[(did, pno - 1)] = content
+                else:
+                    new_snapshots[(did, pno)] = content
+            else:
+                new_snapshots[(did, pno)] = content
+        _page_snapshots = new_snapshots
+
+        new_links = {}
+        for (did, pno), links in _page_original_links.items():
+            if did == doc_id:
+                if pno == page_index:
+                    continue
+                elif pno > page_index:
+                    new_links[(did, pno - 1)] = links
+                else:
+                    new_links[(did, pno)] = links
+            else:
+                new_links[(did, pno)] = links
+        _page_original_links = new_links
+
         invalidate_page_cache(doc)
         return True, _("success_page_deleted", page_index + 1)
     

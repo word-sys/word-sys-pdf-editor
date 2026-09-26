@@ -1159,6 +1159,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
 
         self.commit_pending_format_change()
+
+        old_page_idx = getattr(self, 'current_page_index', None)
+        if self.doc and old_page_idx is not None and (0 <= old_page_idx < pdf_handler.get_page_count(self.doc)):
+            if old_page_idx != page_index:
+                pdf_handler.save_page_snapshot(self.doc, old_page_idx, force=True)
+
         self.undo_manager.clear()
 
         self.current_page_index = page_index
