@@ -1155,38 +1155,50 @@ def extract_editable_strokes(doc, page_index):
                 raw_width = drawing.get('width', 1.0)
                 raw_opacity = drawing.get('opacity')
 
-                pts = []
+                subpaths = []
+                current_subpath = []
                 for it in items:
                     if it[0] == 'l':
-                        p1, p2 = it[1], it[2]
-                        if not pts or pts[-1] != (p1.x, p1.y):
-                            pts.append((p1.x, p1.y))
-                        pts.append((p2.x, p2.y))
+                        p1, p2 = (it[1].x, it[1].y), (it[2].x, it[2].y)
+                        if current_subpath and current_subpath[-1] != p1:
+                            subpaths.append(current_subpath)
+                            current_subpath = [p1, p2]
+                        else:
+                            if not current_subpath:
+                                current_subpath.append(p1)
+                            current_subpath.append(p2)
                     elif it[0] == 'c':
-                        p1, p2, p3, p4 = it[1], it[2], it[3], it[4]
-                        if not pts or pts[-1] != (p1.x, p1.y):
-                            pts.append((p1.x, p1.y))
-                        pts.append((p4.x, p4.y))
+                        p1, p4 = (it[1].x, it[1].y), (it[4].x, it[4].y)
+                        if current_subpath and current_subpath[-1] != p1:
+                            subpaths.append(current_subpath)
+                            current_subpath = [p1, p4]
+                        else:
+                            if not current_subpath:
+                                current_subpath.append(p1)
+                            current_subpath.append(p4)
+                if current_subpath:
+                    subpaths.append(current_subpath)
 
-                if pts and len(pts) >= 1:
-                    stroke_width = float(raw_width) if raw_width else 2.0
-                    is_hl = (stroke_width >= 8.0) or (raw_opacity is not None and raw_opacity < 0.9)
-                    tool_type = EditableStroke.TOOL_HIGHLIGHTER if is_hl else EditableStroke.TOOL_PEN
-                    opacity = float(raw_opacity) if raw_opacity is not None else (0.35 if is_hl else 1.0)
-                    stroke_color = raw_stroke if raw_stroke else (0.0, 0.0, 0.0)
+                stroke_width = float(raw_width) if raw_width else 2.0
+                is_hl = (stroke_width >= 8.0) or (raw_opacity is not None and raw_opacity < 0.9)
+                tool_type = EditableStroke.TOOL_HIGHLIGHTER if is_hl else EditableStroke.TOOL_PEN
+                opacity = float(raw_opacity) if raw_opacity is not None else (0.35 if is_hl else 1.0)
+                stroke_color = raw_stroke if raw_stroke else (0.0, 0.0, 0.0)
 
-                    stroke_obj = EditableStroke(
-                        points=pts,
-                        stroke_color=stroke_color,
-                        stroke_width=stroke_width,
-                        opacity=opacity,
-                        tool_type=tool_type,
-                        page_number=page_index,
-                        is_new=False,
-                        rotation=0.0
-                    )
-                    stroke_obj.is_baked = True
-                    editable_strokes.append(stroke_obj)
+                for sp in subpaths:
+                    if sp and len(sp) >= 1:
+                        stroke_obj = EditableStroke(
+                            points=sp,
+                            stroke_color=stroke_color,
+                            stroke_width=stroke_width,
+                            opacity=opacity,
+                            tool_type=tool_type,
+                            page_number=page_index,
+                            is_new=False,
+                            rotation=0.0
+                        )
+                        stroke_obj.is_baked = True
+                        editable_strokes.append(stroke_obj)
             except Exception as item_err:
                 print(f"Warning: skipping stroke drawing item: {item_err}")
                 continue

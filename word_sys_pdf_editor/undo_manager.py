@@ -9,7 +9,7 @@ from .models import EditableText, EditableShape, EditableStroke, EditableImage
 from .i18n import _
 
 def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=None):
-    """Redact original object from snapshot and protect intersecting objects from collateral deletion."""
+    """Redact original object strictly from snapshot without affecting any other objects."""
     if getattr(target_object, 'is_new', True) or getattr(target_object, '_ghost_redacted', False):
         return
 
@@ -83,74 +83,84 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                     else:
                         applied_rects.append(s_rect)
 
-        # Check ALL other objects on page for intersection with target's redactions
-        all_other = []
-        all_other += [t for t in getattr(window, 'editable_texts', []) if t is not target_object and getattr(t, 'page_number', None) == page_num]
-        all_other += [s for s in getattr(window, 'editable_shapes', []) if s is not target_object and getattr(s, 'page_number', None) == page_num]
-        all_other += [st for st in getattr(window, 'editable_strokes', []) if st is not target_object and getattr(st, 'page_number', None) == page_num]
-        all_other += [im for im in getattr(window, 'editable_images', []) if im is not target_object and getattr(im, 'page_number', None) == page_num]
-
-        intersecting_others = []
-        for other in all_other:
-            if hasattr(other, 'bbox') and other.bbox:
-                ox0, oy0, ox1, oy1 = other.bbox
-                opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0) if isinstance(other, (EditableShape, EditableStroke)) else 0.5
-                other_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
-                orot = getattr(other, 'rotation', 0.0)
-                if orot != 0.0:
-                    ocx = (ox0 + ox1) / 2.0
-                    ocy = (oy0 + oy1) / 2.0
-                    omat = pdf_handler.get_rotation_matrix(ocx, ocy, orot)
-                    other_rect = (other_rect.quad * omat).rect
-                for ar in applied_rects:
-                    if ar.intersects(other_rect):
-                        other._ghost_redacted = True
-                        intersecting_others.append(other)
-                        break
-
-        # Apply redaction for target_object
+        # Apply redaction ONLY for target_object
         if mat:
             page.add_redact_annot(redact_rect.quad * mat)
         else:
             page.add_redact_annot(redact_rect)
 
-        # Also add redactions for any intersecting objects so their entire original ghost is cleanly removed
-        for other in intersecting_others:
-            if hasattr(other, 'bbox') and other.bbox:
-                ox0, oy0, ox1, oy1 = other.bbox
-                opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0) if isinstance(other, (EditableShape, EditableStroke)) else 0.5
-                o_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
-                orot = getattr(other, 'rotation', 0.0)
-                if orot != 0.0:
-                    ocx = (ox0 + ox1) / 2.0
-                    ocy = (oy0 + oy1) / 2.0
-                    omat = pdf_handler.get_rotation_matrix(ocx, ocy, orot)
-                    page.add_redact_annot(o_rect.quad * omat)
-                else:
-                    page.add_redact_annot(o_rect)
+        # Execute redactions strictly isolated by object type
+        if isinstance(target_object, EditableText):
+            # Only redact text, NEVER redact graphics or images
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
 
-        # Execute redactions
-        has_images = isinstance(target_object, EditableImage) or any(isinstance(o, EditableImage) for o in intersecting_others)
-        has_graphics = isinstance(target_object, (EditableShape, EditableStroke)) or bool(strip_rects) or any(isinstance(o, (EditableShape, EditableStroke)) for o in intersecting_others)
+            # If underline strip exists, redact only vector graphics for the strip, NEVER text
+            if strip_rects:
+                for s_rect in strip_rects:
+                    if mat:
+                        page.add_redact_annot(s_rect.quad * mat)
+                    else:
+                        page.add_redact_annot(s_rect)
+                try:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
+                except Exception:
+                    pass
 
-        img_param = fitz.PDF_REDACT_IMAGE_REMOVE if has_images else fitz.PDF_REDACT_IMAGE_NONE
-        gfx_param = 2 if has_graphics else 0
-        try:
-            page.apply_redactions(images=img_param, graphics=gfx_param, text=0)
-        except Exception:
-            page.apply_redactions()
+            # Check ONLY other EditableText on the same page for physical character clipping
+            for other in getattr(window, 'editable_texts', []):
+                if other is not target_object and getattr(other, 'page_number', None) == page_num:
+                    if hasattr(other, 'bbox') and other.bbox:
+                        ox0, oy0, ox1, oy1 = other.bbox
+                        other_rect = fitz.Rect(ox0 - 0.5, oy0 - 0.5, ox1 + 0.5, oy1 + 0.5)
+                        orot = getattr(other, 'rotation', 0.0)
+                        if orot != 0.0:
+                            ocx = (ox0 + ox1) / 2.0
+                            ocy = (oy0 + oy1) / 2.0
+                            omat = pdf_handler.get_rotation_matrix(ocx, ocy, orot)
+                            other_rect = (other_rect.quad * omat).rect
+                        for ar in applied_rects:
+                            if ar.intersects(other_rect):
+                                other._ghost_redacted = True
+                                break
 
-        # Underline strip redaction if needed
-        if strip_rects:
-            for s_rect in strip_rects:
-                if mat:
-                    page.add_redact_annot(s_rect.quad * mat)
-                else:
-                    page.add_redact_annot(s_rect)
+        elif isinstance(target_object, (EditableShape, EditableStroke)):
+            # Only redact vector graphics, NEVER redact text or images (text=1 preserves text!)
             try:
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
             except Exception:
-                pass
+                page.apply_redactions()
+
+            # Check ONLY other shapes and strokes for vector clipping
+            other_graphics = [s for s in getattr(window, 'editable_shapes', []) if s is not target_object and getattr(s, 'page_number', None) == page_num]
+            other_graphics += [st for st in getattr(window, 'editable_strokes', []) if st is not target_object and getattr(st, 'page_number', None) == page_num]
+            for other in other_graphics:
+                if hasattr(other, 'bbox') and other.bbox:
+                    ox0, oy0, ox1, oy1 = other.bbox
+                    opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0)
+                    other_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
+                    orot = getattr(other, 'rotation', 0.0)
+                    if orot != 0.0:
+                        ocx = (ox0 + ox1) / 2.0
+                        ocy = (oy0 + oy1) / 2.0
+                        omat = pdf_handler.get_rotation_matrix(ocx, ocy, orot)
+                        other_rect = (other_rect.quad * omat).rect
+                    for ar in applied_rects:
+                        if ar.intersects(other_rect):
+                            other._ghost_redacted = True
+                            break
+
+        elif isinstance(target_object, EditableImage):
+            # Only redact image, NEVER redact text or graphics
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
+
+            for other in getattr(window, 'editable_images', []):
+                if other is not target_object and getattr(other, 'page_number', None) == page_num:
+                    if hasattr(other, 'bbox') and other.bbox:
+                        other_rect = fitz.Rect(other.bbox)
+                        for ar in applied_rects:
+                            if ar.intersects(other_rect):
+                                other._ghost_redacted = True
+                                break
 
         # Clean old links
         try:
@@ -266,8 +276,6 @@ class EditObjectCommand(Command):
             if success:
                 self.target_object.is_baked = True
                 self.target_object._ghost_redacted = True
-                if page_num is not None:
-                    self.window._refresh_thumbnail(page_num)
             else:
                 from .ui_components import show_error_dialog
                 show_error_dialog(self.window, _("err_during_op", msg))
@@ -290,8 +298,6 @@ class EditObjectCommand(Command):
             if success:
                 self.target_object.is_baked = True
                 self.target_object._ghost_redacted = True
-                if page_num is not None:
-                    self.window._refresh_thumbnail(page_num)
             else:
                 from .ui_components import show_error_dialog
                 show_error_dialog(self.window, _("err_moving_shape", msg))
@@ -316,8 +322,6 @@ class EditObjectCommand(Command):
         if success:
             self.target_object.is_baked = True
             self.target_object._ghost_redacted = True
-            if page_num_fallback is not None:
-                self.window._refresh_thumbnail(page_num_fallback)
         else:
             from .ui_components import show_error_dialog
             show_error_dialog(self.window, _("err_during_op", msg))
@@ -330,15 +334,14 @@ class EditObjectCommand(Command):
         self.target_object.original_bbox = self.target_object.bbox
         self.target_object.modified = False
         self.window.document_modified = True
-        if not isinstance(self.target_object, EditableShape):
-            page_num = getattr(self.target_object, 'page_number', None)
-            if page_num is not None:
-                self.window._refresh_thumbnail(page_num)
 
     def execute(self):
         """Execute the command."""
         if self._apply_properties_to_pdf(self.new_properties, self.old_properties):
             self._update_live_object(self.new_properties)
+            page_num = getattr(self.target_object, 'page_number', None)
+            if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(page_num)
             self.window.status_label.set_text(_("change_applied"))
             self.window.pdf_view.queue_draw()
 
@@ -346,6 +349,9 @@ class EditObjectCommand(Command):
         """Undo the command."""
         if self._apply_properties_to_pdf(self.old_properties, self.new_properties):
             self._update_live_object(self.old_properties)
+            page_num = getattr(self.target_object, 'page_number', None)
+            if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(page_num)
             self.window.status_label.set_text(_("reverted"))
             self.window.pdf_view.queue_draw()
 
