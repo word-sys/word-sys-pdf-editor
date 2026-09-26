@@ -1377,33 +1377,71 @@ def _apply_single_object_to_page(doc, page, obj):
             morph = (fitz.Point(cx, cy), fitz.Matrix(-rot)) if rot != 0.0 else None
             mat = get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
 
+            align = getattr(obj, 'alignment', 'left')
+            box_w = (obj.bbox[2] - obj.bbox[0]) if obj.bbox and (obj.bbox[2] > obj.bbox[0]) else None
+
             for i, line in enumerate(lines):
                 links = list(re.finditer(r'(https?://[^\s]+|www\.[^\s]+)', line))
                 
-                if not links:
-                    pos = fitz.Point(obj.x, obj.baseline + (i * line_height))
-                    page.insert_text(pos, line, fontsize=obj.font_size,
-                                     color=obj.color, overlay=True, morph=morph, **font_arg)
-                    
-                    if font_obj:
-                        try:
-                            text_len = font_obj.text_length(line, fontsize=obj.font_size)
-                        except Exception:
-                            text_len = fitz.get_text_length(line, fontname=calc_font, fontsize=obj.font_size)
-                    else:
+                if font_obj:
+                    try:
+                        text_len = font_obj.text_length(line, fontsize=obj.font_size)
+                    except Exception:
                         text_len = fitz.get_text_length(line, fontname=calc_font, fontsize=obj.font_size)
+                else:
+                    text_len = fitz.get_text_length(line, fontname=calc_font, fontsize=obj.font_size)
+
+                w_avail = box_w if box_w and box_w > text_len else text_len
+                if align == 'center':
+                    line_start_x = obj.x + max(0.0, (w_avail - text_len) / 2.0)
+                elif align == 'right':
+                    line_start_x = obj.x + max(0.0, w_avail - text_len)
+                else:
+                    line_start_x = obj.x
+
+                if not links:
+                    is_justified = (align == 'justify' and box_w and box_w > text_len and i < len(lines) - 1)
+                    words = line.split(' ') if is_justified else None
+                    if is_justified and words and len(words) > 1:
+                        word_lens = []
+                        for w in words:
+                            if font_obj:
+                                try:
+                                    wl = font_obj.text_length(w, fontsize=obj.font_size)
+                                except Exception:
+                                    wl = fitz.get_text_length(w, fontname=calc_font, fontsize=obj.font_size)
+                            else:
+                                wl = fitz.get_text_length(w, fontname=calc_font, fontsize=obj.font_size)
+                            word_lens.append(wl)
+                        total_w = sum(word_lens)
+                        space_w = (box_w - total_w) / (len(words) - 1)
+                        curr_wx = obj.x
+                        for w, wl in zip(words, word_lens):
+                            if w:
+                                pos = fitz.Point(curr_wx, obj.baseline + (i * line_height))
+                                page.insert_text(pos, w, fontsize=obj.font_size,
+                                                 color=obj.color, overlay=True, morph=morph, **font_arg)
+                            curr_wx += wl + space_w
+                        line_draw_x = obj.x
+                        draw_len = box_w
+                    else:
+                        pos = fitz.Point(line_start_x, obj.baseline + (i * line_height))
+                        page.insert_text(pos, line, fontsize=obj.font_size,
+                                         color=obj.color, overlay=True, morph=morph, **font_arg)
+                        line_draw_x = line_start_x
+                        draw_len = text_len
                     
                     if getattr(obj, 'is_underline', False):
-                        p1 = fitz.Point(obj.x, obj.baseline + (i * line_height) + 1.5)
-                        p2 = fitz.Point(obj.x + text_len, obj.baseline + (i * line_height) + 1.5)
+                        p1 = fitz.Point(line_draw_x, obj.baseline + (i * line_height) + 1.5)
+                        p2 = fitz.Point(line_draw_x + draw_len, obj.baseline + (i * line_height) + 1.5)
                         if mat:
                             p1 = p1 * mat
                             p2 = p2 * mat
                         page.draw_line(p1, p2, color=obj.color, width=0.8)
 
                     if getattr(obj, 'is_strikethrough', False):
-                        sp1 = fitz.Point(obj.x, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
-                        sp2 = fitz.Point(obj.x + text_len, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
+                        sp1 = fitz.Point(line_draw_x, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
+                        sp2 = fitz.Point(line_draw_x + draw_len, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
                         if mat:
                             sp1 = sp1 * mat
                             sp2 = sp2 * mat
@@ -1420,7 +1458,7 @@ def _apply_single_object_to_page(doc, page, obj):
                     if last_idx < len(line):
                         segments.append((line[last_idx:], False))
                         
-                    current_x = obj.x
+                    current_x = line_start_x
                     for seg_text, is_seg_link in segments:
                         if not seg_text:
                             continue

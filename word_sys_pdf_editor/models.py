@@ -26,7 +26,7 @@ BASE14_FALLBACK_MAP = {
 class EditableText:
     """The EditableText class."""
     def __init__(self, x, y, text, font_size=11, font_family="Liberation Sans",
-                 color=(0, 0, 0), span_data=None, is_new=False, baseline=None, rotation=0.0, page_number=None):
+                 color=(0, 0, 0), span_data=None, is_new=False, baseline=None, rotation=0.0, page_number=None, alignment="left"):
         
         """Initialize the EditableText."""
         self.x = x
@@ -54,6 +54,7 @@ class EditableText:
         self.is_monospace = bool(flags & FLAG_MONOSPACED)
         self.is_underline = False
         self.is_strikethrough = False
+        self.alignment = alignment or "left"
 
         name_after_prefix_removal = re.sub(r'^[A-Z]{6}\+', '', pdf_font_name_original)
         if ',' in name_after_prefix_removal:

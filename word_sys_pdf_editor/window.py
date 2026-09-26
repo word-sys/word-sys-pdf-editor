@@ -94,6 +94,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._last_font_size = 11.0
         self._last_is_bold = False
         self._last_is_italic = False
+        self._last_is_strikethrough = False
+        self._last_alignment = 'left'
         self._last_color = (0.0, 0.0, 0.0)
 
         self.view_mode = True
@@ -495,6 +497,35 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.strikethrough_button.connect("toggled", self.on_text_format_changed)
         self.text_format_box.append(self.strikethrough_button)
 
+        align_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        align_box.add_css_class("linked")
+
+        self.align_left_button = Gtk.ToggleButton(icon_name="format-justify-left-symbolic")
+        self.align_left_button.set_tooltip_text(_("align_left_tip"))
+        self.align_left_button.set_active(True)
+        self.align_left_button.connect("toggled", self.on_text_format_changed)
+        align_box.append(self.align_left_button)
+
+        self.align_center_button = Gtk.ToggleButton(icon_name="format-justify-center-symbolic")
+        self.align_center_button.set_tooltip_text(_("align_center_tip"))
+        self.align_center_button.set_group(self.align_left_button)
+        self.align_center_button.connect("toggled", self.on_text_format_changed)
+        align_box.append(self.align_center_button)
+
+        self.align_right_button = Gtk.ToggleButton(icon_name="format-justify-right-symbolic")
+        self.align_right_button.set_tooltip_text(_("align_right_tip"))
+        self.align_right_button.set_group(self.align_left_button)
+        self.align_right_button.connect("toggled", self.on_text_format_changed)
+        align_box.append(self.align_right_button)
+
+        self.align_justify_button = Gtk.ToggleButton(icon_name="format-justify-fill-symbolic")
+        self.align_justify_button.set_tooltip_text(_("align_justify_tip"))
+        self.align_justify_button.set_group(self.align_left_button)
+        self.align_justify_button.connect("toggled", self.on_text_format_changed)
+        align_box.append(self.align_justify_button)
+
+        self.text_format_box.append(align_box)
+
         self.color_button = Gtk.ColorButton()
         default_rgba = Gdk.RGBA()
         default_rgba.parse("black")
@@ -826,6 +857,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.underline_button.set_sensitive(format_enabled_base)
         if hasattr(self, 'strikethrough_button') and self.strikethrough_button:
             self.strikethrough_button.set_sensitive(format_enabled_base)
+        for btn in [getattr(self, 'align_left_button', None), getattr(self, 'align_center_button', None),
+                    getattr(self, 'align_right_button', None), getattr(self, 'align_justify_button', None)]:
+            if btn: btn.set_sensitive(format_enabled_base)
 
         if hasattr(self, 'shape_toolbar_box'):
             self.shape_toolbar_box.set_visible(shape_controls_active)
@@ -1400,6 +1434,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 font_desc.set_absolute_size(int(self.dragged_object.font_size * Pango.SCALE))
                 layout.set_font_description(font_desc)
                 layout.set_text(self.dragged_object.text, -1)
+                align = getattr(self.dragged_object, 'alignment', 'left')
+                if ghost_w > 0:
+                    nat_pw, _ = layout.get_size()
+                    w_to_set = max(ghost_w, nat_pw / Pango.SCALE)
+                    layout.set_width(int(w_to_set * Pango.SCALE))
+                    if align == 'center':
+                        layout.set_alignment(Pango.Alignment.CENTER)
+                    elif align == 'right':
+                        layout.set_alignment(Pango.Alignment.RIGHT)
+                    elif align == 'justify':
+                        layout.set_justify(True)
 
                 r, g, b = self.dragged_object.color
                 cr.set_source_rgba(r, g, b, 0.6)
@@ -1532,6 +1577,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             font_desc.set_absolute_size(int(text_obj.font_size * Pango.SCALE))
             layout.set_font_description(font_desc)
             layout.set_text(text_obj.text, -1)
+            align = getattr(text_obj, 'alignment', 'left')
+            box_w = (x2 - x1)
+            if box_w > 0:
+                nat_pw, _ = layout.get_size()
+                w_to_set = max(box_w, nat_pw / Pango.SCALE)
+                layout.set_width(int(w_to_set * Pango.SCALE))
+                if align == 'center':
+                    layout.set_alignment(Pango.Alignment.CENTER)
+                elif align == 'right':
+                    layout.set_alignment(Pango.Alignment.RIGHT)
+                elif align == 'justify':
+                    layout.set_justify(True)
             r, g, b = text_obj.color
             cr.set_source_rgba(r, g, b, 1.0)
             
@@ -2183,11 +2240,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.strikethrough_button.handler_block_by_func(self.on_text_format_changed)
                 self.strikethrough_button.set_active(False)
                 self.strikethrough_button.handler_unblock_by_func(self.on_text_format_changed)
+            align_btns = [getattr(self, 'align_left_button', None), getattr(self, 'align_center_button', None),
+                          getattr(self, 'align_right_button', None), getattr(self, 'align_justify_button', None)]
+            for b in align_btns:
+                if b:
+                    b.handler_block_by_func(self.on_text_format_changed)
+            if hasattr(self, 'align_left_button') and self.align_left_button:
+                self.align_left_button.set_active(True)
+            for b in align_btns:
+                if b:
+                    b.handler_unblock_by_func(self.on_text_format_changed)
             return
 
         signals_blocked = False
+        align_btns = [getattr(self, 'align_left_button', None), getattr(self, 'align_center_button', None),
+                      getattr(self, 'align_right_button', None), getattr(self, 'align_justify_button', None)]
         try:
-            for widget in [self.font_combo, self.font_size_spin, self.color_button, self.bold_button, self.italic_button, getattr(self, 'underline_button', None), getattr(self, 'strikethrough_button', None)]:
+            widgets_to_block = [self.font_combo, self.font_size_spin, self.color_button, self.bold_button,
+                                self.italic_button, getattr(self, 'underline_button', None),
+                                getattr(self, 'strikethrough_button', None)] + [b for b in align_btns if b]
+            for widget in widgets_to_block:
                 if widget: widget.handler_block_by_func(self.on_text_format_changed)
             signals_blocked = True
 
@@ -2237,17 +2309,41 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, 'strikethrough_button') and self.strikethrough_button:
                 self.strikethrough_button.set_active(getattr(text_obj, 'is_strikethrough', False))
 
+            cur_align = getattr(text_obj, 'alignment', 'left')
+            if cur_align == 'center' and hasattr(self, 'align_center_button') and self.align_center_button:
+                self.align_center_button.set_active(True)
+            elif cur_align == 'right' and hasattr(self, 'align_right_button') and self.align_right_button:
+                self.align_right_button.set_active(True)
+            elif cur_align == 'justify' and hasattr(self, 'align_justify_button') and self.align_justify_button:
+                self.align_justify_button.set_active(True)
+            elif hasattr(self, 'align_left_button') and self.align_left_button:
+                self.align_left_button.set_active(True)
+
             self._last_font_family = target_family_base
             self._last_font_size = text_obj.font_size
             self._last_color = text_obj.color
             self._last_is_bold = text_obj.is_bold
             self._last_is_italic = text_obj.is_italic
             self._last_is_strikethrough = getattr(text_obj, 'is_strikethrough', False)
+            self._last_alignment = cur_align
 
         finally:
             if signals_blocked:
-                 for widget in [self.font_combo, self.font_size_spin, self.color_button, self.bold_button, self.italic_button, getattr(self, 'underline_button', None), getattr(self, 'strikethrough_button', None)]:
+                widgets_to_unblock = [self.font_combo, self.font_size_spin, self.color_button, self.bold_button,
+                                      self.italic_button, getattr(self, 'underline_button', None),
+                                      getattr(self, 'strikethrough_button', None)] + [b for b in align_btns if b]
+                for widget in widgets_to_unblock:
                     if widget: widget.handler_unblock_by_func(self.on_text_format_changed)
+
+    def _get_current_alignment(self):
+        """Get the current alignment string."""
+        if hasattr(self, 'align_center_button') and self.align_center_button and self.align_center_button.get_active():
+            return 'center'
+        if hasattr(self, 'align_right_button') and self.align_right_button and self.align_right_button.get_active():
+            return 'right'
+        if hasattr(self, 'align_justify_button') and self.align_justify_button and self.align_justify_button.get_active():
+            return 'justify'
+        return 'left'
 
     def _get_current_format_settings(self):
         """Get the current format settings."""
@@ -2267,8 +2363,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         is_italic = self.italic_button.get_active() if self.italic_button else False
         is_underline = self.underline_button.get_active() if hasattr(self, 'underline_button') and self.underline_button else False
         is_strikethrough = self.strikethrough_button.get_active() if hasattr(self, 'strikethrough_button') and self.strikethrough_button else False
+        alignment = self._get_current_alignment()
 
-        return font_family_display, font_pdf_name, font_size, color, is_bold, is_italic, is_underline, is_strikethrough
+        return font_family_display, font_pdf_name, font_size, color, is_bold, is_italic, is_underline, is_strikethrough, alignment
 
     def _update_shape_format_controls(self, shape_obj):
         """Update shape format controls."""
@@ -2476,6 +2573,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         tv.set_right_margin(4)
         tv.set_top_margin(4)
         tv.set_bottom_margin(4)
+        align_val = getattr(text_obj, 'alignment', 'left')
+        if align_val == 'center':
+            tv.set_justification(Gtk.Justification.CENTER)
+        elif align_val == 'right':
+            tv.set_justification(Gtk.Justification.RIGHT)
+        elif align_val == 'justify':
+            tv.set_justification(Gtk.Justification.FILL)
+        else:
+            tv.set_justification(Gtk.Justification.LEFT)
         tv.get_buffer().set_text(text_obj.text)
         tv.add_css_class("inline-editor-tv")
         frame.set_child(tv)
@@ -2529,7 +2635,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             layout.set_font_description(desc)
             layout.set_text(text or "A", -1)
             pw, ph = layout.get_size()
-            return (x1, y1, x1 + pw / Pango.SCALE, y1 + ph / Pango.SCALE)
+            calc_w = pw / Pango.SCALE
+            if getattr(obj, 'bbox', None):
+                old_w = obj.bbox[2] - obj.bbox[0]
+                final_w = max(calc_w, old_w) if getattr(obj, 'alignment', 'left') != 'left' else calc_w
+            else:
+                final_w = calc_w
+            return (x1, y1, x1 + final_w, y1 + ph / Pango.SCALE)
 
         if text_obj_to_apply.is_new:
             text_obj_to_apply.text = new_text
@@ -2554,7 +2666,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 layout.set_font_description(desc)
                 layout.set_text(new_text or "A", -1)
                 pw, ph = layout.get_size()
-                new_properties['bbox'] = (x1, y1, x1 + pw / Pango.SCALE, y1 + ph / Pango.SCALE)
+                calc_w = pw / Pango.SCALE
+                if old_properties.get('bbox'):
+                    old_w = old_properties['bbox'][2] - old_properties['bbox'][0]
+                    final_w = max(calc_w, old_w) if new_properties.get('alignment', 'left') != 'left' else calc_w
+                else:
+                    final_w = calc_w
+                new_properties['bbox'] = (x1, y1, x1 + final_w, y1 + ph / Pango.SCALE)
                 command = EditObjectCommand(self, text_obj_to_apply, old_properties, new_properties)
                 command.execute()
                 self.undo_manager.add_command(command)
@@ -3348,7 +3466,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._apply_and_hide_editor()
                 return
 
-            font_fam_display, font_pdf_name, font_size, color, is_bold, is_italic, is_underline, is_strikethrough = self._get_current_format_settings()
+            font_fam_display, font_pdf_name, font_size, color, is_bold, is_italic, is_underline, is_strikethrough, alignment = self._get_current_format_settings()
             if self._last_font_family is not None:
                 font_fam_display = self._last_font_family
                 font_size = self._last_font_size
@@ -3356,6 +3474,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 is_italic = self._last_is_italic
                 is_underline = getattr(self, 'underline_button', None).get_active() if hasattr(self, 'underline_button') else False
                 is_strikethrough = getattr(self, 'strikethrough_button', None).get_active() if hasattr(self, 'strikethrough_button') else False
+                alignment = self._get_current_alignment()
                 color = self._last_color
             unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed)
             baseline_y_unzoomed = unrot_y + (font_size * 0.9)
@@ -3386,6 +3505,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             new_text_obj.is_italic = is_italic
             new_text_obj.is_underline = is_underline
             new_text_obj.is_strikethrough = is_strikethrough
+            new_text_obj.alignment = alignment
             new_text_obj.pdf_fontname_base14 = target_base14
             new_text_obj.page_number = self.current_page_index
 
@@ -3429,6 +3549,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         is_italic = self._last_is_italic
         is_underline = getattr(self, 'underline_button', None).get_active() if hasattr(self, 'underline_button') else False
         is_strikethrough = getattr(self, 'strikethrough_button', None).get_active() if hasattr(self, 'strikethrough_button') else False
+        align_btns = [getattr(self, 'align_left_button', None), getattr(self, 'align_center_button', None),
+                      getattr(self, 'align_right_button', None), getattr(self, 'align_justify_button', None)]
+        if all(b and not b.get_active() for b in align_btns if b):
+            if hasattr(self, 'align_left_button') and self.align_left_button:
+                self.align_left_button.handler_block_by_func(self.on_text_format_changed)
+                self.align_left_button.set_active(True)
+                self.align_left_button.handler_unblock_by_func(self.on_text_format_changed)
+        alignment = self._get_current_alignment()
+        self._last_alignment = alignment
+        
+        if hasattr(self, 'inline_editor_tv') and self.inline_editor_tv:
+            if alignment == 'center':
+                self.inline_editor_tv.set_justification(Gtk.Justification.CENTER)
+            elif alignment == 'right':
+                self.inline_editor_tv.set_justification(Gtk.Justification.RIGHT)
+            elif alignment == 'justify':
+                self.inline_editor_tv.set_justification(Gtk.Justification.FILL)
+            else:
+                self.inline_editor_tv.set_justification(Gtk.Justification.LEFT)
         
         if hasattr(self, 'inline_editor_tv') and self.inline_editor_tv and self.inline_editor_text_obj:
             buf = self.inline_editor_tv.get_buffer()
@@ -3454,6 +3593,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     mid_span.is_italic = is_italic
                     mid_span.is_underline = is_underline
                     mid_span.is_strikethrough = is_strikethrough
+                    mid_span.alignment = alignment
                     
                     from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand
                     commands = [DeleteObjectCommand(self, target_obj)]
@@ -3484,6 +3624,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 mid_span.is_italic = is_italic
                 mid_span.is_underline = is_underline
                 mid_span.is_strikethrough = is_strikethrough
+                mid_span.alignment = alignment
                 mid_span.color = color
                 
                 from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand
@@ -3560,6 +3701,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if getattr(self.pending_format_change_obj, 'is_strikethrough', False) != is_strikethrough:
                 self.pending_format_change_obj.is_strikethrough = is_strikethrough
                 changed = True
+            if getattr(self.pending_format_change_obj, 'alignment', 'left') != alignment:
+                self.pending_format_change_obj.alignment = alignment
+                changed = True
 
             if self.pending_format_change_obj.color != color:
                 self.pending_format_change_obj.color = color
@@ -3582,7 +3726,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     _w = (_p_w / Pango.SCALE)
                     _h = (_p_h / Pango.SCALE)
                     if _w > 0 and _h > 0:
-                        obj.bbox = (x1, y1, x1 + _w, y1 + _h)
+                        old_w = x2 - x1
+                        final_w = max(_w, old_w) if getattr(obj, 'alignment', 'left') != 'left' else _w
+                        obj.bbox = (x1, y1, x1 + final_w, y1 + _h)
                 except Exception as e:
                     print(f"DEBUG: Error recalculating text bbox on format change: {e}")
 
@@ -4851,6 +4997,30 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             popover_box.append(btn_underline)
             popover_box.append(btn_strikethrough)
             popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+            align_popover_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            align_popover_box.add_css_class("linked")
+            btn_al_l = Gtk.Button(icon_name="format-justify-left-symbolic")
+            btn_al_l.set_tooltip_text(_("align_left_tip"))
+            btn_al_l.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "left"))
+            align_popover_box.append(btn_al_l)
+
+            btn_al_c = Gtk.Button(icon_name="format-justify-center-symbolic")
+            btn_al_c.set_tooltip_text(_("align_center_tip"))
+            btn_al_c.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "center"))
+            align_popover_box.append(btn_al_c)
+
+            btn_al_r = Gtk.Button(icon_name="format-justify-right-symbolic")
+            btn_al_r.set_tooltip_text(_("align_right_tip"))
+            btn_al_r.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "right"))
+            align_popover_box.append(btn_al_r)
+
+            btn_al_j = Gtk.Button(icon_name="format-justify-fill-symbolic")
+            btn_al_j.set_tooltip_text(_("align_justify_tip"))
+            btn_al_j.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "justify"))
+            align_popover_box.append(btn_al_j)
+            popover_box.append(align_popover_box)
+            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
             
             btn_hl = Gtk.Button(label=_("menu_highlight"))
             btn_hl.connect("clicked", lambda b: self._handle_context_action("highlight_edit", clicked_text, x, y))
@@ -5032,6 +5202,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             command = EditObjectCommand(self, text_obj, old_properties, new_properties)
             command.execute()
             self.undo_manager.add_command(command)
+            if hasattr(self, '_update_text_format_controls'):
+                self._update_text_format_controls(text_obj)
             self.document_modified = True
             self.pdf_view.queue_draw()
             if hasattr(self, 'context_popover') and self.context_popover:
@@ -5046,6 +5218,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             command = EditObjectCommand(self, text_obj, old_properties, new_properties)
             command.execute()
             self.undo_manager.add_command(command)
+            if hasattr(self, '_update_text_format_controls'):
+                self._update_text_format_controls(text_obj)
             self.document_modified = True
             self.pdf_view.queue_draw()
             if hasattr(self, 'context_popover') and self.context_popover:
@@ -5061,6 +5235,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             command = EditObjectCommand(self, text_obj, old_properties, new_properties)
             command.execute()
             self.undo_manager.add_command(command)
+            if hasattr(self, '_update_text_format_controls'):
+                self._update_text_format_controls(text_obj)
             self.document_modified = True
             self.pdf_view.queue_draw()
             if hasattr(self, 'context_popover') and self.context_popover:
@@ -5076,8 +5252,28 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             command = EditObjectCommand(self, text_obj, old_properties, new_properties)
             command.execute()
             self.undo_manager.add_command(command)
+            if hasattr(self, '_update_text_format_controls'):
+                self._update_text_format_controls(text_obj)
             self.document_modified = True
             self.pdf_view.queue_draw()
+            if hasattr(self, 'context_popover') and self.context_popover:
+                self.context_popover.popdown()
+
+    def _set_text_alignment(self, text_obj, new_align):
+        """Set text alignment with undo/redo."""
+        if text_obj:
+            self.selected_text = text_obj
+            old_val = getattr(text_obj, 'alignment', 'left')
+            if old_val != new_align:
+                old_properties = {'alignment': old_val, 'bbox': text_obj.bbox}
+                new_properties = {'alignment': new_align, 'bbox': text_obj.bbox}
+                command = EditObjectCommand(self, text_obj, old_properties, new_properties)
+                command.execute()
+                self.undo_manager.add_command(command)
+                self.document_modified = True
+                self.pdf_view.queue_draw()
+                if hasattr(self, '_update_text_format_controls'):
+                    self._update_text_format_controls(text_obj)
             if hasattr(self, 'context_popover') and self.context_popover:
                 self.context_popover.popdown()
 
@@ -5155,6 +5351,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             font_size = self._last_font_size or 11.0
             is_bold = self._last_is_bold or False
             is_italic = self._last_is_italic or False
+            is_strikethrough = getattr(self, '_last_is_strikethrough', False)
+            alignment = getattr(self, '_last_alignment', 'left')
             color = self._last_color or (0.0, 0.0, 0.0)
             
             new_text = EditableText(
@@ -5165,10 +5363,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 font_family=font_family,
                 color=color,
                 is_new=True,
-                baseline=page_y + (font_size * 0.85)
+                baseline=page_y + (font_size * 0.85),
+                alignment=alignment
             )
             new_text.is_bold = is_bold
             new_text.is_italic = is_italic
+            new_text.is_strikethrough = is_strikethrough
             new_text.page_number = self.current_page_index
             
             self.editable_texts.append(new_text)
