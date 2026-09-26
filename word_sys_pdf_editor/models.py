@@ -53,6 +53,7 @@ class EditableText:
         self.is_serif = bool(flags & FLAG_SERIF)
         self.is_monospace = bool(flags & FLAG_MONOSPACED)
         self.is_underline = False
+        self.is_strikethrough = False
 
         name_after_prefix_removal = re.sub(r'^[A-Z]{6}\+', '', pdf_font_name_original)
         if ',' in name_after_prefix_removal:

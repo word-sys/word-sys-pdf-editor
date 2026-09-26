@@ -43,9 +43,10 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
     try:
         page = window.doc.load_page(page_num)
 
-        # Underline strip check for text
+        # Underline and strikethrough strip check for text
         strip_rects = []
         is_underlined = False
+        is_strikethrough = False
         if isinstance(target_object, EditableText):
             is_underlined = (
                 getattr(target_object, 'is_underline', False)
@@ -53,8 +54,14 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                 or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', getattr(target_object, 'text', '')))
                 or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', props.get('text', '')))
             )
+            is_strikethrough = (
+                getattr(target_object, 'is_strikethrough', False)
+                or props.get('is_strikethrough', False)
+            )
             x0, y0, x1, y1 = orig_bbox
             baseline = props.get('baseline', getattr(target_object, 'original_baseline', getattr(target_object, 'baseline', y1)))
+            font_sz = props.get('font_size', getattr(target_object, 'font_size', 12.0))
+            line_height = font_sz * 1.2
             
             if not is_underlined:
                 strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.0)
@@ -70,11 +77,23 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                 except Exception:
                     pass
 
+            if not is_strikethrough:
+                strike_test = fitz.Rect(x0 - 2.0, baseline - (font_sz * 0.3) - 2.0, x1 + 2.0, baseline - (font_sz * 0.3) + 2.0)
+                strike_test_rect = (strike_test.quad * mat).rect if mat else strike_test
+                try:
+                    for d in page.get_drawings():
+                        d_rect = d.get('rect')
+                        if d_rect and d_rect.intersects(strike_test_rect) and d_rect.height <= 3.5:
+                            overlap = min(d_rect.x1, strike_test_rect.x1) - max(d_rect.x0, strike_test_rect.x0)
+                            if overlap >= min(4.0, (x1 - x0) * 0.4):
+                                is_strikethrough = True
+                                break
+                except Exception:
+                    pass
+
+            text_val = props.get('text', getattr(target_object, 'text', ''))
+            lines = text_val.split('\n')
             if is_underlined:
-                text_val = props.get('text', getattr(target_object, 'text', ''))
-                lines = text_val.split('\n')
-                font_sz = props.get('font_size', getattr(target_object, 'font_size', 12.0))
-                line_height = font_sz * 1.2
                 for i in range(len(lines)):
                     s_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 4.0)
                     strip_rects.append(s_rect)
@@ -82,6 +101,15 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                         applied_rects.append((s_rect.quad * mat).rect)
                     else:
                         applied_rects.append(s_rect)
+
+            if is_strikethrough:
+                for i in range(len(lines)):
+                    st_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - (font_sz * 0.3) - 2.0, x1 + 2.0, baseline + (i * line_height) - (font_sz * 0.3) + 2.0)
+                    strip_rects.append(st_rect)
+                    if mat:
+                        applied_rects.append((st_rect.quad * mat).rect)
+                    else:
+                        applied_rects.append(st_rect)
 
         # Apply redaction ONLY for target_object
         if mat:

@@ -306,6 +306,26 @@ def _get_page_text_baselines(page):
     return baselines
 
 
+def _get_page_text_strikelines(page):
+    """Get list of (x0, x1, baseline, font_size) for all text lines on page."""
+    strikelines = []
+    try:
+        text_dict = page.get_text("dict", flags=0)
+        for block in text_dict.get("blocks", []):
+            if block.get("type") == 0:
+                for line in block.get("lines", []):
+                    spans = line.get("spans", [])
+                    if spans:
+                        tx0 = min(s["bbox"][0] for s in spans)
+                        tx1 = max(s["bbox"][2] for s in spans)
+                        baseline = spans[0].get("origin", (0, line.get("bbox", [0, 0, 0, 0])[3]))[1]
+                        font_size = spans[0].get("size", 11.0)
+                        strikelines.append((tx0, tx1, baseline, font_size))
+    except Exception:
+        pass
+    return strikelines
+
+
 def _is_underline_drawing(drawing, baselines):
     """Check if a drawing is an underline coincident with a text baseline."""
     if not baselines:
@@ -330,6 +350,41 @@ def _is_underline_drawing(drawing, baselines):
 
         for tx0, tx1, baseline in baselines:
             if abs(line_y - (baseline + 1.5)) <= 2.5:
+                overlap = min(line_x1, tx1) - max(line_x0, tx0)
+                text_width = max(0.1, tx1 - tx0)
+                if overlap >= min(4.0, text_width * 0.4):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_strikethrough_drawing(drawing, strikelines):
+    """Check if a drawing is a strikethrough line across text midpoint."""
+    if not strikelines:
+        return False
+    try:
+        items = drawing.get('items', [])
+        rect = drawing.get('rect')
+        line_y = None
+        line_x0 = None
+        line_x1 = None
+        if len(items) == 1 and items[0][0] == 'l':
+            p1, p2 = items[0][1], items[0][2]
+            if abs(p1.y - p2.y) <= 1.0 and abs(p1.x - p2.x) >= 4.0:
+                line_y = (p1.y + p2.y) / 2.0
+                line_x0, line_x1 = min(p1.x, p2.x), max(p1.x, p2.x)
+        elif rect and rect.height <= 3.5 and rect.width >= 4.0:
+            line_y = (rect.y0 + rect.y1) / 2.0
+            line_x0, line_x1 = rect.x0, rect.x1
+
+        if line_y is None or line_x0 is None or line_x1 is None:
+            return False
+
+        for tx0, tx1, baseline, font_sz in strikelines:
+            target_strike_y = baseline - (font_sz * 0.3)
+            tolerance = max(2.5, font_sz * 0.2)
+            if abs(line_y - target_strike_y) <= tolerance:
                 overlap = min(line_x1, tx1) - max(line_x0, tx0)
                 text_width = max(0.1, tx1 - tx0)
                 if overlap >= min(4.0, text_width * 0.4):
@@ -459,6 +514,10 @@ def extract_editable_text(doc, page_index):
                             for d in page_drawings:
                                 if _is_underline_drawing(d, [(bbox[0], bbox[2], orig_origin[1])]):
                                     editable.is_underline = True
+                                    break
+                            for d in page_drawings:
+                                if _is_strikethrough_drawing(d, [(bbox[0], bbox[2], orig_origin[1], editable.font_size)]):
+                                    editable.is_strikethrough = True
                                     break
                         editable_texts.append(editable)
                         print(f"DEBUG: Extracted text segment: '{combined_text}' font='{editable.font_family_base}' color={editable.color} bbox={editable.bbox}")
@@ -1039,9 +1098,10 @@ def extract_editable_shapes(doc, page_index):
         page = doc.load_page(page_index)
         drawings = page.get_drawings()
         baselines = _get_page_text_baselines(page)
+        strikelines = _get_page_text_strikelines(page)
         for drawing in drawings:
             try:
-                if _is_underline_drawing(drawing, baselines):
+                if _is_underline_drawing(drawing, baselines) or _is_strikethrough_drawing(drawing, strikelines):
                     continue
                 items = drawing.get('items', [])
                 if not items:
@@ -1135,9 +1195,10 @@ def extract_editable_strokes(doc, page_index):
         page = doc.load_page(page_index)
         drawings = page.get_drawings()
         baselines = _get_page_text_baselines(page)
+        strikelines = _get_page_text_strikelines(page)
         for drawing in drawings:
             try:
-                if _is_underline_drawing(drawing, baselines):
+                if _is_underline_drawing(drawing, baselines) or _is_strikethrough_drawing(drawing, strikelines):
                     continue
                 items = drawing.get('items', [])
                 if not items:
@@ -1339,6 +1400,14 @@ def _apply_single_object_to_page(doc, page, obj):
                             p1 = p1 * mat
                             p2 = p2 * mat
                         page.draw_line(p1, p2, color=obj.color, width=0.8)
+
+                    if getattr(obj, 'is_strikethrough', False):
+                        sp1 = fitz.Point(obj.x, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
+                        sp2 = fitz.Point(obj.x + text_len, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
+                        if mat:
+                            sp1 = sp1 * mat
+                            sp2 = sp2 * mat
+                        page.draw_line(sp1, sp2, color=obj.color, width=0.8)
                 else:
                     segments = []
                     last_idx = 0
@@ -1376,6 +1445,14 @@ def _apply_single_object_to_page(doc, page, obj):
                                 p1 = p1 * mat
                                 p2 = p2 * mat
                             page.draw_line(p1, p2, color=seg_color, width=0.8)
+
+                        if getattr(obj, 'is_strikethrough', False):
+                            sp1 = fitz.Point(current_x, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
+                            sp2 = fitz.Point(current_x + seg_len, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
+                            if mat:
+                                sp1 = sp1 * mat
+                                sp2 = sp2 * mat
+                            page.draw_line(sp1, sp2, color=seg_color, width=0.8)
                             
                         if is_seg_link:
                             y0 = obj.baseline + (i * line_height) - obj.font_size

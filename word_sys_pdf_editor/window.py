@@ -490,6 +490,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.underline_button.connect("toggled", self.on_text_format_changed)
         self.text_format_box.append(self.underline_button)
 
+        self.strikethrough_button = Gtk.ToggleButton(icon_name="format-text-strikethrough-symbolic")
+        self.strikethrough_button.set_tooltip_text(_("strikethrough_tip"))
+        self.strikethrough_button.connect("toggled", self.on_text_format_changed)
+        self.text_format_box.append(self.strikethrough_button)
+
         self.color_button = Gtk.ColorButton()
         default_rgba = Gdk.RGBA()
         default_rgba.parse("black")
@@ -819,6 +824,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.italic_button: self.italic_button.set_sensitive(format_enabled_base)
         if hasattr(self, 'underline_button') and self.underline_button:
             self.underline_button.set_sensitive(format_enabled_base)
+        if hasattr(self, 'strikethrough_button') and self.strikethrough_button:
+            self.strikethrough_button.set_sensitive(format_enabled_base)
 
         if hasattr(self, 'shape_toolbar_box'):
             self.shape_toolbar_box.set_visible(shape_controls_active)
@@ -1416,6 +1423,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 
                 if getattr(self.dragged_object, 'is_underline', False):
                     attr_list.insert(Pango.attr_underline_new(Pango.Underline.SINGLE))
+                if getattr(self.dragged_object, 'is_strikethrough', False):
+                    attr_list.insert(Pango.attr_strikethrough_new(True))
                 
                 layout.set_attributes(attr_list)
                 
@@ -1547,6 +1556,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 u_attr.start_index = 0
                 u_attr.end_index = 65535 
                 attr_list.change(u_attr)
+            if getattr(text_obj, 'is_strikethrough', False):
+                s_attr = Pango.attr_strikethrough_new(True)
+                s_attr.start_index = 0
+                s_attr.end_index = 65535
+                attr_list.change(s_attr)
             
             if not self.view_mode and self.selected_text == text_obj and getattr(self, 'word_selection_mode', False):
                 if hasattr(self, 'selected_word_start_char') and hasattr(self, 'selected_word_end_char'):
@@ -2165,11 +2179,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.underline_button.handler_block_by_func(self.on_text_format_changed)
                 self.underline_button.set_active(False)
                 self.underline_button.handler_unblock_by_func(self.on_text_format_changed)
+            if hasattr(self, 'strikethrough_button') and self.strikethrough_button:
+                self.strikethrough_button.handler_block_by_func(self.on_text_format_changed)
+                self.strikethrough_button.set_active(False)
+                self.strikethrough_button.handler_unblock_by_func(self.on_text_format_changed)
             return
 
         signals_blocked = False
         try:
-            for widget in [self.font_combo, self.font_size_spin, self.color_button, self.bold_button, self.italic_button, getattr(self, 'underline_button', None)]:
+            for widget in [self.font_combo, self.font_size_spin, self.color_button, self.bold_button, self.italic_button, getattr(self, 'underline_button', None), getattr(self, 'strikethrough_button', None)]:
                 if widget: widget.handler_block_by_func(self.on_text_format_changed)
             signals_blocked = True
 
@@ -2216,16 +2234,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if self.italic_button: self.italic_button.set_active(text_obj.is_italic)
             if hasattr(self, 'underline_button') and self.underline_button:
                 self.underline_button.set_active(getattr(text_obj, 'is_underline', False))
+            if hasattr(self, 'strikethrough_button') and self.strikethrough_button:
+                self.strikethrough_button.set_active(getattr(text_obj, 'is_strikethrough', False))
 
             self._last_font_family = target_family_base
             self._last_font_size = text_obj.font_size
             self._last_color = text_obj.color
             self._last_is_bold = text_obj.is_bold
             self._last_is_italic = text_obj.is_italic
+            self._last_is_strikethrough = getattr(text_obj, 'is_strikethrough', False)
 
         finally:
             if signals_blocked:
-                 for widget in [self.font_combo, self.font_size_spin, self.color_button, self.bold_button, self.italic_button, getattr(self, 'underline_button', None)]:
+                 for widget in [self.font_combo, self.font_size_spin, self.color_button, self.bold_button, self.italic_button, getattr(self, 'underline_button', None), getattr(self, 'strikethrough_button', None)]:
                     if widget: widget.handler_unblock_by_func(self.on_text_format_changed)
 
     def _get_current_format_settings(self):
@@ -2245,8 +2266,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         is_bold = self.bold_button.get_active() if self.bold_button else False
         is_italic = self.italic_button.get_active() if self.italic_button else False
         is_underline = self.underline_button.get_active() if hasattr(self, 'underline_button') and self.underline_button else False
+        is_strikethrough = self.strikethrough_button.get_active() if hasattr(self, 'strikethrough_button') and self.strikethrough_button else False
 
-        return font_family_display, font_pdf_name, font_size, color, is_bold, is_italic, is_underline
+        return font_family_display, font_pdf_name, font_size, color, is_bold, is_italic, is_underline, is_strikethrough
 
     def _update_shape_format_controls(self, shape_obj):
         """Update shape format controls."""
@@ -3326,13 +3348,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._apply_and_hide_editor()
                 return
 
-            font_fam_display, font_pdf_name, font_size, color, is_bold, is_italic, is_underline = self._get_current_format_settings()
+            font_fam_display, font_pdf_name, font_size, color, is_bold, is_italic, is_underline, is_strikethrough = self._get_current_format_settings()
             if self._last_font_family is not None:
                 font_fam_display = self._last_font_family
                 font_size = self._last_font_size
                 is_bold = self._last_is_bold
                 is_italic = self._last_is_italic
                 is_underline = getattr(self, 'underline_button', None).get_active() if hasattr(self, 'underline_button') else False
+                is_strikethrough = getattr(self, 'strikethrough_button', None).get_active() if hasattr(self, 'strikethrough_button') else False
                 color = self._last_color
             unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed)
             baseline_y_unzoomed = unrot_y + (font_size * 0.9)
@@ -3362,6 +3385,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             new_text_obj.is_bold = is_bold
             new_text_obj.is_italic = is_italic
             new_text_obj.is_underline = is_underline
+            new_text_obj.is_strikethrough = is_strikethrough
             new_text_obj.pdf_fontname_base14 = target_base14
             new_text_obj.page_number = self.current_page_index
 
@@ -3394,6 +3418,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._last_font_size = self.font_size_spin.get_value()
         self._last_is_bold = self.bold_button.get_active() if self.bold_button else False
         self._last_is_italic = self.italic_button.get_active() if self.italic_button else False
+        self._last_is_strikethrough = getattr(self, 'strikethrough_button', None).get_active() if hasattr(self, 'strikethrough_button') else False
         rgba = self.color_button.get_rgba()
         self._last_color = (rgba.red, rgba.green, rgba.blue)
         
@@ -3403,6 +3428,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         is_bold = self._last_is_bold
         is_italic = self._last_is_italic
         is_underline = getattr(self, 'underline_button', None).get_active() if hasattr(self, 'underline_button') else False
+        is_strikethrough = getattr(self, 'strikethrough_button', None).get_active() if hasattr(self, 'strikethrough_button') else False
         
         if hasattr(self, 'inline_editor_tv') and self.inline_editor_tv and self.inline_editor_text_obj:
             buf = self.inline_editor_tv.get_buffer()
@@ -3427,6 +3453,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     mid_span.is_bold = is_bold
                     mid_span.is_italic = is_italic
                     mid_span.is_underline = is_underline
+                    mid_span.is_strikethrough = is_strikethrough
                     
                     from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand
                     commands = [DeleteObjectCommand(self, target_obj)]
@@ -3456,6 +3483,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 mid_span.is_bold = is_bold
                 mid_span.is_italic = is_italic
                 mid_span.is_underline = is_underline
+                mid_span.is_strikethrough = is_strikethrough
                 mid_span.color = color
                 
                 from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand
@@ -3528,6 +3556,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 changed = True
             if getattr(self.pending_format_change_obj, 'is_underline', False) != is_underline:
                 self.pending_format_change_obj.is_underline = is_underline
+                changed = True
+            if getattr(self.pending_format_change_obj, 'is_strikethrough', False) != is_strikethrough:
+                self.pending_format_change_obj.is_strikethrough = is_strikethrough
                 changed = True
 
             if self.pending_format_change_obj.color != color:
@@ -4798,6 +4829,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_bold = Gtk.Button(label=_("bold_tip"))
             btn_italic = Gtk.Button(label=_("italic_tip"))
             btn_underline = Gtk.Button(label=_("underline_tip"))
+            btn_strikethrough = Gtk.Button(label=_("strikethrough_tip"))
             def on_bold_clicked(b):
                 """Handle the bold clicked event."""
                 self._toggle_text_bold(clicked_text)
@@ -4807,12 +4839,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             def on_underline_clicked(b):
                 """Handle the underline clicked event."""
                 self._toggle_text_underline(clicked_text)
+            def on_strikethrough_clicked(b):
+                """Handle the strikethrough clicked event."""
+                self._toggle_text_strikethrough(clicked_text)
             btn_bold.connect("clicked", on_bold_clicked)
             btn_italic.connect("clicked", on_italic_clicked)
             btn_underline.connect("clicked", on_underline_clicked)
+            btn_strikethrough.connect("clicked", on_strikethrough_clicked)
             popover_box.append(btn_bold)
             popover_box.append(btn_italic)
             popover_box.append(btn_underline)
+            popover_box.append(btn_strikethrough)
             popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
             
             btn_hl = Gtk.Button(label=_("menu_highlight"))
@@ -4958,6 +4995,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._convert_view_selection_to_editable()
             if self.selected_text:
                 self._toggle_text_underline(self.selected_text)
+        elif action == "toggle_strikethrough":
+            if self.view_mode:
+                self._convert_view_selection_to_editable()
+            if self.selected_text:
+                self._toggle_text_strikethrough(self.selected_text)
 
     def _convert_view_selection_to_editable(self):
         """Convert view selection to editable."""
@@ -5016,6 +5058,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             old_val = getattr(text_obj, 'is_underline', False)
             old_properties = {'is_underline': old_val, 'bbox': text_obj.bbox}
             new_properties = {'is_underline': not old_val, 'bbox': text_obj.bbox}
+            command = EditObjectCommand(self, text_obj, old_properties, new_properties)
+            command.execute()
+            self.undo_manager.add_command(command)
+            self.document_modified = True
+            self.pdf_view.queue_draw()
+            if hasattr(self, 'context_popover') and self.context_popover:
+                self.context_popover.popdown()
+
+    def _toggle_text_strikethrough(self, text_obj):
+        """Toggle text strikethrough."""
+        if text_obj:
+            self.selected_text = text_obj
+            old_val = getattr(text_obj, 'is_strikethrough', False)
+            old_properties = {'is_strikethrough': old_val, 'bbox': text_obj.bbox}
+            new_properties = {'is_strikethrough': not old_val, 'bbox': text_obj.bbox}
             command = EditObjectCommand(self, text_obj, old_properties, new_properties)
             command.execute()
             self.undo_manager.add_command(command)
