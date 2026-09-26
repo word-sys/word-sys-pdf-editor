@@ -36,6 +36,7 @@ class EditableText:
         self.font_size = float(font_size)
         self.is_new = is_new
         self.rotation = float(rotation) % 360.0
+        self.original_rotation = self.rotation
 
         self.original_bbox = span_data.get("bbox") if span_data else None
 
@@ -213,6 +214,7 @@ class EditableText:
             ratio = start_char / max(len(text), 1)
             pre.bbox = (x1, y1, x1 + (x2 - x1) * ratio, y2)
             pre.original_bbox = pre.bbox
+            pre.original_rotation = getattr(self, 'rotation', 0.0)
             pre.x, pre.y = pre.bbox[0], pre.bbox[1]
             parts.append(pre)
         mid = copy.deepcopy(self)
@@ -224,6 +226,7 @@ class EditableText:
         r2 = end_char / max(len(text), 1)
         mid.bbox = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
         mid.original_bbox = mid.bbox
+        mid.original_rotation = getattr(self, 'rotation', 0.0)
         mid.x, mid.y = mid.bbox[0], mid.bbox[1]
         parts.append(mid)
         if end_char < len(text):
@@ -235,6 +238,7 @@ class EditableText:
             ratio = end_char / max(len(text), 1)
             post.bbox = (x1 + (x2 - x1) * ratio, y1, x2, y2)
             post.original_bbox = post.bbox
+            post.original_rotation = getattr(self, 'rotation', 0.0)
             post.x, post.y = post.bbox[0], post.bbox[1]
             parts.append(post)
         return parts
@@ -252,6 +256,7 @@ class EditableImage:
         self.selected = False
         self.modified = False
         self.rotation = float(rotation) % 360.0
+        self.original_rotation = self.rotation
 
     def set_rotation(self, angle):
         """Set rotation in degrees (0-360)."""
@@ -281,6 +286,7 @@ class EditableShape:
         self.original_stroke_width = self.stroke_width
         self.is_transparent = is_transparent
         self.rotation = float(rotation) % 360.0
+        self.original_rotation = self.rotation
         
         self.page_number = page_number
         self.is_new = is_new
@@ -360,6 +366,7 @@ class EditableStroke:
         self.selected = False
         self.modified = is_new
         self.rotation = float(rotation) % 360.0
+        self.original_rotation = self.rotation
         self.dragging = False
         self.drag_start_x = 0
         self.drag_start_y = 0

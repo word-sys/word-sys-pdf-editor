@@ -2245,8 +2245,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             for b in align_btns:
                 if b:
                     b.handler_block_by_func(self.on_text_format_changed)
-            if hasattr(self, 'align_left_button') and self.align_left_button:
-                self.align_left_button.set_active(True)
+            cur_align = getattr(self, '_last_alignment', 'left')
+            target_btn = getattr(self, 'align_left_button', None)
+            if cur_align == 'center' and getattr(self, 'align_center_button', None):
+                target_btn = self.align_center_button
+            elif cur_align == 'right' and getattr(self, 'align_right_button', None):
+                target_btn = self.align_right_button
+            elif cur_align == 'justify' and getattr(self, 'align_justify_button', None):
+                target_btn = self.align_justify_button
+
+            for b in align_btns:
+                if b and b != target_btn and b.get_active():
+                    b.set_active(False)
+            if target_btn and not target_btn.get_active():
+                target_btn.set_active(True)
+
             for b in align_btns:
                 if b:
                     b.handler_unblock_by_func(self.on_text_format_changed)
@@ -2310,14 +2323,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.strikethrough_button.set_active(getattr(text_obj, 'is_strikethrough', False))
 
             cur_align = getattr(text_obj, 'alignment', 'left')
-            if cur_align == 'center' and hasattr(self, 'align_center_button') and self.align_center_button:
-                self.align_center_button.set_active(True)
-            elif cur_align == 'right' and hasattr(self, 'align_right_button') and self.align_right_button:
-                self.align_right_button.set_active(True)
-            elif cur_align == 'justify' and hasattr(self, 'align_justify_button') and self.align_justify_button:
-                self.align_justify_button.set_active(True)
-            elif hasattr(self, 'align_left_button') and self.align_left_button:
-                self.align_left_button.set_active(True)
+            target_btn = getattr(self, 'align_left_button', None)
+            if cur_align == 'center' and getattr(self, 'align_center_button', None):
+                target_btn = self.align_center_button
+            elif cur_align == 'right' and getattr(self, 'align_right_button', None):
+                target_btn = self.align_right_button
+            elif cur_align == 'justify' and getattr(self, 'align_justify_button', None):
+                target_btn = self.align_justify_button
+
+            for b in align_btns:
+                if b and b != target_btn and b.get_active():
+                    b.set_active(False)
+            if target_btn and not target_btn.get_active():
+                target_btn.set_active(True)
 
             self._last_font_family = target_family_base
             self._last_font_size = text_obj.font_size
@@ -3551,11 +3569,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         is_strikethrough = getattr(self, 'strikethrough_button', None).get_active() if hasattr(self, 'strikethrough_button') else False
         align_btns = [getattr(self, 'align_left_button', None), getattr(self, 'align_center_button', None),
                       getattr(self, 'align_right_button', None), getattr(self, 'align_justify_button', None)]
-        if all(b and not b.get_active() for b in align_btns if b):
-            if hasattr(self, 'align_left_button') and self.align_left_button:
-                self.align_left_button.handler_block_by_func(self.on_text_format_changed)
-                self.align_left_button.set_active(True)
-                self.align_left_button.handler_unblock_by_func(self.on_text_format_changed)
+        if widget in align_btns and not widget.get_active():
+            def check_restore_active(deactivated_btn):
+                if all(b and not b.get_active() for b in align_btns if b):
+                    deactivated_btn.handler_block_by_func(self.on_text_format_changed)
+                    deactivated_btn.set_active(True)
+                    deactivated_btn.handler_unblock_by_func(self.on_text_format_changed)
+                return False
+            GLib.idle_add(check_restore_active, widget)
+            return
+
+        if widget in align_btns and widget.get_active():
+            for b in align_btns:
+                if b and b != widget and b.get_active():
+                    b.handler_block_by_func(self.on_text_format_changed)
+                    b.set_active(False)
+                    b.handler_unblock_by_func(self.on_text_format_changed)
+
         alignment = self._get_current_alignment()
         self._last_alignment = alignment
         

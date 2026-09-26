@@ -17,7 +17,7 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
 
     props = properties_to_clear or {}
     orig_bbox = props.get('bbox', getattr(target_object, 'original_bbox', target_object.bbox))
-    rot = props.get('rotation', getattr(target_object, 'rotation', 0.0))
+    rot = props.get('rotation', getattr(target_object, 'original_rotation', getattr(target_object, 'rotation', 0.0)))
 
     if isinstance(target_object, (EditableShape, EditableStroke)):
         sw = props.get('stroke_width', getattr(target_object, 'stroke_width', 2.0))
@@ -95,7 +95,7 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
             lines = text_val.split('\n')
             if is_underlined:
                 for i in range(len(lines)):
-                    s_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - 1.0, x1 + 2.0, baseline + (i * line_height) + 4.0)
+                    s_rect = fitz.Rect(x0, baseline + (i * line_height) - 0.5, x1, baseline + (i * line_height) + 2.5)
                     strip_rects.append(s_rect)
                     if mat:
                         applied_rects.append((s_rect.quad * mat).rect)
@@ -104,7 +104,7 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
 
             if is_strikethrough:
                 for i in range(len(lines)):
-                    st_rect = fitz.Rect(x0 - 2.0, baseline + (i * line_height) - (font_sz * 0.3) - 2.0, x1 + 2.0, baseline + (i * line_height) - (font_sz * 0.3) + 2.0)
+                    st_rect = fitz.Rect(x0, baseline + (i * line_height) - (font_sz * 0.3) - 1.0, x1, baseline + (i * line_height) - (font_sz * 0.3) + 1.0)
                     strip_rects.append(st_rect)
                     if mat:
                         applied_rects.append((st_rect.quad * mat).rect)
@@ -134,22 +134,29 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                 except Exception:
                     pass
 
-            # Check ONLY other EditableText on the same page for physical character clipping
+            # Check other EditableText on the same page ONLY if PyMuPDF physically destroyed its text
             for other in getattr(window, 'editable_texts', []):
                 if other is not target_object and getattr(other, 'page_number', None) == page_num:
+                    if getattr(other, '_ghost_redacted', False):
+                        continue
                     if hasattr(other, 'bbox') and other.bbox:
                         ox0, oy0, ox1, oy1 = other.bbox
                         other_rect = fitz.Rect(ox0 - 0.5, oy0 - 0.5, ox1 + 0.5, oy1 + 0.5)
-                        orot = getattr(other, 'rotation', 0.0)
+                        orot = getattr(other, 'original_rotation', getattr(other, 'rotation', 0.0))
                         if orot != 0.0:
                             ocx = (ox0 + ox1) / 2.0
                             ocy = (oy0 + oy1) / 2.0
                             omat = pdf_handler.get_rotation_matrix(ocx, ocy, orot)
                             other_rect = (other_rect.quad * omat).rect
-                        for ar in applied_rects:
-                            if ar.intersects(other_rect):
-                                other._ghost_redacted = True
-                                break
+                        intersects_any = any(ar.intersects(other_rect) for ar in applied_rects)
+                        if intersects_any:
+                            expected_text = getattr(other, 'original_text', getattr(other, 'text', '')).strip()
+                            if expected_text:
+                                clip_text = page.get_text("text", clip=other_rect).strip()
+                                norm_expected = "".join(expected_text.split())
+                                norm_clip = "".join(clip_text.split())
+                                if norm_expected not in norm_clip:
+                                    other._ghost_redacted = True
 
         elif isinstance(target_object, (EditableShape, EditableStroke)):
             # Only redact vector graphics, NEVER redact text or images (text=1 preserves text!)
@@ -222,9 +229,9 @@ class Command:
         """Undo the command."""
         raise NotImplementedError
 
-    def _erase_ghost_if_needed(self, target_object, page_num):
+    def _erase_ghost_if_needed(self, target_object, page_num, properties_to_clear=None):
         """Redact original object from snapshot if edited/moved."""
-        _perform_ghost_erasure(self.window, target_object, page_num)
+        _perform_ghost_erasure(self.window, target_object, page_num, properties_to_clear=properties_to_clear)
 
 class UndoManager:
     """Manager class that stores undo and redo action stacks."""
@@ -597,16 +604,20 @@ class RotateObjectCommand(Command):
         self.old_rotation = float(old_rotation) % 360.0
         self.new_rotation = float(new_rotation) % 360.0
 
-    def _apply_rotation(self, angle: float):
+    def _apply_rotation(self, to_angle: float, from_angle: float):
         """Bake the rotation into the PDF page and update live object and UI."""
-        if hasattr(self.target_object, 'set_rotation'):
-            self.target_object.set_rotation(angle)
-        else:
-            self.target_object.rotation = float(angle) % 360.0
-
         page_num = getattr(self.target_object, 'page_number', None)
         if page_num is not None and getattr(self.window, 'doc', None):
-            self._erase_ghost_if_needed(self.target_object, page_num)
+            orig_rot = getattr(self.target_object, 'original_rotation', from_angle)
+            orig_bbox = getattr(self.target_object, 'original_bbox', getattr(self.target_object, 'bbox', None))
+            props_to_clear = {'rotation': orig_rot, 'bbox': orig_bbox}
+            self._erase_ghost_if_needed(self.target_object, page_num, properties_to_clear=props_to_clear)
+
+            temp_obj = copy.deepcopy(self.target_object)
+            if hasattr(temp_obj, 'set_rotation'):
+                temp_obj.set_rotation(to_angle)
+            else:
+                temp_obj.rotation = float(to_angle) % 360.0
 
             strokes = getattr(self.window, 'editable_strokes', [])
             pdf_handler.rebuild_page(
@@ -617,7 +628,7 @@ class RotateObjectCommand(Command):
                 exclude_obj=self.target_object,
                 all_strokes=strokes
             )
-            success, msg = pdf_handler.apply_object_edit(self.window.doc, self.target_object)
+            success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj)
             if success:
                 self.target_object.is_baked = True
                 self.target_object._ghost_redacted = True
@@ -626,6 +637,11 @@ class RotateObjectCommand(Command):
             else:
                 from .ui_components import show_error_dialog
                 show_error_dialog(self.window, _("err_during_op", msg))
+
+        if hasattr(self.target_object, 'set_rotation'):
+            self.target_object.set_rotation(to_angle)
+        else:
+            self.target_object.rotation = float(to_angle) % 360.0
 
         self.window.document_modified = True
         if getattr(self.window, 'selected_text', None) == self.target_object:
@@ -642,12 +658,12 @@ class RotateObjectCommand(Command):
 
     def execute(self):
         """Apply new rotation angle."""
-        self._apply_rotation(self.new_rotation)
+        self._apply_rotation(self.new_rotation, self.old_rotation)
         if hasattr(self.window, 'status_label') and self.window.status_label:
             self.window.status_label.set_text(_("status_object_rotation", f"{self.new_rotation:.1f}°"))
 
     def undo(self):
         """Revert back to old rotation angle."""
-        self._apply_rotation(self.old_rotation)
+        self._apply_rotation(self.old_rotation, self.new_rotation)
         if hasattr(self.window, 'status_label') and self.window.status_label:
             self.window.status_label.set_text(_("status_object_rotation", f"{self.old_rotation:.1f}°"))

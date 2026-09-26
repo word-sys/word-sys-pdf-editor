@@ -509,6 +509,7 @@ def extract_editable_text(doc, page_index):
                         editable.bbox = tuple(bbox)
                         editable.original_bbox = editable.bbox
                         editable.original_baseline = editable.baseline
+                        editable.original_rotation = editable.rotation
                         editable.page_number = page_index
                         if page_drawings:
                             for d in page_drawings:
