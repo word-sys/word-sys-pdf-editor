@@ -24,7 +24,7 @@ class ExportDialog(Adw.Window):
         self.set_transient_for(parent_window)
         self.set_modal(True)
         self.set_title(_("export_dialog_title"))
-        self.set_default_size(500, 440)
+        self.set_default_size(520, 460)
         self.set_resizable(False)
 
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -35,7 +35,7 @@ class ExportDialog(Adw.Window):
         self.cancel_btn.connect("clicked", lambda b: self.destroy())
         header.pack_start(self.cancel_btn)
 
-        self.export_btn = Gtk.Button(label=_("export_btn_choose"))
+        self.export_btn = Gtk.Button(label=_("export_btn_confirm"))
         self.export_btn.add_css_class("suggested-action")
         self.export_btn.connect("clicked", self._on_export_clicked)
         header.pack_end(self.export_btn)
@@ -46,7 +46,7 @@ class ExportDialog(Adw.Window):
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         main_box.append(scrolled)
 
-        clamp = Adw.Clamp(maximum_size=460)
+        clamp = Adw.Clamp(maximum_size=480)
         clamp.set_margin_top(16)
         clamp.set_margin_bottom(16)
         clamp.set_margin_start(16)
@@ -64,10 +64,77 @@ class ExportDialog(Adw.Window):
         fmt_labels = [_(item[1]) for item in FORMAT_ITEMS]
         self.format_model = Gtk.StringList.new(fmt_labels)
         self.format_row = Adw.ComboRow()
-        self.format_row.set_title(_("export_format_title"))
+        self.format_row.set_title(_("export_format_label"))
+
+        # Rich factories for both closed row display and dropdown list items
+        def _create_format_factory(is_list: bool = False):
+            factory = Gtk.SignalListItemFactory()
+
+            def _setup_item(fact, list_item):
+                box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8 if not is_list else 16)
+                if is_list:
+                    box.set_margin_start(12)
+                    box.set_margin_end(12)
+                    box.set_margin_top(8)
+                    box.set_margin_bottom(8)
+                else:
+                    box.set_valign(Gtk.Align.CENTER)
+
+                name_lbl = Gtk.Label()
+                name_lbl.set_halign(Gtk.Align.START if is_list else Gtk.Align.END)
+                if is_list:
+                    name_lbl.set_hexpand(True)
+                box.append(name_lbl)
+
+                ext_badge = Gtk.Label()
+                ext_badge.set_halign(Gtk.Align.END)
+                ext_badge.add_css_class("dim-label")
+                box.append(ext_badge)
+
+                list_item.set_child(box)
+
+            def _bind_item(fact, list_item):
+                box = list_item.get_child()
+                name_lbl = box.get_first_child()
+                ext_badge = name_lbl.get_next_sibling()
+
+                val = list_item.get_item().get_string()
+                if "(" in val and val.endswith(")"):
+                    name_part, ext_part = val.rsplit("(", 1)
+                    ext_clean = ext_part.rstrip(")").strip()
+                    name_lbl.set_text(name_part.strip())
+                    ext_badge.set_markup(f"<b>{ext_clean}</b>")
+                else:
+                    name_lbl.set_text(val)
+                    ext_badge.set_text("")
+
+            factory.connect("setup", _setup_item)
+            factory.connect("bind", _bind_item)
+            return factory
+
+        self.format_row.set_factory(_create_format_factory(is_list=False))
+        self.format_row.set_list_factory(_create_format_factory(is_list=True))
+
         self.format_row.set_model(self.format_model)
         self.format_row.connect("notify::selected", self._on_format_changed)
         group_format.add(self.format_row)
+
+        # Enforce wide popover width so dropdown is spacious and never truncates extensions
+        def _find_popover(widget):
+            if isinstance(widget, Gtk.Popover):
+                return widget
+            child = widget.get_first_child()
+            while child:
+                res = _find_popover(child)
+                if res:
+                    return res
+                child = child.get_next_sibling()
+            return None
+
+        popover = _find_popover(self.format_row)
+        if popover:
+            popover.set_size_request(440, -1)
+            popover.connect("map", lambda p: p.set_size_request(440, -1))
 
         # Layout Mode Group
         self.layout_group = Adw.PreferencesGroup()

@@ -2908,27 +2908,27 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.show_export_dialog(initial_format="DOCX")
 
     def on_export_docx(self, action=None, param=None):
-        """Handle direct export to DOCX."""
-        self.show_export_dialog(initial_format="DOCX")
+        """Direct export to DOCX: prompt destination directly, defaulting to 1:1 canvas mode."""
+        self._prompt_export_destination("DOCX", mode="canvas")
 
     def on_export_pptx(self, action=None, param=None):
-        """Handle direct export to PPTX."""
-        self.show_export_dialog(initial_format="PPTX")
+        """Direct export to PPTX: prompt destination directly, defaulting to 1:1 canvas mode."""
+        self._prompt_export_destination("PPTX", mode="canvas")
 
     def on_export_odt(self, action=None, param=None):
-        """Handle direct export to ODT."""
-        self.show_export_dialog(initial_format="ODT")
+        """Direct export to ODT: prompt destination directly, defaulting to 1:1 canvas mode."""
+        self._prompt_export_destination("ODT", mode="canvas")
 
     def on_export_odp(self, action=None, param=None):
-        """Handle direct export to ODP."""
-        self.show_export_dialog(initial_format="ODP")
+        """Direct export to ODP: prompt destination directly, defaulting to 1:1 canvas mode."""
+        self._prompt_export_destination("ODP", mode="canvas")
 
     def on_export_txt(self, action=None, param=None):
-        """Handle direct export to TXT."""
-        self.show_export_dialog(initial_format="TXT")
+        """Direct export to TXT: prompt destination directly."""
+        self._prompt_export_destination("TXT", mode="canvas")
 
     def show_export_dialog(self, initial_format="DOCX"):
-        """Show modern Libadwaita ExportDialog for document export."""
+        """Show modern Libadwaita ExportDialog for document export settings."""
         if not self.doc:
             return
         from .export_dialog import ExportDialog
@@ -2942,6 +2942,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _on_export_dialog_confirmed(self, format_name, mode):
         """Handle confirmed format and mode selection from ExportDialog."""
+        self._prompt_export_destination(format_name, mode=mode)
+
+    def _prompt_export_destination(self, format_name, mode="canvas"):
+        """Prompt file save dialog for chosen format and mode, then execute export."""
         if not self.doc:
             return
 
