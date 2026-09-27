@@ -645,7 +645,7 @@ def export_document(
     mode="canvas",
     password="",
 ):
-    """Export a PDF document into a target format (DOCX, PPTX, ODT, ODP, TXT) using AnyConvert.
+    """Export a PDF document into a target format (DOCX, PPTX, ODT, ODP, TXT) using anyconvert.
 
     Args:
         doc: The fitz.Document instance or None.
@@ -670,7 +670,7 @@ def export_document(
         output_path = f"{output_path}.{fmt}"
 
     if not HAS_ANYCONVERT:
-        return False, "AnyConvert engine is not installed. Please install 'anyconvert' to enable document export."
+        return False, "anyconvert engine is not installed. Please install 'anyconvert' to enable document export."
 
     conv_mode = "canvas"
     if isinstance(mode, str):
@@ -737,38 +737,33 @@ def export_document(
     except anyconvert.exceptions.UnsupportedFormatError as e:
         return False, f"Unsupported export format: {e}"
     except anyconvert.exceptions.AnyConvertError as e:
-        return False, f"AnyConvert conversion failed: {e}"
+        return False, f"anyconvert conversion failed: {e}"
     except Exception as e:
         return False, f"Error during {fmt.upper()} export: {e}"
 
 
 def export_pdf_as_docx(doc, source_pdf_path, output_docx_path, mode="canvas", password=""):
-    """Export PDF as DOCX using AnyConvert."""
+    """Export PDF as DOCX using anyconvert."""
     return export_document(doc, source_pdf_path, output_docx_path, "docx", mode=mode, password=password)
 
 
 def export_pdf_as_odt(doc, source_pdf_path, output_odt_path, mode="canvas", password=""):
-    """Export PDF as ODT using AnyConvert."""
+    """Export PDF as ODT using anyconvert."""
     return export_document(doc, source_pdf_path, output_odt_path, "odt", mode=mode, password=password)
 
 
 def export_pdf_as_pptx(doc, source_pdf_path, output_pptx_path, mode="canvas", password=""):
-    """Export PDF as PPTX using AnyConvert."""
+    """Export PDF as PPTX using anyconvert."""
     return export_document(doc, source_pdf_path, output_pptx_path, "pptx", mode=mode, password=password)
 
 
 def export_pdf_as_odp(doc, source_pdf_path, output_odp_path, mode="canvas", password=""):
-    """Export PDF as ODP using AnyConvert."""
+    """Export PDF as ODP using anyconvert."""
     return export_document(doc, source_pdf_path, output_odp_path, "odp", mode=mode, password=password)
 
 
-def export_pdf_as_odt_alias(doc, source_pdf_path, output_odt_path, mode="canvas", password=""):
-    """Export PDF as ODT alias."""
-    return export_pdf_as_odt(doc, source_pdf_path, output_odt_path, mode=mode, password=password)
-
-
 def export_pdf_as_text(doc, output_txt_path, source_pdf_path=None, mode="canvas", password=""):
-    """Export PDF as Plain Text (TXT) using AnyConvert."""
+    """Export PDF as Plain Text (TXT) using anyconvert."""
     return export_document(
         doc=doc,
         source_pdf_path=source_pdf_path,

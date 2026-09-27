@@ -48,13 +48,33 @@ Lisans: **GPL-3.0-or-later**
 *   Özel karakterler ve simgeler
 *   Düzenlenen PDF dosyalarını kaydetme
 *   Hızlı Kaydetme (`Ctrl + S`)
-*   PDF belgelerini DOCX, PPTX, ODT, ODP ve TXT formatlarına yerel AnyConvert motoru ile aktarma
+*   PDF belgelerini DOCX, PPTX, ODT, ODP ve TXT formatlarına yerel anyconvert motoru ile aktarma
 *   Küçük resim sürükle-bırak ile canlı sayfa yeniden sıralama
 *   Güvenli Kaydetme (Safe Save)
 *   Kısıtlı Mod (Güvenli Mod)
 *   Tam çok düzeyli Geri Al / Yinele geçmişi (`Ctrl + Z` / `Ctrl + Y`)
 *   İmleç odaklı hassas yakınlaştırma (`Ctrl + Fare Tekerleği` ve `Ctrl + + / - / 0`)
 *   PDF belgelerine sayfa ekleme ve çıkarma
+
+### Yerel Belge Dışa Aktarma (anyconvert)
+
+word-sys's PDF Editor, PDF belgelerini LibreOffice gibi harici bağımlılıklara ihtiyaç duymadan dışa aktarmak için saf Python [anyconvert](https://github.com/word-sys/anyconvert) ([PyPI](https://pypi.org/project/anyconvert/)) motorunu içerir.
+
+Desteklenen formatlar:
+*   **Microsoft Word (`.docx`)**
+*   **Microsoft PowerPoint (`.pptx`)**
+*   **OpenDocument Metin (`.odt`)**
+*   **OpenDocument Sunum (`.odp`)**
+*   **Düz Metin (`.txt`)**
+
+Dışa aktarma modları:
+*   **Piksel Doğruluğunda Tuval (`mode='canvas'`)**: Metin, şekil ve görsellerin 1:1 tam görsel konumunu korur. Düzenlenen PDF'ler için önerilir.
+*   **Anlamsal Akış (`mode='flow'`)**: Başlıkları, paragrafları ve akıcı metin akışını yeniden yapılandırır.
+
+anyconvert ayrıca doğrudan komut satırından da çalıştırılabilir:
+```bash
+anyconvert input.pdf -f docx -m canvas -o output.docx
+```
 
 ---
 

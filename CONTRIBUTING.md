@@ -97,6 +97,6 @@ All core logic resides inside the `word_sys_pdf_editor/` package:
 
 ## Translations
 
-UI strings and translations are stored in `word_sys_pdf_editor/i18n.py`.
-- To fix or add a translation, update the corresponding key in the `TRANSLATIONS` dictionary.
-- If adding a new UI string, add it to both the English (`en`) and Turkish (`tr`) dictionaries.
+UI strings and translations are stored in `word_sys_pdf_editor/i18n.py` and `word_sys_pdf_editor/locales.py`.
+- Translations are provided for 7 languages: English (`en`), Turkish (`tr`), French (`fr`), German (`de`), Spanish (`es`), Italian (`it`), and Russian (`ru`).
+- When adding a new UI key, register the English and Turkish strings in `i18n.py` and the corresponding localized strings in `locales.py`.

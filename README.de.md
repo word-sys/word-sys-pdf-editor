@@ -48,13 +48,33 @@ Lizenz: **GPL-3.0-or-later**
 *   Sonderzeichen und Symbole
 *   Bearbeitete PDF-Dateien speichern
 *   Schnellspeichern (`Strg + S`)
-*   PDF-Export in DOCX-, PPTX-, ODT-, ODP- und TXT-Formate mit der nativen AnyConvert-Engine
+*   PDF-Export in DOCX-, PPTX-, ODT-, ODP- und TXT-Formate mit der nativen anyconvert-Engine
 *   Benutzerfreundliche Oberfläche mit Live-Miniaturbild-Seitenanordnung per Drag-and-Drop
 *   Sicheres Speichern (Safe Save)
 *   Eingeschränkter Modus (Safe Mode)
 *   Vollständige mehrstufige Rückgängig-/Wiederholen-Historie (`Strg + Z` / `Strg + Y`)
 *   Präziser zeigerzentrierter Fokus-Zoom (`Strg + Mausrad` und `Strg + + / - / 0`)
 *   Seiten in PDF-Dokumenten hinzufügen oder löschen
+
+### Nativer Dokumentenexport (anyconvert)
+
+word-sys's PDF Editor verwendet die reine Python-Engine [anyconvert](https://github.com/word-sys/anyconvert) ([PyPI](https://pypi.org/project/anyconvert/)) für den Dokumentenexport ohne externe Abhängigkeiten wie LibreOffice.
+
+Unterstützte Formate:
+*   **Microsoft Word (`.docx`)**
+*   **Microsoft PowerPoint (`.pptx`)**
+*   **OpenDocument-Text (`.odt`)**
+*   **OpenDocument-Präsentation (`.odp`)**
+*   **Einfacher Text (`.txt`)**
+
+Konvertierungsmodi:
+*   **Pixelgenaue Leinwand (`mode='canvas'`)**: Bewahrt die exakte visuelle 1:1-Position von Text, Formen und Bildern. Empfohlen für bearbeitete PDFs.
+*   **Semantischer Fluss (`mode='flow'`)**: Rekonstruiert Überschriften, Absätze und fortlaufenden Textfluss.
+
+anyconvert kann auch direkt über die Befehlszeile ausgeführt werden:
+```bash
+anyconvert input.pdf -f docx -m canvas -o output.docx
+```
 
 ---
 

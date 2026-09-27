@@ -23,4 +23,4 @@ Description: word-sys's PDF Editor - Simple PDF Text Editor
  existing text blocks, modify or delete them, and add new text blocks.
  It focuses on simple text content manipulation rather than full PDF
  annotation or structural changes. It can also export to DOCX, PPTX, ODT,
- ODP, and TXT formats using the native pure-Python AnyConvert engine.
+ ODP, and TXT formats using the native pure-Python anyconvert engine.

@@ -48,13 +48,33 @@ Licenza: **GPL-3.0-or-later**
 *   Caratteri speciali e simboli
 *   Salvataggio dei file PDF modificati
 *   Salvataggio rapido (`Ctrl + S`)
-*   Esportazione di PDF in DOCX, PPTX, ODT, ODP e TXT con il motore nativo AnyConvert
+*   Esportazione di PDF in DOCX, PPTX, ODT, ODP e TXT con il motore nativo anyconvert
 *   Interfaccia moderna con riordinamento delle pagine tramite trascinamento delle miniature
 *   Salvataggio sicuro (Safe Save)
 *   Modalità protetta (Safe Mode)
 *   Cronologia completa Annulla/Ripeti multi-livello (`Ctrl + Z` / `Ctrl + Y`)
 *   Zoom focale centrato sul cursore (`Ctrl + Rotella` e `Ctrl + + / - / 0`)
 *   Aggiunta e rimozione di pagine nei documenti PDF
+
+### Esportazione nativa di documenti (anyconvert)
+
+word-sys's PDF Editor include il motore in puro Python [anyconvert](https://github.com/word-sys/anyconvert) ([PyPI](https://pypi.org/project/anyconvert/)) per esportare file PDF senza dipendenze esterne come LibreOffice.
+
+Formati supportati:
+*   **Microsoft Word (`.docx`)**
+*   **Microsoft PowerPoint (`.pptx`)**
+*   **Testo OpenDocument (`.odt`)**
+*   **Presentazione OpenDocument (`.odp`)**
+*   **Testo semplice (`.txt`)**
+
+Modalità di conversione:
+*   **Area di disegno precisa al pixel (`mode='canvas'`)**: Mantiene le esatte posizioni visive 1:1 di testo, forme e immagini. Consigliata per PDF modificati.
+*   **Flusso semantico (`mode='flow'`)**: Ricostruisce titoli, paragrafi e flusso di testo scorrevole.
+
+anyconvert può anche essere eseguito direttamente da riga di comando:
+```bash
+anyconvert input.pdf -f docx -m canvas -o output.docx
+```
 
 ---
 

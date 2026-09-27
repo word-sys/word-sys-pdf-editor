@@ -27,7 +27,7 @@ License: **GPL-3.0-or-later**
 | **New Document Creation Dialog** | **Interactive Quick Start Guide & Manual** |
 | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png" alt="New Document Creation Dialog" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png" alt="Quick Start Guide & Manual" width="450"/></a> |
 
-
+---
 
 ## Key Features
 
@@ -48,7 +48,7 @@ License: **GPL-3.0-or-later**
 *   Special Characters, Symbols & Emojis
 *   Save edited PDFs
 *   Quick Save (`Ctrl + S`)
-*   Export PDFs to DOCX, PPTX, ODT, ODP, and TXT formats using the native AnyConvert engine
+*   Export PDFs to DOCX, PPTX, ODT, ODP, and TXT formats using the native anyconvert engine
 *   User-friendly interface with live thumbnail drag-and-drop reordering
 *   Safe Save
 *   Restricted Mode (Safe Mode)
@@ -56,6 +56,25 @@ License: **GPL-3.0-or-later**
 *   Precision pointer-centered focal zoom (`Ctrl + Scroll` and `Ctrl + + / - / 0`)
 *   Add/remove pages in PDFs
 
+### Native Document Export (anyconvert)
+
+word-sys's PDF Editor includes the pure-Python [anyconvert](https://github.com/word-sys/anyconvert) ([PyPI](https://pypi.org/project/anyconvert/)) document engine for exporting PDFs without external dependencies such as LibreOffice.
+
+Supported formats:
+*   **Microsoft Word (`.docx`)**
+*   **Microsoft PowerPoint (`.pptx`)**
+*   **OpenDocument Text (`.odt`)**
+*   **OpenDocument Presentation (`.odp`)**
+*   **Plain Text (`.txt`)**
+
+Conversion modes:
+*   **Pixel-Accurate Canvas (`mode='canvas'`)**: Preserves exact 1:1 visual positions of text, shapes, and images. Recommended for edited PDFs.
+*   **Semantic Flow (`mode='flow'`)**: Reconstructs headings, paragraphs, and reflowable text structure.
+
+anyconvert can also be run independently from the command line:
+```bash
+anyconvert input.pdf -f docx -m canvas -o output.docx
+```
 
 ---
 
