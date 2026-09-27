@@ -502,6 +502,10 @@ class DocumentSession:
     # Page render caches
     page_cache: Dict[int, Any] = field(default_factory=dict)
 
+    # Tab integration
+    tab_page: Any = None
+    bin_widget: Any = None
+
     def __post_init__(self):
         """Ensure Gio.ListStore for pages_model if not provided."""
         if self.pages_model is None:
@@ -550,4 +554,6 @@ class DocumentSession:
         self.selected_image = None
         self.selected_shape = None
         self.selected_stroke = None
+        self.tab_page = None
+        self.bin_widget = None
 
