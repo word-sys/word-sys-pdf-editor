@@ -142,7 +142,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not utils.UNICODE_FONT_PATH:
              show_error_dialog(self, _("font_warning_msg"), _("font_warning_title"))
 
-        self.status_label.set_text(_("fonts_loaded_open") if not self.doc else _("loaded").format(os.path.basename(self.current_file_path)))
+        if not self.doc:
+            self.status_label.set_text(_("fonts_loaded_open"))
+        elif self.current_file_path:
+            self.status_label.set_text(_("loaded").format(os.path.basename(self.current_file_path)))
+        else:
+            self.status_label.set_text(_("new_doc_loaded"))
         self._update_ui_state()
 
     def _populate_font_combo(self):
@@ -258,7 +263,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if hasattr(self, 'thumbnail_selection_model') and self.thumbnail_selection_model is not None:
             if session.pages_model is not None:
-                self.thumbnail_selection_model.set_model(session.pages_model)
+                self._syncing_thumb = True
+                try:
+                    self.thumbnail_selection_model.set_model(session.pages_model)
+                finally:
+                    self._syncing_thumb = False
 
         if session.doc is not None:
             self.set_title(f"{constants.APP_NAME} - {session.display_title}")
@@ -267,7 +276,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, 'tab_bar') and self.tab_bar:
                 self.tab_bar.set_visible(True)
             if hasattr(self, 'pdf_scroll'):
-                self._load_page(session.current_page_index)
+                has_objects = bool(session.editable_texts or session.editable_shapes or session.editable_strokes or session.editable_images or session.is_modified)
+                self._load_page(session.current_page_index, reload_objects=(not has_objects))
             if hasattr(self, 'thumbnail_selection_model') and self.thumbnail_selection_model:
                 try:
                     self.thumbnail_selection_model.set_selected(session.current_page_index)
@@ -305,6 +315,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         session.tab_page = page
         session.bin_widget = bin_widget
 
+        if hasattr(self, 'paned') and self.paned is not None:
+            if session == self._active_session or self.paned.get_parent() is None:
+                old_parent = self.paned.get_parent()
+                if old_parent:
+                    old_parent.set_child(None)
+                bin_widget.set_child(self.paned)
+
         self._update_tab_title(session)
         return page
 
@@ -326,8 +343,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Find the DocumentSession associated with the specified Adw.TabPage."""
         if not page or not self.sessions:
             return None
+        page_child = page.get_child() if hasattr(page, 'get_child') else None
         for s in self.sessions:
-            if getattr(s, 'tab_page', None) is page:
+            if getattr(s, 'tab_page', None) == page:
+                return s
+            if page_child is not None and getattr(s, 'bin_widget', None) == page_child:
                 return s
         return None
 
@@ -422,12 +442,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.sessions.remove(target_session)
 
-        # Detach paned if it was in target_session's bin
         if hasattr(self, 'paned') and self.paned.get_parent() == getattr(target_session, 'bin_widget', None):
             if target_session.bin_widget:
                 target_session.bin_widget.set_child(None)
 
-        # Close tab in TabView if present
         if hasattr(self, 'tab_view') and self.tab_view and getattr(target_session, 'tab_page', None):
             page = target_session.tab_page
             target_session.tab_page = None
@@ -438,23 +456,28 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         target_session.close()
 
-        if self._active_session == target_session:
-            remaining_with_doc = [s for s in self.sessions if s.doc is not None]
-            if remaining_with_doc:
-                self.set_active_session(remaining_with_doc[-1])
-            elif self.sessions:
-                self.set_active_session(self.sessions[-1])
+        if self._active_session == target_session or self._active_session not in self.sessions:
+            selected_page = self.tab_view.get_selected_page() if hasattr(self, 'tab_view') and self.tab_view else None
+            candidate = self.get_session_by_tab_page(selected_page) if selected_page else None
+            if candidate and candidate != target_session and candidate in self.sessions:
+                self.set_active_session(candidate)
             else:
-                new_session = self.create_session()
-                self._active_session = new_session
-                self.sessions = [new_session]
-                if hasattr(self, 'tab_view') and self.tab_view:
-                    self._create_tab_for_session(new_session)
-                self.close_document()
-                if hasattr(self, 'stack') and self.stack:
-                    self.stack.set_visible_child_name("welcome")
-                if hasattr(self, 'tab_bar') and self.tab_bar:
-                    self.tab_bar.set_visible(False)
+                remaining_with_doc = [s for s in self.sessions if s.doc is not None]
+                if remaining_with_doc:
+                    self.set_active_session(remaining_with_doc[-1])
+                elif self.sessions:
+                    self.set_active_session(self.sessions[-1])
+                else:
+                    new_session = self.create_session()
+                    self._active_session = new_session
+                    self.sessions = [new_session]
+                    if hasattr(self, 'tab_view') and self.tab_view:
+                        self._create_tab_for_session(new_session)
+                    self.close_document()
+                    if hasattr(self, 'stack') and self.stack:
+                        self.stack.set_visible_child_name("welcome")
+                    if hasattr(self, 'tab_bar') and self.tab_bar:
+                        self.tab_bar.set_visible(False)
 
     def get_session_by_id(self, session_id: str):
         """Retrieve session by UUID."""
@@ -905,6 +928,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if self._active_session:
             self._create_tab_for_session(self._active_session)
+            if getattr(self._active_session, 'bin_widget', None) is not None:
+                if self.paned.get_parent() != self._active_session.bin_widget:
+                    old_parent = self.paned.get_parent()
+                    if old_parent:
+                        old_parent.set_child(None)
+                    self._active_session.bin_widget.set_child(self.paned)
 
         status_bar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, vexpand=False)
         status_bar_box.add_css_class('statusbar')
@@ -1728,10 +1757,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if in_new_tab:
             new_session = self.create_session(filepath=filepath)
             self.add_session(new_session, switch_to=True)
+            target_sess = new_session
         else:
             if self.check_unsaved_changes():
                 return
             self.close_document()
+            if self._active_session is None:
+                self._active_session = self.create_session(filepath=filepath)
+                self.sessions = [self._active_session]
+            target_sess = self._active_session
+            target_sess.pdf_path = filepath
+            target_sess.original_file_path = filepath
+            if hasattr(self, 'tab_view') and self.tab_view:
+                if getattr(target_sess, 'tab_page', None) is None:
+                    self._create_tab_for_session(target_sess)
+            self._update_tab_title(target_sess)
 
         self._record_recent_file(filepath)
         self.status_label.set_text(_("loading").format(os.path.basename(filepath)))
@@ -1739,7 +1779,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         def _load_async():
             doc, error_msg = pdf_handler.load_pdf_document(filepath)
-            GLib.idle_add(self._finish_loading, doc, error_msg, filepath, target_page)
+            GLib.idle_add(self._finish_loading, doc, error_msg, filepath, target_page, target_sess)
 
         thread = threading.Thread(target=_load_async)
         thread.daemon = True
@@ -1761,95 +1801,97 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.color_button.set_sensitive(False)
         self.select_tool_button.set_sensitive(False)
         self.add_text_tool_button.set_sensitive(False)
-        self.stack.set_visible_child_name("welcome")
+        if not any(s.doc is not None for s in self.sessions):
+            if hasattr(self, 'stack') and self.stack:
+                self.stack.set_visible_child_name("welcome")
 
 
-    def _finish_loading(self, doc, error_msg, filepath, target_page=0):
+    def _finish_loading(self, doc, error_msg, filepath, target_page=0, target_session=None):
         """Finalize document loading, set active session state, and start thumbnail generation."""
+        sess = target_session or getattr(self, '_active_session', None)
         if error_msg:
             show_error_dialog(self, error_msg)
             self.status_label.set_text(_("doc_load_failed"))
-            if len(self.sessions) > 1 and self._active_session:
-                self.remove_session(self._active_session)
+            if len(self.sessions) > 1 and sess:
+                self.remove_session(sess)
             else:
                 self.close_document()
-        elif doc:
-            sess = getattr(self, '_active_session', None)
-            if sess is not None:
-                sess.doc = doc
-                sess.is_repaired_file = getattr(doc, 'is_repaired', False)
-                sess.pdf_path = filepath
-                sess.original_file_path = filepath
-                sess.allow_incremental_save = True
-                sess.is_modified = False
-                sess.current_page_index = target_page
-                self._update_tab_title(sess)
-            else:
-                self.doc = doc
-                self.is_repaired_file = getattr(doc, 'is_repaired', False)
-                self.current_file_path = filepath
-                self.original_file_path = filepath
-                self.allow_incremental_save = True
-                self.current_page_index = target_page
-            if getattr(self, 'is_repaired_file', False):
+            self.open_button.set_sensitive(True)
+            self.select_tool_button.set_sensitive(True)
+            self.add_text_tool_button.set_sensitive(True)
+            self._update_ui_state()
+            return
+        elif doc and sess:
+            sess.doc = doc
+            sess.is_repaired_file = getattr(doc, 'is_repaired', False)
+            sess.pdf_path = filepath
+            sess.original_file_path = filepath
+            sess.allow_incremental_save = True
+            sess.is_modified = False
+            sess.current_page_index = target_page
+            self._update_tab_title(sess)
+
+            if getattr(sess, 'is_repaired_file', False):
                 print(_("dbg_repaired_while_opening"))
             self._record_recent_file(filepath)
-            
-            self.set_title(f"{constants.APP_NAME} - {os.path.basename(filepath)}")
-            self.status_label.set_text(_("thumbnails_loading"))
 
-            if hasattr(self, 'stack') and self.stack:
-                self.stack.set_visible_child_name("editor")
-            if hasattr(self, 'tab_bar') and self.tab_bar:
-                self.tab_bar.set_visible(True)
-            
+            self.set_active_session(sess)
+
             self.target_page_after_load = target_page
-            GLib.idle_add(self._load_thumbnails)
+            self._load_page(target_page)
+            GLib.idle_add(self._load_thumbnails, sess)
 
         self.open_button.set_sensitive(True)
         self.select_tool_button.set_sensitive(True)
         self.add_text_tool_button.set_sensitive(True)
         self._update_ui_state()
 
-    def _load_thumbnails(self):
+    def _load_thumbnails(self, session=None):
         """Asynchronously generate and populate sidebar thumbnails for each document page."""
-        if not self.doc:
+        sess = session or self._active_session
+        if not sess or not sess.doc:
             return
 
-        self.pages_model.remove_all()
-        page_count = pdf_handler.get_page_count(self.doc)
+        target_doc = sess.doc
+        target_model = sess.pages_model
+        if target_model is not None:
+            target_model.remove_all()
+        page_count = pdf_handler.get_page_count(target_doc)
 
-        self.thumb_load_iter = 0
+        thumb_iter = [0]
         def _load_next_thumb():
-            if self.thumb_load_iter < page_count:
-                index = self.thumb_load_iter
-                
-                thumb = pdf_handler.generate_thumbnail(self.doc, index, target_width=150)
+            if sess.doc != target_doc:
+                return GLib.SOURCE_REMOVE
+            if thumb_iter[0] < page_count:
+                index = thumb_iter[0]
+                thumb = pdf_handler.generate_thumbnail(target_doc, index, target_width=150)
 
-                if thumb:
+                if thumb and target_model is not None:
                     pdf_page_obj = PdfPage(index=index, thumbnail=thumb)
-                    self.pages_model.append(pdf_page_obj)
-                self.thumb_load_iter += 1
-                if index % 5 == 0 or index == page_count - 1:
-                    self.status_label.set_text(_("thumbnail_loaded").format(index + 1, page_count))
+                    target_model.append(pdf_page_obj)
+                thumb_iter[0] += 1
+                if self._active_session == sess:
+                    if index % 5 == 0 or index == page_count - 1:
+                        self.status_label.set_text(_("thumbnail_loaded").format(index + 1, page_count))
                 return GLib.SOURCE_CONTINUE 
             else:
-                if self.current_file_path:
-                    self.status_label.set_text(_("loaded").format(os.path.basename(self.current_file_path)))
-                else:
-                    self.status_label.set_text(_("new_doc_loaded"))                
-                if page_count > 0:
-                    target = getattr(self, 'target_page_after_load', 0)
-                    if target >= page_count: target = 0
-                    self._load_page(target)
-                else:
-                    self._update_ui_state()
+                if self._active_session == sess:
+                    if sess.pdf_path:
+                        self.status_label.set_text(_("loaded").format(os.path.basename(sess.pdf_path)))
+                    else:
+                        self.status_label.set_text(_("new_doc_loaded"))                
+                    if page_count > 0:
+                        target = getattr(self, 'target_page_after_load', 0)
+                        if target >= page_count: target = 0
+                        self._load_page(target)
+                    else:
+                        self._update_ui_state()
                 return GLib.SOURCE_REMOVE
 
         GLib.idle_add(_load_next_thumb)
 
 
-    def _load_page(self, page_index, preserve_scroll=False):
+    def _load_page(self, page_index, preserve_scroll=False, reload_objects=True):
         """Extract editable objects, dimensions, and render page at given index."""
         current_v_scroll = 0
         current_h_scroll = 0
@@ -1869,10 +1911,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         old_page_idx = getattr(self, 'current_page_index', None)
         if self.doc and old_page_idx is not None and (0 <= old_page_idx < pdf_handler.get_page_count(self.doc)):
-            if old_page_idx != page_index:
+            if old_page_idx != page_index and reload_objects:
                 pdf_handler.save_page_snapshot(self.doc, old_page_idx, force=True)
 
-        self.undo_manager.clear()
+        if reload_objects:
+            self.undo_manager.clear()
 
         self.current_page_index = page_index
         self.selected_text = None
@@ -1880,33 +1923,34 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_shape = None
         self.hide_text_editor()
 
-        texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
-        if error:
-            show_error_dialog(self, _("text_extract_error", page_index + 1, error))
-            self.editable_texts = []
-        else:
-            self.editable_texts = texts
-            
-        images, error = pdf_handler.extract_editable_images(self.doc, page_index)
-        if error:
-            show_error_dialog(self, _("image_extract_error").format(page_index + 1, error))
-            self.editable_images = []
-        else:
-            self.editable_images = images
+        if reload_objects:
+            texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
+            if error:
+                show_error_dialog(self, _("text_extract_error", page_index + 1, error))
+                self.editable_texts = []
+            else:
+                self.editable_texts = texts
+                
+            images, error = pdf_handler.extract_editable_images(self.doc, page_index)
+            if error:
+                show_error_dialog(self, _("image_extract_error").format(page_index + 1, error))
+                self.editable_images = []
+            else:
+                self.editable_images = images
 
-        shapes, shapes_error = pdf_handler.extract_editable_shapes(self.doc, page_index)
-        if shapes_error:
-            print(f"Warning: Could not extract shapes from page {page_index + 1}: {shapes_error}")
-            self.editable_shapes = []
-        else:
-            self.editable_shapes = shapes
+            shapes, shapes_error = pdf_handler.extract_editable_shapes(self.doc, page_index)
+            if shapes_error:
+                print(f"Warning: Could not extract shapes from page {page_index + 1}: {shapes_error}")
+                self.editable_shapes = []
+            else:
+                self.editable_shapes = shapes
 
-        strokes, strokes_error = pdf_handler.extract_editable_strokes(self.doc, page_index)
-        if strokes_error:
-            print(f"Warning: Could not extract strokes from page {page_index + 1}: {strokes_error}")
-            self.editable_strokes = []
-        else:
-            self.editable_strokes = strokes
+            strokes, strokes_error = pdf_handler.extract_editable_strokes(self.doc, page_index)
+            if strokes_error:
+                print(f"Warning: Could not extract strokes from page {page_index + 1}: {strokes_error}")
+                self.editable_strokes = []
+            else:
+                self.editable_strokes = strokes
 
         page = self.doc.load_page(page_index)
         self.current_pdf_page_width = int(page.rect.width * self.zoom_level)
@@ -1933,7 +1977,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if fallback_font:
             self.status_label.set_text(f"font cannot be determinated, using {fallback_font}")
         
-        if self.doc:
+        if self.doc and reload_objects:
             pdf_handler.save_page_snapshot(self.doc, page_index)
 
     def close_document(self):
@@ -1961,6 +2005,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def go_to_welcome(self):
         """Navigate to welcome hub view."""
+        if hasattr(self, 'stack') and self.stack:
+            if self.stack.get_visible_child_name() == "welcome":
+                # Toggle back to editor if any document is open
+                if any(s.doc is not None for s in self.sessions):
+                    self.stack.set_visible_child_name("editor")
+                    if hasattr(self, 'tab_bar') and self.tab_bar:
+                        self.tab_bar.set_visible(True)
+                    if self._active_session:
+                        self.set_title(f"{constants.APP_NAME} - {self._active_session.display_title}")
+                    return
+
         if self.check_unsaved_changes():
             return
 
@@ -2014,7 +2069,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if success:
             print(_("dbg_save_success", save_path))
             self.document_modified = False 
-            self.load_document(save_path, target_page=page_to_restore)
+            if self._active_session:
+                self._active_session.pdf_path = save_path
+                self._active_session.original_file_path = save_path
+                self._update_tab_title(self._active_session)
+                self.set_title(f"{constants.APP_NAME} - {self._active_session.display_title}")
+            self.load_document(save_path, target_page=page_to_restore, in_new_tab=False)
             self.status_label.set_text(_("saved").format(os.path.basename(save_path)))
         else:
             show_error_dialog(self, _("err_pdf_save", error_msg))
@@ -3417,23 +3477,30 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Commit pending changes and dismiss inline text editor."""
         self._commit_inline_edit()
 
-    def check_unsaved_changes(self):
+    def check_unsaved_changes(self, session: Optional[DocumentSession] = None):
         """Prompt user to save pending modifications. Returns True if cancelled."""
-        if self.document_modified:
-            response = show_save_changes_dialog(self)
-            
-            if response == Gtk.ResponseType.ACCEPT:
-                 if self.current_file_path:
-                     self.save_document(self.current_file_path, incremental=False)
-                     return False
-                 else:
-                      self.on_save_as(None, None)
-                      return True
-            elif response == Gtk.ResponseType.REJECT:
-                 print(_("dbg_discarding_unsaved"))
-                 return False
+        target_session = session or getattr(self, '_active_session', None)
+        if not target_session or not target_session.is_modified:
+            return False
+
+        if target_session != self._active_session:
+            self.set_active_session(target_session)
+
+        response = show_save_changes_dialog(self)
+        
+        if response == Gtk.ResponseType.ACCEPT:
+            if target_session.pdf_path:
+                self.save_document(target_session.pdf_path, incremental=False)
+                return False
             else:
-                 return True
+                self.on_save_as(None, None)
+                return target_session.is_modified
+        elif response == Gtk.ResponseType.REJECT:
+            print(_("dbg_discarding_unsaved"))
+            target_session.is_modified = False
+            return False
+        else:
+            return True
 
         return False
 
@@ -5482,6 +5549,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 sess.current_page_index = 0
                 sess.is_modified = True
 
+                self.set_active_session(sess)
                 self.set_title(f"{constants.APP_NAME} - {sess.display_title}")
                 self._update_tab_title(sess)
                 if hasattr(self, 'stack') and self.stack:
@@ -5489,7 +5557,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if hasattr(self, 'tab_bar') and self.tab_bar:
                     self.tab_bar.set_visible(True)
 
-                self._load_thumbnails()
+                self._load_thumbnails(sess)
                 self._load_page(0)
                 self.status_label.set_text(_("status_new_doc_created"))
                 self._update_ui_state()

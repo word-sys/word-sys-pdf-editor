@@ -554,6 +554,4 @@ class DocumentSession:
         self.selected_image = None
         self.selected_shape = None
         self.selected_stroke = None
-        self.tab_page = None
-        self.bin_widget = None
 
