@@ -48,7 +48,7 @@
 *   Специальные символы и знаки
 *   Сохранение измененных PDF-документов
 *   Быстрое сохранение (`Ctrl + S`)
-*   Экспорт PDF в форматы DOCX или ODT (требуется LibreOffice) и простой текст TXT
+*   Экспорт PDF в форматы DOCX, PPTX, ODT, ODP и TXT с помощью встроенного движка AnyConvert
 *   Интуитивный интерфейс с перетаскиванием миниатюр страниц (drag-and-drop)
 *   Безопасное сохранение (Safe Save)
 *   Безопасный режим (Safe Mode)
@@ -154,10 +154,6 @@
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
     ```
-    *Опционально (для экспорта в DOCX):*
-    ```bash
-    sudo apt install libreoffice-common
-    ```
 
 2.  **Загрузка исходного кода:**
 
@@ -182,7 +178,7 @@
 
 4.  **Установка зависимостей Python:**
     ```bash
-    pip install PyMuPDF numpy pygobject==3.50.0
+    pip install PyMuPDF numpy anyconvert pygobject==3.50.0
     ```
 
 5.  **Запуск приложения:**
@@ -202,10 +198,6 @@
                      python3-numpy \
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
-    ```
-    *Опционально (для экспорта в DOCX):*
-    ```bash
-    sudo apt install libreoffice-common
     ```
 
 2.  **Загрузка исходного кода:**
@@ -230,7 +222,7 @@
 
 4.  **Установка зависимостей Python:**
     ```bash
-    pip install PyMuPDF numpy pygobject
+    pip install PyMuPDF numpy anyconvert pygobject
     ```
 
 5.  **Запуск приложения:**
@@ -256,10 +248,6 @@
     cd word-sys-pdf-editor
     ```
 
-    *Опционально (для экспорта в DOCX):*
-    ```bash
-    sudo pacman -S libreoffice-fresh
-    ```
 
 2.  **Создание и активация виртуального окружения:**
     ```bash
@@ -269,7 +257,7 @@
 
 3.  **Установка зависимостей Python:**
     ```bash
-    pip install PyMuPDF numpy pygobject
+    pip install PyMuPDF numpy anyconvert pygobject
     ```
 
 4.  **Запуск приложения:**
@@ -310,10 +298,6 @@
     paru -S word-sys-pdf-editor-bin
     ```
 
-    *Опционально (для экспорта в DOCX):*
-    ```bash
-    sudo pacman -S libreoffice-fresh
-    ```
 
 2.  **Запуск приложения:**
     ```bash

@@ -48,7 +48,7 @@ Lizenz: **GPL-3.0-or-later**
 *   Sonderzeichen und Symbole
 *   Bearbeitete PDF-Dateien speichern
 *   Schnellspeichern (`Strg + S`)
-*   PDF-Export in DOCX oder ODT (erfordert LibreOffice) sowie reine Textformate (TXT)
+*   PDF-Export in DOCX-, PPTX-, ODT-, ODP- und TXT-Formate mit der nativen AnyConvert-Engine
 *   Benutzerfreundliche Oberfläche mit Live-Miniaturbild-Seitenanordnung per Drag-and-Drop
 *   Sicheres Speichern (Safe Save)
 *   Eingeschränkter Modus (Safe Mode)
@@ -154,10 +154,6 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
     ```
-    *Optional (für DOCX-Export):*
-    ```bash
-    sudo apt install libreoffice-common
-    ```
 
 2.  **Quellcode herunterladen:**
 
@@ -182,7 +178,7 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 4.  **Python-Abhängigkeiten installieren:**
     ```bash
-    pip install PyMuPDF numpy pygobject==3.50.0
+    pip install PyMuPDF numpy anyconvert pygobject==3.50.0
     ```
 
 5.  **Anwendung starten:**
@@ -202,10 +198,6 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
                      python3-numpy \
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
-    ```
-    *Optional (für DOCX-Export):*
-    ```bash
-    sudo apt install libreoffice-common
     ```
 
 2.  **Quellcode herunterladen:**
@@ -230,7 +222,7 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 4.  **Python-Abhängigkeiten installieren:**
     ```bash
-    pip install PyMuPDF numpy pygobject
+    pip install PyMuPDF numpy anyconvert pygobject
     ```
 
 5.  **Anwendung starten:**
@@ -256,10 +248,6 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
     cd word-sys-pdf-editor
     ```
 
-    *Optional (für DOCX-Export):*
-    ```bash
-    sudo pacman -S libreoffice-fresh
-    ```
 
 2.  **Virtuelle Umgebung erstellen und aktivieren:**
     ```bash
@@ -269,7 +257,7 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 3.  **Python-Abhängigkeiten installieren:**
     ```bash
-    pip install PyMuPDF numpy pygobject
+    pip install PyMuPDF numpy anyconvert pygobject
     ```
 
 4.  **Anwendung starten:**
@@ -310,10 +298,6 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
     paru -S word-sys-pdf-editor-bin
     ```
 
-    *Optional (für DOCX-Export):*
-    ```bash
-    sudo pacman -S libreoffice-fresh
-    ```
 
 2.  **Anwendung starten:**
     ```bash

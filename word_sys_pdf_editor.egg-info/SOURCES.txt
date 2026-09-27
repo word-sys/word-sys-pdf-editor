@@ -4,10 +4,13 @@ pyproject.toml
 word_sys_pdf_editor/__init__.py
 word_sys_pdf_editor/constants.py
 word_sys_pdf_editor/i18n.py
+word_sys_pdf_editor/locales.py
 word_sys_pdf_editor/main.py
 word_sys_pdf_editor/models.py
+word_sys_pdf_editor/new_document_dialog.py
 word_sys_pdf_editor/pdf_handler.py
 word_sys_pdf_editor/print_handler.py
+word_sys_pdf_editor/quick_guide_dialog.py
 word_sys_pdf_editor/ui_components.py
 word_sys_pdf_editor/undo_manager.py
 word_sys_pdf_editor/utils.py

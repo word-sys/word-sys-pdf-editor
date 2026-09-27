@@ -1,3 +1,4 @@
 PyMuPDF
 numpy
 pygobject
+anyconvert>=0.1.0

@@ -8,9 +8,7 @@
         "--share=ipc",
         "--socket=wayland",
         "--socket=fallback-x11",
-        "--device=dri",
-        "--talk-name=org.freedesktop.Flatpak",
-        "--filesystem=~/.word-sys-pdf-editor-libreoffice-cache:create"
+        "--device=dri"
     ],
     "cleanup": [
         "/include",

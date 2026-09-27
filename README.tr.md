@@ -48,7 +48,7 @@ Lisans: **GPL-3.0-or-later**
 *   Özel karakterler ve simgeler
 *   Düzenlenen PDF dosyalarını kaydetme
 *   Hızlı Kaydetme (`Ctrl + S`)
-*   PDF belgelerini DOCX, ODT (LibreOffice gerektirir) ve düz metin TXT formatlarına aktarma
+*   PDF belgelerini DOCX, PPTX, ODT, ODP ve TXT formatlarına yerel AnyConvert motoru ile aktarma
 *   Küçük resim sürükle-bırak ile canlı sayfa yeniden sıralama
 *   Güvenli Kaydetme (Safe Save)
 *   Kısıtlı Mod (Güvenli Mod)
@@ -154,10 +154,6 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
     ```
-    *İsteğe bağlı (DOCX dışa aktarımı için):*
-    ```bash
-    sudo apt install libreoffice-common
-    ```
 
 2.  **Kaynak Kodu İndirin:**
 
@@ -182,7 +178,7 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 4.  **Python Paketlerini Kurun:**
     ```bash
-    pip install PyMuPDF numpy pygobject==3.50.0
+    pip install PyMuPDF numpy anyconvert pygobject==3.50.0
     ```
 
 5.  **Uygulamayı Başlatın:**
@@ -202,10 +198,6 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
                      python3-numpy \
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
-    ```
-    *İsteğe bağlı (DOCX aktarımı için):*
-    ```bash
-    sudo apt install libreoffice-common
     ```
 
 2.  **Kaynak Kodu İndirin:**
@@ -230,7 +222,7 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 4.  **Python Paketlerini Kurun:**
     ```bash
-    pip install PyMuPDF numpy pygobject
+    pip install PyMuPDF numpy anyconvert pygobject
     ```
 
 5.  **Uygulamayı Başlatın:**
@@ -256,10 +248,6 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
     cd word-sys-pdf-editor
     ```
 
-    *İsteğe bağlı (DOCX aktarımı için):*
-    ```bash
-    sudo pacman -S libreoffice-fresh
-    ```
 
 2.  **Sanal Ortam Oluşturun ve Etkinleştirin:**
     ```bash
@@ -269,7 +257,7 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 3.  **Python Paketlerini Kurun:**
     ```bash
-    pip install PyMuPDF numpy pygobject
+    pip install PyMuPDF numpy anyconvert pygobject
     ```
 
 4.  **Uygulamayı Başlatın:**
@@ -310,10 +298,6 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
     paru -S word-sys-pdf-editor-bin
     ```
 
-    *İsteğe bağlı (DOCX aktarımı için):*
-    ```bash
-    sudo pacman -S libreoffice-fresh
-    ```
 
 2.  **Uygulamayı Başlatın:**
     ```bash

@@ -20,11 +20,6 @@ sudo apt install python3 python3-pip python3-venv \
                  fonts-noto-core fonts-liberation2
 ```
 
-Optional (for DOCX/ODT conversion testing):
-```bash
-sudo apt install libreoffice-common libreoffice-writer
-```
-
 #### Fedora
 ```bash
 sudo dnf install python3 python3-pip python3-devel \
@@ -54,7 +49,7 @@ sudo pacman -S python python-pip python-gobject gtk4 libadwaita \
 
 3. Install required Python packages:
    ```bash
-   pip install PyMuPDF numpy
+   pip install PyMuPDF numpy anyconvert
    ```
 
 4. Run the editor:

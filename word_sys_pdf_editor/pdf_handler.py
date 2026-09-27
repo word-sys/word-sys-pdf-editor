@@ -13,6 +13,14 @@ import shutil
 import tempfile
 import traceback
 import re
+try:
+    import anyconvert
+    from anyconvert import ConversionMode
+    HAS_ANYCONVERT = True
+except ImportError:
+    anyconvert = None
+    ConversionMode = None
+    HAS_ANYCONVERT = False
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Gdk', '4.0')
@@ -629,251 +637,143 @@ def save_document(doc, save_path, incremental=False):
         
         return False, _("err_pdf_save", e)
     
-def _is_flatpak_sandbox():
-    """Check whether the app is running inside a Flatpak sandbox."""
-    return os.path.exists('/.flatpak-info')
+def export_document(
+    doc=None,
+    source_pdf_path=None,
+    output_path=None,
+    target_format="docx",
+    mode="canvas",
+    password="",
+):
+    """Export a PDF document into a target format (DOCX, PPTX, ODT, ODP, TXT) using AnyConvert.
 
-def _resolve_libreoffice_command():
-    """Resolve the command used to invoke LibreOffice, reaching onto the host if sandboxed."""
-    for name in ('libreoffice', 'soffice'):
-        path = shutil.which(name)
-        if path:
-            return [path]
+    Args:
+        doc: The fitz.Document instance or None.
+        source_pdf_path: File path of the source PDF if available on disk.
+        output_path: Destination file path for the converted document.
+        target_format: Target format ('docx', 'pptx', 'odt', 'odp', 'txt').
+        mode: Layout conversion mode ('canvas' for pixel-accurate coordinate positioning or 'flow' for semantic reflow).
+        password: Optional decryption password for protected PDF documents.
 
-    if not _is_flatpak_sandbox():
-        return None
+    Returns:
+        tuple[bool, Optional[str]]: (success, error_message).
+    """
+    if not output_path:
+        return False, "Destination output path must be specified for export."
 
-    try:
-        for name in ('libreoffice', 'soffice'):
-            result = subprocess.run(
-                ['flatpak-spawn', '--host', 'which', name],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return ['flatpak-spawn', '--host', result.stdout.strip()]
+    fmt = str(target_format).lower().strip().lstrip(".")
+    if fmt not in ("docx", "pptx", "odt", "odp", "txt"):
+        return False, f"Unsupported export format: '{target_format}'. Supported formats are DOCX, PPTX, ODT, ODP, TXT."
 
-        result = subprocess.run(
-            ['flatpak-spawn', '--host', 'flatpak', 'info', 'org.libreoffice.LibreOffice'],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            return ['flatpak-spawn', '--host', 'flatpak', 'run', 'org.libreoffice.LibreOffice']
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+    output_path = str(output_path)
+    if not output_path.lower().endswith(f".{fmt}"):
+        output_path = f"{output_path}.{fmt}"
 
-    return None
+    if not HAS_ANYCONVERT:
+        return False, "AnyConvert engine is not installed. Please install 'anyconvert' to enable document export."
 
-def _export_via_libreoffice(doc, source_pdf_path, output_path, target_format):
-    """Export via libreoffice."""
-    libreoffice_command = _resolve_libreoffice_command()
-    if not libreoffice_command:
-        return False, f"LibreOffice Not Found. Install 'libreoffice-writer' to enable {target_format.upper()} export."
-    print(f"DEBUG [{target_format.upper()} Export]: Using LibreOffice command: {libreoffice_command}")
+    conv_mode = "canvas"
+    if isinstance(mode, str):
+        normalized_mode = mode.lower().strip()
+        if normalized_mode in ("canvas", "flow"):
+            conv_mode = normalized_mode
+    elif ConversionMode is not None and isinstance(mode, ConversionMode):
+        conv_mode = "canvas" if mode == ConversionMode.CANVAS else "flow"
 
-    final_output_dir = Path(output_path).parent
-    final_output_dir.mkdir(parents=True, exist_ok=True)
-
-    if libreoffice_command[0] == 'flatpak-spawn':
-        # LibreOffice runs in its own separate Flatpak sandbox and can't see
-        # our document-portal mounts, our app-private ~/.var/app dir, or our
-        # sandbox's private /tmp. It needs a plain real directory under $HOME
-        # (outside both of those) that both sandboxes can see; we then move
-        # the converted result into the real destination afterwards.
-        work_dir = Path(os.path.expanduser('~/.word-sys-pdf-editor-libreoffice-cache'))
-        work_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        work_dir = final_output_dir
-
-    temp_pdf_path = None
-    try:
-        fd, temp_pdf_path = tempfile.mkstemp(suffix=".pdf", prefix="word-sys_export_", dir=str(work_dir))
-        os.close(fd)
-        print(f"DEBUG [{target_format.upper()} Export]: Saving document state to temporary file: {temp_pdf_path}")
-
+    pdf_input = None
+    if doc is not None:
         try:
-            pdf_bytes = doc.tobytes(garbage=4, clean=True, deflate=True)
-            with open(temp_pdf_path, 'wb') as f:
-                f.write(pdf_bytes)
-            save_success = True
-            save_msg = ""
-        except Exception as e:
-            save_success, save_msg = save_document(doc, temp_pdf_path, incremental=False)
+            pdf_input = doc.tobytes(garbage=4, clean=True, deflate=True)
+        except Exception:
+            try:
+                pdf_input = doc.tobytes()
+            except Exception:
+                if source_pdf_path and os.path.exists(source_pdf_path):
+                    pdf_input = source_pdf_path
+                else:
+                    return False, "Failed to serialize in-memory PDF document for export."
+    elif source_pdf_path and os.path.exists(source_pdf_path):
+        try:
+            temp_doc = fitz.open(source_pdf_path)
+            if temp_doc.is_encrypted:
+                if password:
+                    auth_res = temp_doc.authenticate(password)
+                    if auth_res > 0:
+                        pdf_input = temp_doc.tobytes()
+                    else:
+                        return False, "The decryption password provided is incorrect."
+                else:
+                    return False, "The PDF document is password-protected. Please provide the decryption password."
+            else:
+                pdf_input = source_pdf_path
+        except Exception:
+            pdf_input = source_pdf_path
+    else:
+        return False, "No valid document or file path provided for export."
 
-        if not save_success:
-            if os.path.exists(temp_pdf_path): os.unlink(temp_pdf_path)
-            return False, f"Failed to save temporary PDF for export: {save_msg}"
-        
-        if not os.path.exists(temp_pdf_path) or os.path.getsize(temp_pdf_path) == 0:
-            print(f"ERROR [{target_format.upper()} Export]: Temporary PDF '{temp_pdf_path}' was not created or is empty.")
-            if os.path.exists(temp_pdf_path): os.unlink(temp_pdf_path)
-            return False, "Failed to create a valid temporary PDF for export."
+    try:
+        final_output_path = Path(output_path)
+        final_output_path.parent.mkdir(parents=True, exist_ok=True)
+        if final_output_path.exists():
+            final_output_path.unlink()
 
-        print(f"DEBUG [{target_format.upper()} Export]: Temp PDF Path = {temp_pdf_path} (Size: {os.path.getsize(temp_pdf_path)} bytes)")
-        temp_pdf_path_obj = Path(temp_pdf_path)
-        temp_pdf_name_no_ext = temp_pdf_path_obj.stem
-
-        print(f"DEBUG [{target_format.upper()} Export]: Final {target_format.upper()} Output Dir = {final_output_dir}")
-        print(f"DEBUG [{target_format.upper()} Export]: Desired Final {target_format.upper()} Path = {output_path}")
-
-        python_cwd = Path(os.getcwd())
-        expected_output_in_python_cwd = python_cwd / f"{temp_pdf_name_no_ext}.{target_format}"
-        print(f"DEBUG [{target_format.upper()} Export]: Python's Current Working Directory (for output): {python_cwd}")
-        print(f"DEBUG [{target_format.upper()} Export]: Expected {target_format.upper()} in Python CWD: {expected_output_in_python_cwd}")
-        
-        if os.path.exists(expected_output_in_python_cwd):
-            print(f"DEBUG [{target_format.upper()} Export]: Removing leftover in CWD: {expected_output_in_python_cwd}")
-            os.remove(expected_output_in_python_cwd)
-        if os.path.exists(output_path):
-            print(f"DEBUG [{target_format.upper()} Export]: Removing leftover final target: {output_path}")
-            os.remove(output_path)
-
-        if target_format == 'odt':
-            convert_format = 'odt'
-        elif target_format == 'docx':
-            convert_format = 'docx'  
-        else:
-            convert_format = target_format
-
-        infilter = 'writer_pdf_import'
-        if target_format in ('pptx', 'odp'):
-            infilter = 'impress_pdf_import'
-
-        command = libreoffice_command + [
-            '--headless',
-            '--invisible',
-            '--nologo',
-            f'--infilter={infilter}',
-            '--convert-to', convert_format,
-            '--outdir', str(temp_pdf_path_obj.parent),
-            str(temp_pdf_path)
-        ]
-
-        expected_output_location = temp_pdf_path_obj.parent / f"{temp_pdf_name_no_ext}.{target_format}"
-
-        print(f"DEBUG [{target_format.upper()} Export]: Expected {target_format.upper()} at: {expected_output_location}")
-        if os.path.exists(expected_output_location):
-            print(f"DEBUG [{target_format.upper()} Export]: Removing leftover: {expected_output_location}")
-            os.remove(expected_output_location)
-
-        print(f"DEBUG [{target_format.upper()} Export]: Running command: {' '.join(command)}")
-
-        current_env = os.environ.copy()
-        process = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=120,
-            env=current_env,
-            stdin=subprocess.DEVNULL
+        anyconvert.convert(
+            input_path=pdf_input,
+            output_format=fmt,
+            output_path=output_path,
+            mode=conv_mode,
+            password=password,
         )
 
-        print(f"DEBUG [{target_format.upper()} Export]: LibreOffice Return Code: {process.returncode}")
-        if process.stdout:
-            print(f"DEBUG [{target_format.upper()} Export]: LibreOffice stdout:\n---\n{process.stdout.strip()}\n---")
-        if process.stderr:
-            print(f"DEBUG [{target_format.upper()} Export]: LibreOffice stderr:\n---\n{process.stderr.strip()}\n---")
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return True, None
+        return False, f"Export completed but output file '{output_path}' was not created or is empty."
 
-        if "0xc10" in process.stderr or "SfxBaseModel::impl_store" in process.stderr:
-            error_msg = f"LibreOffice I/O Write Error during conversion. Stderr: {process.stderr.strip()}"
-            if "no export filter" in process.stderr.lower():
-                 error_msg += " (Also saw 'no export filter' - check LO installation and write permissions)"
-            print(f"ERROR [{target_format.upper()} Export]: {error_msg}")
-            return False, error_msg
-        
-        if ("no export filter" in process.stderr.lower() or "no export filter" in process.stdout.lower()) and process.returncode != 0 :
-            error_msg = f"LibreOffice reported: No export filter for {target_format.upper()} found. Ensure 'libreoffice-writer' is fully installed."
-            print(f"ERROR [{target_format.upper()} Export]: {error_msg}")
-            return False, error_msg
-            
-        if process.returncode != 0:
-            error_msg = f"LibreOffice conversion failed (code {process.returncode}).\nError:\n{process.stderr or process.stdout}"
-            print(f"ERROR [{target_format.upper()} Export]: {error_msg}")
-            return False, error_msg
-
-        if os.path.exists(expected_output_location):
-            print(f"DEBUG [{target_format.upper()} Export]: Found {target_format.upper()} at: {expected_output_location}")
-            try:
-                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(expected_output_location), str(output_path))
-                print(f"DEBUG [{target_format.upper()} Export]: Moved {target_format.upper()} to final destination: {output_path}")
-                return True, None
-            except Exception as move_e:
-                error_msg = f"Found converted {target_format.upper()} ({expected_output_location}) but failed to move to {output_path}: {move_e}"
-                print(f"ERROR [{target_format.upper()} Export]: {error_msg}")
-                return False, error_msg
-        else:
-            error_msg = f"LibreOffice conversion seemed to finish, but the output {target_format.upper()} ({expected_output_location}) could not be located."
-            print(f"ERROR [{target_format.upper()} Export]: {error_msg}")
-            return False, error_msg
-
-    except subprocess.TimeoutExpired:
-        return False, "LibreOffice conversion timed out (took longer than 120 seconds)."
+    except anyconvert.exceptions.PDFPasswordRequiredError:
+        return False, "The PDF document is password-protected. Please provide the decryption password."
+    except anyconvert.exceptions.UnsupportedFormatError as e:
+        return False, f"Unsupported export format: {e}"
+    except anyconvert.exceptions.AnyConvertError as e:
+        return False, f"AnyConvert conversion failed: {e}"
     except Exception as e:
-        print(f"ERROR [{target_format.upper()} Export]: General exception during {target_format.upper()} export process: {e}")
-        return False, f"Error during {target_format.upper()} export process: {e}"
-    finally:
-        if temp_pdf_path and os.path.exists(temp_pdf_path):
-            try:
-                os.unlink(temp_pdf_path)
-                print(f"DEBUG [{target_format.upper()} Export]: Cleaned up temp PDF: {temp_pdf_path}")
-            except Exception as unlink_e:
-                print(f"Warning: Could not delete temporary file {temp_pdf_path}: {unlink_e}")
-
-def export_pdf_as_odt(doc, source_pdf_path, output_odt_path):
-    """Export PDF as odt."""
-    if not output_odt_path.lower().endswith('.odt'):
-        output_odt_path += '.odt'
-    return _export_via_libreoffice(doc, source_pdf_path, output_odt_path, 'odt')
-
-def export_pdf_as_docx(doc, source_pdf_path, output_docx_path):
-    """Export PDF as docx."""
-    if not output_docx_path.lower().endswith('.docx'):
-        output_docx_path += '.docx'
-    return _export_via_libreoffice(doc, source_pdf_path, output_docx_path, 'docx')
-
-def export_pdf_as_pptx(doc, source_pdf_path, output_pptx_path):
-    """Export PDF as pptx."""
-    if not output_pptx_path.lower().endswith('.pptx'):
-        output_pptx_path += '.pptx'
-    return _export_via_libreoffice(doc, source_pdf_path, output_pptx_path, 'pptx')
-
-def export_pdf_as_odp(doc, source_pdf_path, output_odp_path):
-    """Export PDF as odp."""
-    if not output_odp_path.lower().endswith('.odp'):
-        output_odp_path += '.odp'
-    return _export_via_libreoffice(doc, source_pdf_path, output_odp_path, 'odp')
+        return False, f"Error during {fmt.upper()} export: {e}"
 
 
-def export_pdf_as_odt_alias(doc, source_pdf_path, output_odt_path):
-    """Export PDF as odt alias."""
-    return export_pdf_as_odt(doc, source_pdf_path, output_odt_path)
+def export_pdf_as_docx(doc, source_pdf_path, output_docx_path, mode="canvas", password=""):
+    """Export PDF as DOCX using AnyConvert."""
+    return export_document(doc, source_pdf_path, output_docx_path, "docx", mode=mode, password=password)
 
 
-def _export_pdf_via_libreoffice(doc, output_path, target_format, format_label):
-    """Export PDF via libreoffice."""
-    if target_format == 'docx':
-        return export_pdf_as_docx(doc, None, output_path)
-    elif target_format == 'odt':
-        return export_pdf_as_odt(doc, None, output_path)
-    return False, f"Unsupported format: {target_format}"
+def export_pdf_as_odt(doc, source_pdf_path, output_odt_path, mode="canvas", password=""):
+    """Export PDF as ODT using AnyConvert."""
+    return export_document(doc, source_pdf_path, output_odt_path, "odt", mode=mode, password=password)
 
 
-def export_pdf_as_text(doc, output_txt_path):
-    """Export PDF as text."""
-    if not doc:
-        return False, "No document to export."
-    try:
-        with open(output_txt_path, 'w', encoding='utf-8') as txt_file:
-            for page_num in range(doc.page_count):
-                page = doc.load_page(page_num)
-                text = page.get_text("text", sort=True)
-                txt_file.write(f"--- Page {page_num + 1} ---\n\n")
-                txt_file.write(text)
-                txt_file.write("\n\n")
-        return True, None
-    except Exception as e:
-        return False, f"Error exporting as text: {e}"
+def export_pdf_as_pptx(doc, source_pdf_path, output_pptx_path, mode="canvas", password=""):
+    """Export PDF as PPTX using AnyConvert."""
+    return export_document(doc, source_pdf_path, output_pptx_path, "pptx", mode=mode, password=password)
+
+
+def export_pdf_as_odp(doc, source_pdf_path, output_odp_path, mode="canvas", password=""):
+    """Export PDF as ODP using AnyConvert."""
+    return export_document(doc, source_pdf_path, output_odp_path, "odp", mode=mode, password=password)
+
+
+def export_pdf_as_odt_alias(doc, source_pdf_path, output_odt_path, mode="canvas", password=""):
+    """Export PDF as ODT alias."""
+    return export_pdf_as_odt(doc, source_pdf_path, output_odt_path, mode=mode, password=password)
+
+
+def export_pdf_as_text(doc, output_txt_path, source_pdf_path=None, mode="canvas", password=""):
+    """Export PDF as Plain Text (TXT) using AnyConvert."""
+    return export_document(
+        doc=doc,
+        source_pdf_path=source_pdf_path,
+        output_path=output_txt_path,
+        target_format="txt",
+        mode=mode,
+        password=password,
+    )
 
 def get_image_rgba_bytes(doc, xref):
     """Extract image as RGBA PNG bytes, compositing alpha/smask if present."""
