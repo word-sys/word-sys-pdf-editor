@@ -245,7 +245,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         header.pack_end(self.mode_toggle_button)
         menu = Gio.Menu()
         menu.append(_("menu_save_as"), "win.save_as")
-        menu.append(_("menu_export_as"), "win.export_as")
+
+        export_menu = Gio.Menu()
+        export_menu.append(_("menu_export_as"), "win.export_as")
+        export_formats_section = Gio.Menu()
+        export_formats_section.append(_("export_format_docx"), "win.export_docx")
+        export_formats_section.append(_("export_format_pptx"), "win.export_pptx")
+        export_formats_section.append(_("export_format_odt"), "win.export_odt")
+        export_formats_section.append(_("export_format_odp"), "win.export_odp")
+        export_formats_section.append(_("export_format_txt"), "win.export_txt")
+        export_menu.append_section(None, export_formats_section)
+        menu.append_submenu(_("menu_export"), export_menu)
         
         pref_section = Gio.Menu()
         pref_section.append(_("menu_confirm_delete"), "win.confirm_delete")
@@ -714,6 +724,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_export_as.connect('activate', self.on_export_as)
         self.add_action(action_export_as)
 
+        for fmt in ("docx", "pptx", "odt", "odp", "txt"):
+            act = Gio.SimpleAction.new(f"export_{fmt}", None)
+            act.connect("activate", getattr(self, f"on_export_{fmt}"))
+            self.add_action(act)
+
         action_print = Gio.SimpleAction.new('print', None)
         action_print.connect('activate', self.on_print_activated)
         self.add_action(action_print)
@@ -790,7 +805,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.lookup_action("save"):
             self.lookup_action("save").set_enabled(has_doc and self.document_modified)
         self.lookup_action("save_as").set_enabled(has_doc)
-        self.lookup_action("export_as").set_enabled(has_doc)
+        for act_name in ("export_as", "export_docx", "export_pptx", "export_odt", "export_odp", "export_txt"):
+            act = self.lookup_action(act_name)
+            if act:
+                act.set_enabled(has_doc)
         self.lookup_action("print").set_enabled(has_doc)
         self.print_button.set_sensitive(has_doc)
         self.prev_button.set_sensitive(can_go_prev)
@@ -1104,7 +1122,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.open_button.set_sensitive(False)
         self.save_button.set_sensitive(False)
         self.lookup_action("save_as").set_enabled(False)
-        self.lookup_action("export_as").set_enabled(False)
+        for act_name in ("export_as", "export_docx", "export_pptx", "export_odt", "export_odp", "export_txt"):
+            act = self.lookup_action(act_name)
+            if act:
+                act.set_enabled(False)
         self.prev_button.set_sensitive(False)
         self.next_button.set_sensitive(False)
         self.font_combo.set_sensitive(False)
@@ -2882,111 +2903,171 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             callback=on_save_finish
         )
 
-    def on_export_as(self, action, param):
+    def on_export_as(self, action=None, param=None):
         """Handle the export as event."""
-        if not self.doc: return
+        self.show_export_dialog(initial_format="DOCX")
+
+    def on_export_docx(self, action=None, param=None):
+        """Handle direct export to DOCX."""
+        self.show_export_dialog(initial_format="DOCX")
+
+    def on_export_pptx(self, action=None, param=None):
+        """Handle direct export to PPTX."""
+        self.show_export_dialog(initial_format="PPTX")
+
+    def on_export_odt(self, action=None, param=None):
+        """Handle direct export to ODT."""
+        self.show_export_dialog(initial_format="ODT")
+
+    def on_export_odp(self, action=None, param=None):
+        """Handle direct export to ODP."""
+        self.show_export_dialog(initial_format="ODP")
+
+    def on_export_txt(self, action=None, param=None):
+        """Handle direct export to TXT."""
+        self.show_export_dialog(initial_format="TXT")
+
+    def show_export_dialog(self, initial_format="DOCX"):
+        """Show modern Libadwaita ExportDialog for document export."""
+        if not self.doc:
+            return
+        from .export_dialog import ExportDialog
+        dialog = ExportDialog(
+            parent_window=self,
+            initial_format=initial_format,
+            initial_mode="canvas",
+            on_confirm_callback=self._on_export_dialog_confirmed
+        )
+        dialog.present()
+
+    def _on_export_dialog_confirmed(self, format_name, mode):
+        """Handle confirmed format and mode selection from ExportDialog."""
+        if not self.doc:
+            return
 
         base_name = Path(self.current_file_path).stem if self.current_file_path else "document"
+        fmt_upper = str(format_name).upper().strip()
+        fmt_lower = fmt_upper.lower()
 
         export_filters = {
-            "PDF": (_("filter_pdf"), "*.pdf", "application/pdf"),
             "DOCX": (_("filter_word"), "*.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-            "ODT": (_("filter_odt"), "*.odt", "application/vnd.oasis.opendocument.text"),
             "PPTX": (_("filter_pptx"), "*.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+            "ODT": (_("filter_odt"), "*.odt", "application/vnd.oasis.opendocument.text"),
             "ODP": (_("filter_odp"), "*.odp", "application/vnd.oasis.opendocument.presentation"),
             "TXT": (_("filter_txt"), "*.txt", "text/plain"),
         }
-        ext_to_format = {
-            "pdf": "PDF", "docx": "DOCX", "odt": "ODT",
-            "pptx": "PPTX", "odp": "ODP", "txt": "TXT",
-        }
+
         filter_list = []
-        filter_key_map = {}
+        default_ff = None
         for name, (pattern_name, pattern, mime) in export_filters.items():
             ff = Gtk.FileFilter()
             ff.set_name(f"{name} - {pattern_name}")
             ff.add_pattern(pattern)
-            if mime: ff.add_mime_type(mime)
+            if mime:
+                ff.add_mime_type(mime)
             filter_list.append(ff)
-            filter_key_map[ff] = name
-            filter_key_map[f"{name} - {pattern_name}"] = name
+            if name == fmt_upper:
+                default_ff = ff
 
         def on_export_finish(file, selected_filter=None):
-            """Handle the export dialog result."""
             if not file:
                 return
             path = file.get_path()
-            ext = Path(path).suffix.lstrip(".").lower()
-
-            format_name = ext_to_format.get(ext)
-            if not format_name and selected_filter:
-                if isinstance(selected_filter, Gtk.FileFilter):
-                    fname = selected_filter.get_name()
-                    format_name = filter_key_map.get(selected_filter) or filter_key_map.get(fname)
-                    if not format_name and fname:
-                        for fmt_key in export_filters.keys():
-                            if fname.startswith(fmt_key):
-                                format_name = fmt_key
-                                break
-                elif isinstance(selected_filter, str):
-                    for fmt_key in export_filters.keys():
-                        if selected_filter.startswith(fmt_key):
-                            format_name = fmt_key
-                            break
-
-            if not format_name:
-                format_name = "PDF"
-
-            self._execute_export(format_name, path)
+            if not path:
+                return
+            self._execute_export(fmt_upper, path, mode=mode)
 
         show_save_file_dialog(
             self,
             _("export_as_title"),
-            initial_name=base_name,
+            initial_name=f"{base_name}.{fmt_lower}",
             filters=filter_list,
+            default_filter=default_ff,
             callback=on_export_finish
         )
 
-    def _execute_export(self, format_name, output_path):
-        """Execute export."""
-        self.status_label.set_text(_("status_exporting", format_name))
+    def _execute_export(self, format_name, output_path, mode="canvas", on_finish=None):
+        """Execute export asynchronously in a background worker thread."""
+        if not self.doc:
+            if on_finish and callable(on_finish):
+                on_finish(False, _("err_no_doc_msg"))
+            return
 
-        success = False
-        error_msg = _("err_unknown_export_format")
+        fmt_upper = str(format_name).upper().strip()
+        fmt_lower = fmt_upper.lower()
+
+        if not output_path.lower().endswith(f".{fmt_lower}"):
+            output_path = f"{output_path}.{fmt_lower}"
+
+        self.status_label.set_text(_("status_exporting", fmt_upper))
 
         try:
-            if format_name == "DOCX":
-                if not output_path.lower().endswith('.docx'): output_path += '.docx'
-                success, error_msg = pdf_handler.export_pdf_as_docx(self.doc, self.current_file_path, output_path)
-            elif format_name == "ODT":
-                if not output_path.lower().endswith('.odt'): output_path += '.odt'
-                success, error_msg = pdf_handler.export_pdf_as_odt(self.doc, self.current_file_path, output_path)
-            elif format_name == "PPTX":
-                if not output_path.lower().endswith('.pptx'): output_path += '.pptx'
-                success, error_msg = pdf_handler.export_pdf_as_pptx(self.doc, self.current_file_path, output_path)
-            elif format_name == "ODP":
-                if not output_path.lower().endswith('.odp'): output_path += '.odp'
-                success, error_msg = pdf_handler.export_pdf_as_odp(self.doc, self.current_file_path, output_path)
-            elif format_name == "TXT":
-                if not output_path.lower().endswith('.txt'): output_path += '.txt'
-                success, error_msg = pdf_handler.export_pdf_as_text(self.doc, output_path)
-            elif format_name == "PDF":
-                if not output_path.lower().endswith('.pdf'): output_path += '.pdf'
-                success, error_msg = pdf_handler.save_document(self.doc, output_path, incremental=False)
-                if success:
+            pdf_bytes = self.doc.tobytes(garbage=4, clean=True, deflate=True)
+        except Exception:
+            try:
+                pdf_bytes = self.doc.tobytes()
+            except Exception:
+                pdf_bytes = None
+
+        doc_payload = pdf_bytes if pdf_bytes is not None else self.doc
+        src_path = self.current_file_path
+
+        def worker():
+            success = False
+            error_msg = _("err_unknown_export_format")
+            try:
+                if fmt_lower == "docx":
+                    success, error_msg = pdf_handler.export_pdf_as_docx(
+                        doc_payload, src_path, output_path, mode=mode
+                    )
+                elif fmt_lower == "odt":
+                    success, error_msg = pdf_handler.export_pdf_as_odt(
+                        doc_payload, src_path, output_path, mode=mode
+                    )
+                elif fmt_lower == "pptx":
+                    success, error_msg = pdf_handler.export_pdf_as_pptx(
+                        doc_payload, src_path, output_path, mode=mode
+                    )
+                elif fmt_lower == "odp":
+                    success, error_msg = pdf_handler.export_pdf_as_odp(
+                        doc_payload, src_path, output_path, mode=mode
+                    )
+                elif fmt_lower == "txt":
+                    success, error_msg = pdf_handler.export_pdf_as_text(
+                        doc_payload, output_path, mode=mode
+                    )
+                elif fmt_lower == "pdf":
+                    success, error_msg = pdf_handler.save_document(
+                        self.doc, output_path, incremental=False
+                    )
+                else:
+                    success, error_msg = False, _("err_unknown_export_format")
+            except Exception as e:
+                success = False
+                error_msg = str(e)
+
+            GLib.idle_add(self._on_export_finished, success, error_msg, fmt_upper, output_path, on_finish)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+    def _on_export_finished(self, success, error_msg, format_name, output_path, on_finish=None):
+        """Handle export completion on the main GTK thread."""
+        try:
+            if success:
+                self.status_label.set_text(_("status_exported", format_name, os.path.basename(output_path)))
+                if format_name.lower() == "pdf":
                     self._update_ui_state()
             else:
-                 success = False
-
-            if success:
-                 self.status_label.set_text(_("status_exported", format_name, os.path.basename(output_path)))
-            else:
-                 show_error_dialog(self, _("err_export_failed_msg", error_msg))
-                 self.status_label.set_text(_("err_export_failed_msg", format_name))
-
-        except Exception as e:
-             show_error_dialog(self, _("err_export_unexpected", e))
-             self.status_label.set_text(_("status_export_failed"))
+                self.status_label.set_text(_("status_export_failed"))
+                show_error_dialog(self, _("err_export_failed_msg", error_msg or _("status_export_failed")))
+        finally:
+            if on_finish and callable(on_finish):
+                try:
+                    on_finish(success, error_msg)
+                except Exception:
+                    pass
+        return False
 
     def on_print_activated(self, action, param):
         """Handle the print activated event."""

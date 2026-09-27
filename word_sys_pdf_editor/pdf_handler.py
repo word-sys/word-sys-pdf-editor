@@ -682,16 +682,19 @@ def export_document(
 
     pdf_input = None
     if doc is not None:
-        try:
-            pdf_input = doc.tobytes(garbage=4, clean=True, deflate=True)
-        except Exception:
+        if isinstance(doc, (bytes, bytearray)):
+            pdf_input = bytes(doc)
+        else:
             try:
-                pdf_input = doc.tobytes()
+                pdf_input = doc.tobytes(garbage=4, clean=True, deflate=True)
             except Exception:
-                if source_pdf_path and os.path.exists(source_pdf_path):
-                    pdf_input = source_pdf_path
-                else:
-                    return False, "Failed to serialize in-memory PDF document for export."
+                try:
+                    pdf_input = doc.tobytes()
+                except Exception:
+                    if source_pdf_path and os.path.exists(source_pdf_path):
+                        pdf_input = source_pdf_path
+                    else:
+                        return False, "Failed to serialize in-memory PDF document for export."
     elif source_pdf_path and os.path.exists(source_pdf_path):
         try:
             temp_doc = fitz.open(source_pdf_path)
