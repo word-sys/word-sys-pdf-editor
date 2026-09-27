@@ -96,9 +96,8 @@ def parse_font_name(filename):
     return display_family_name, detected_style_key
 
 def scan_system_fonts_async(callback_on_done=None):
-    """Scan system fonts async."""
+    """Scan system font directories in a background thread."""
     def _scan():
-        """Scan."""
         global SYSTEM_FONTS, FONT_FAMILY_LIST_SORTED, FONT_SCAN_COMPLETED
         print("Scanning system and embedded fonts...")
         font_dirs = _get_font_dirs()
@@ -266,7 +265,7 @@ def find_specific_font_variant(family_name, is_bold=False, is_italic=False):
 UNICODE_FONT_PATH = None
 
 def get_default_unicode_font_path():
-    """Get the default unicode font path."""
+    """Resolve default Unicode fallback font path on system."""
     global UNICODE_FONT_PATH
     if UNICODE_FONT_PATH and os.path.isfile(UNICODE_FONT_PATH):
         return UNICODE_FONT_PATH
@@ -307,7 +306,7 @@ def get_default_unicode_font_path():
 
 
 def normalize_color(color_val):
-    """Normalize color."""
+    """Convert RGB tuple, int, or float representation into standard (0.0-1.0) RGB float tuple."""
     if color_val is None:
         return (0.0, 0.0, 0.0)
 

@@ -101,7 +101,7 @@ def print_document(parent_window, doc):
             traceback.print_exc()
 
     def on_done(operation, result):
-        """Handle the done event."""
+        """Save print settings and report completion."""
         if result == Gtk.PrintOperationResult.ERROR:
             print("PRINT ERROR")
         elif result == Gtk.PrintOperationResult.APPLY:

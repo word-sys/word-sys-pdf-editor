@@ -22,7 +22,7 @@ from . import constants
 from . import pdf_handler
 from . import print_handler
 from .welcome_view import WelcomeView 
-from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke
+from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke, DocumentSession
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_confirm_dialog,
     show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog,
@@ -32,13 +32,20 @@ from .quick_guide_dialog import QuickGuideDialog
 from . import utils
 
 class PdfEditorWindow(Adw.ApplicationWindow):
-    """The PdfEditorWindow class."""
+    """Main application window providing PDF viewing, editing, annotation, and exporting capabilities."""
+    _active_session = None
+    sessions = None
+
     def __init__(self, *args, **kwargs):
-        """Initialize the PdfEditorWindow."""
         super().__init__(*args, **kwargs)
         self.set_title(constants.APP_NAME)
         self.set_default_size(1200, 800)
         self.set_icon_name("f-pv1")
+
+        # DocumentSession pool and active session initialization
+        self.sessions = []
+        self._active_session = DocumentSession(undo_manager=UndoManager(self))
+        self.sessions.append(self._active_session)
 
         self.current_file_path = None
         self.original_file_path = None
@@ -122,7 +129,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         utils.scan_system_fonts_async(callback_on_done=self._on_font_scan_complete)
 
     def _on_font_scan_complete(self):
-        """Handle the font scan complete event."""
+        """Callback when background system font scan finishes, populating font combo."""
         self.font_scan_in_progress = False
         utils.get_default_unicode_font_path()
         self._populate_font_combo()
@@ -134,8 +141,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_ui_state()
 
     def _populate_font_combo(self):
-        """Populate font combo."""
-
+        """Populate font selector dropdown with discovered system fonts."""
         self.font_store.clear() 
         if utils.FONT_FAMILY_LIST_SORTED:
             for family_name in utils.FONT_FAMILY_LIST_SORTED:
@@ -153,31 +159,27 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_ui_state()
 
     def _apply_css(self):
-        """Apply CSS."""
+        """Apply custom application stylesheet for toolbars, canvas, and popovers."""
         css_provider = Gtk.CssProvider()
         css_provider.load_from_data(b"""
             .toolbar { padding: 6px; }
-            .pdf-view { background-color: #6c6c6c; } /* Slightly lighter gray background maybe */
+            .pdf-view { background-color: #6c6c6c; }
             .statusbar { padding: 4px 8px; border-top: 1px solid @borders; background-color: @theme_bg_color; }
             popover > .box { padding: 10px; }
 
-            /* Base textview style inside popover */
             textview {
                 font-family: monospace;
                 min-height: 80px;
                 margin-bottom: 6px;
-                border-radius: 6px; /* More rounded */
+                border-radius: 6px;
                 border: 1px solid @borders;
                 background-color: @theme_bg_color;
-                padding: 4px 6px; /* Internal padding */
+                padding: 4px 6px;
             }
 
-            /* Specific style for textview when adding NEW text */
             textview.new-text-entry {
-                border: 2px solid @accent_color; /* Thicker blue border */
-                background-color: @popover_bg_color; /* Match popover background (usually dark) */
-                /* Optional: Add inner shadow for depth if needed */
-                /* box-shadow: inset 0 1px 2px rgba(0,0,0,0.3); */
+                border: 2px solid @accent_color;
+                background-color: @popover_bg_color;
             }
 
             .tool-button.active { background-color: @theme_selected_bg_color; }
@@ -186,6 +188,396 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             Gdk.Display.get_default(), css_provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
+
+    @property
+    def active_session(self) -> DocumentSession:
+        """Get current active DocumentSession."""
+        return self._active_session
+
+    @active_session.setter
+    def active_session(self, session: DocumentSession):
+        """Set active DocumentSession."""
+        self.set_active_session(session)
+
+    def set_active_session(self, session: DocumentSession):
+        """Switch the active document session with clean state isolation."""
+        if session is None or self._active_session is session:
+            return
+
+        if self._active_session and self._active_session.doc:
+            try:
+                self.commit_pending_format_change()
+                if self.inline_editor_widget is not None:
+                    self._apply_and_hide_editor(force_apply=True)
+                pdf_handler.save_page_snapshot(
+                    self._active_session.doc,
+                    self._active_session.current_page_index,
+                    force=True
+                )
+            except Exception:
+                pass
+
+        self._active_session = session
+        if session not in self.sessions:
+            self.sessions.append(session)
+
+        if hasattr(self, 'thumbnail_selection_model') and self.thumbnail_selection_model is not None:
+            if session.pages_model is not None:
+                self.thumbnail_selection_model.set_model(session.pages_model)
+        if session.doc is not None:
+            self.set_title(f"{constants.APP_NAME} - {session.display_title}")
+            if hasattr(self, 'stack') and self.stack:
+                self.stack.set_visible_child_name("editor")
+            if hasattr(self, 'pdf_scroll'):
+                self._load_page(session.current_page_index)
+            if hasattr(self, 'thumbnail_selection_model') and self.thumbnail_selection_model:
+                try:
+                    self.thumbnail_selection_model.set_selected(session.current_page_index)
+                except Exception:
+                    pass
+        else:
+            self.set_title(constants.APP_NAME)
+            if hasattr(self, 'stack') and self.stack:
+                self.stack.set_visible_child_name("welcome")
+
+        self._update_ui_state()
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+
+    def create_session(self, doc=None, filepath=None) -> DocumentSession:
+        """Create a new DocumentSession configured for this window."""
+        session = DocumentSession(
+            doc=doc,
+            pdf_path=filepath,
+            original_file_path=filepath,
+            undo_manager=UndoManager(self)
+        )
+        return session
+
+    def add_session(self, session: DocumentSession, switch_to: bool = True):
+        """Add a session to the session pool."""
+        if session not in self.sessions:
+            self.sessions.append(session)
+        if switch_to:
+            self.set_active_session(session)
+
+    def remove_session(self, session_or_id):
+        """Remove a session from the session pool and cleanly close it."""
+        target_session = None
+        if isinstance(session_or_id, DocumentSession):
+            target_session = session_or_id
+        elif isinstance(session_or_id, str):
+            target_session = self.get_session_by_id(session_or_id)
+
+        if not target_session or target_session not in self.sessions:
+            return
+
+        self.sessions.remove(target_session)
+        target_session.close()
+
+        if self._active_session == target_session:
+            if self.sessions:
+                self.set_active_session(self.sessions[-1])
+            else:
+                new_session = self.create_session()
+                self._active_session = new_session
+                self.sessions = [new_session]
+                self.close_document()
+
+    def get_session_by_id(self, session_id: str):
+        """Retrieve session by UUID."""
+        for s in self.sessions:
+            if s.session_id == session_id:
+                return s
+        return None
+
+    def get_session_by_path(self, filepath: str):
+        """Retrieve session by canonical file path."""
+        if not filepath:
+            return None
+        try:
+            norm_target = os.path.realpath(filepath)
+        except Exception:
+            norm_target = filepath
+        for s in self.sessions:
+            if s.pdf_path:
+                try:
+                    if os.path.realpath(s.pdf_path) == norm_target:
+                        return s
+                except Exception:
+                    if s.pdf_path == filepath:
+                        return s
+        return None
+
+    @property
+    def doc(self):
+        """Active document object."""
+        return self._active_session.doc if self._active_session else None
+
+    @doc.setter
+    def doc(self, val):
+        if self._active_session:
+            self._active_session.doc = val
+
+    @property
+    def current_file_path(self):
+        """Active document file path."""
+        return self._active_session.pdf_path if self._active_session else None
+
+    @current_file_path.setter
+    def current_file_path(self, val):
+        if self._active_session:
+            self._active_session.pdf_path = val
+
+    @property
+    def original_file_path(self):
+        """Active document original file path."""
+        return self._active_session.original_file_path if self._active_session else None
+
+    @original_file_path.setter
+    def original_file_path(self, val):
+        if self._active_session:
+            self._active_session.original_file_path = val
+
+    @property
+    def current_page_index(self):
+        """Active document current page index."""
+        return self._active_session.current_page_index if self._active_session else 0
+
+    @current_page_index.setter
+    def current_page_index(self, val):
+        if self._active_session:
+            self._active_session.current_page_index = val
+
+    @property
+    def zoom_level(self):
+        """Active document zoom level."""
+        return self._active_session.zoom_level if self._active_session else 1.0
+
+    @zoom_level.setter
+    def zoom_level(self, val):
+        if self._active_session:
+            self._active_session.zoom_level = val
+
+    @property
+    def view_mode(self):
+        """Active document view mode flag."""
+        return self._active_session.view_mode if self._active_session else True
+
+    @view_mode.setter
+    def view_mode(self, val):
+        if self._active_session:
+            self._active_session.view_mode = val
+
+    @property
+    def document_modified(self):
+        """Active document modified flag."""
+        return self._active_session.is_modified if self._active_session else False
+
+    @document_modified.setter
+    def document_modified(self, val):
+        if self._active_session:
+            self._active_session.is_modified = val
+
+    @property
+    def allow_incremental_save(self):
+        """Active document allow incremental save flag."""
+        return self._active_session.allow_incremental_save if self._active_session else True
+
+    @allow_incremental_save.setter
+    def allow_incremental_save(self, val):
+        if self._active_session:
+            self._active_session.allow_incremental_save = val
+
+    @property
+    def is_repaired_file(self):
+        """Active document repaired file flag."""
+        return self._active_session.is_repaired_file if self._active_session else False
+
+    @is_repaired_file.setter
+    def is_repaired_file(self, val):
+        if self._active_session:
+            self._active_session.is_repaired_file = val
+
+    @property
+    def undo_manager(self):
+        """Active document undo manager."""
+        return self._active_session.undo_manager if self._active_session else None
+
+    @undo_manager.setter
+    def undo_manager(self, val):
+        if self._active_session:
+            self._active_session.undo_manager = val
+
+    @property
+    def pages_model(self):
+        """Active document pages model."""
+        return self._active_session.pages_model if self._active_session else None
+
+    @pages_model.setter
+    def pages_model(self, val):
+        if self._active_session:
+            self._active_session.pages_model = val
+
+    @property
+    def editable_texts(self):
+        """Active document editable texts list."""
+        return self._active_session.editable_texts if self._active_session else []
+
+    @editable_texts.setter
+    def editable_texts(self, val):
+        if self._active_session:
+            self._active_session.editable_texts = val
+
+    @property
+    def editable_images(self):
+        """Active document editable images list."""
+        return self._active_session.editable_images if self._active_session else []
+
+    @editable_images.setter
+    def editable_images(self, val):
+        if self._active_session:
+            self._active_session.editable_images = val
+
+    @property
+    def editable_shapes(self):
+        """Active document editable shapes list."""
+        return self._active_session.editable_shapes if self._active_session else []
+
+    @editable_shapes.setter
+    def editable_shapes(self, val):
+        if self._active_session:
+            self._active_session.editable_shapes = val
+
+    @property
+    def editable_strokes(self):
+        """Active document editable strokes list."""
+        return self._active_session.editable_strokes if self._active_session else []
+
+    @editable_strokes.setter
+    def editable_strokes(self, val):
+        if self._active_session:
+            self._active_session.editable_strokes = val
+
+    @property
+    def selected_text(self):
+        """Active document selected text."""
+        return self._active_session.selected_text if self._active_session else None
+
+    @selected_text.setter
+    def selected_text(self, val):
+        if self._active_session:
+            self._active_session.selected_text = val
+
+    @property
+    def selected_image(self):
+        """Active document selected image."""
+        return self._active_session.selected_image if self._active_session else None
+
+    @selected_image.setter
+    def selected_image(self, val):
+        if self._active_session:
+            self._active_session.selected_image = val
+
+    @property
+    def selected_shape(self):
+        """Active document selected shape."""
+        return self._active_session.selected_shape if self._active_session else None
+
+    @selected_shape.setter
+    def selected_shape(self, val):
+        if self._active_session:
+            self._active_session.selected_shape = val
+
+    @property
+    def selected_stroke(self):
+        """Active document selected stroke."""
+        return self._active_session.selected_stroke if self._active_session else None
+
+    @selected_stroke.setter
+    def selected_stroke(self, val):
+        if self._active_session:
+            self._active_session.selected_stroke = val
+
+    @property
+    def view_sel_start(self):
+        """Active document view mode selection start."""
+        return self._active_session.view_sel_start if self._active_session else None
+
+    @view_sel_start.setter
+    def view_sel_start(self, val):
+        if self._active_session:
+            self._active_session.view_sel_start = val
+
+    @property
+    def view_sel_rect(self):
+        """Active document view mode selection rectangle."""
+        return self._active_session.view_sel_rect if self._active_session else None
+
+    @view_sel_rect.setter
+    def view_sel_rect(self, val):
+        if self._active_session:
+            self._active_session.view_sel_rect = val
+
+    @property
+    def view_selected_text(self):
+        """Active document view mode selected text."""
+        return self._active_session.view_selected_text if self._active_session else ""
+
+    @view_selected_text.setter
+    def view_selected_text(self, val):
+        if self._active_session:
+            self._active_session.view_selected_text = val
+
+    @property
+    def view_drag_active(self):
+        """Active document view drag active flag."""
+        return self._active_session.view_drag_active if self._active_session else False
+
+    @view_drag_active.setter
+    def view_drag_active(self, val):
+        if self._active_session:
+            self._active_session.view_drag_active = val
+
+    @property
+    def selected_word(self):
+        """Active document selected word."""
+        return self._active_session.selected_word if self._active_session else None
+
+    @selected_word.setter
+    def selected_word(self, val):
+        if self._active_session:
+            self._active_session.selected_word = val
+
+    @property
+    def selected_word_start_char(self):
+        """Active document selected word start char index."""
+        return self._active_session.selected_word_start_char if self._active_session else None
+
+    @selected_word_start_char.setter
+    def selected_word_start_char(self, val):
+        if self._active_session:
+            self._active_session.selected_word_start_char = val
+
+    @property
+    def selected_word_end_char(self):
+        """Active document selected word end char index."""
+        return self._active_session.selected_word_end_char if self._active_session else None
+
+    @selected_word_end_char.setter
+    def selected_word_end_char(self, val):
+        if self._active_session:
+            self._active_session.selected_word_end_char = val
+
+    @property
+    def word_selection_mode(self):
+        """Active document word selection mode flag."""
+        return self._active_session.word_selection_mode if self._active_session else False
+
+    @word_selection_mode.setter
+    def word_selection_mode(self, val):
+        if self._active_session:
+            self._active_session.word_selection_mode = val
 
     def _build_ui(self):
         """Build UI."""
@@ -1016,7 +1408,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_undo_redo_buttons()
 
     def on_about_activated(self, action, param):
-        """Handle the about activated event."""
+        """Show the application About dialog."""
         about_dialog = Gtk.AboutDialog(transient_for=self, modal=True)
 
         about_dialog.set_program_name(constants.APP_NAME)
@@ -1137,22 +1529,31 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
 
     def _finish_loading(self, doc, error_msg, filepath, target_page=0):
-        """Finish loading."""
+        """Finalize document loading, set active session state, and start thumbnail generation."""
         if error_msg:
             show_error_dialog(self, error_msg)
             self.status_label.set_text(_("doc_load_failed"))
             self.close_document()
         elif doc:
-            self.doc = doc
-            self.is_repaired_file = doc.is_repaired
-            if self.is_repaired_file:
+            sess = getattr(self, '_active_session', None)
+            if sess is not None:
+                sess.doc = doc
+                sess.is_repaired_file = getattr(doc, 'is_repaired', False)
+                sess.pdf_path = filepath
+                sess.original_file_path = filepath
+                sess.allow_incremental_save = True
+                sess.is_modified = False
+                sess.current_page_index = target_page
+            else:
+                self.doc = doc
+                self.is_repaired_file = getattr(doc, 'is_repaired', False)
+                self.current_file_path = filepath
+                self.original_file_path = filepath
+                self.allow_incremental_save = True
+                self.current_page_index = target_page
+            if getattr(self, 'is_repaired_file', False):
                 print(_("dbg_repaired_while_opening"))
-            self.current_file_path = filepath
-            self.original_file_path = filepath
-            self.allow_incremental_save = True
             self._record_recent_file(filepath)
-            
-            self.current_page_index = target_page 
             
             self.set_title(f"{constants.APP_NAME} - {os.path.basename(filepath)}")
             self.status_label.set_text(_("thumbnails_loading"))
@@ -1166,7 +1567,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_ui_state()
 
     def _load_thumbnails(self):
-        """Load thumbnails."""
+        """Asynchronously generate and populate sidebar thumbnails for each document page."""
         if not self.doc:
             return
 
@@ -1175,7 +1576,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.thumb_load_iter = 0
         def _load_next_thumb():
-            """Load next thumb."""
             if self.thumb_load_iter < page_count:
                 index = self.thumb_load_iter
                 
@@ -1205,7 +1605,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
 
     def _load_page(self, page_index, preserve_scroll=False):
-        """Load page."""
+        """Extract editable objects, dimensions, and render page at given index."""
         current_v_scroll = 0
         current_h_scroll = 0
         if preserve_scroll:
@@ -1293,26 +1693,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def close_document(self):
         """Close document."""
-        self.undo_manager.clear()
-        self.is_repaired_file = False
-        if self.doc:
-            pdf_handler.release_page_snapshots(self.doc)
-        pdf_handler.close_pdf_document(self.doc)
-        self.doc = None
-        self.current_file_path = None
-        self.current_page_index = 0
-        self.editable_texts = []
-        self.editable_images = []
-        self.editable_shapes = []
-        self.editable_strokes = []
-        self.selected_text = None
-        self.selected_image = None
-        self.selected_shape = None
-        self.selected_stroke = None
+        if hasattr(self, '_active_session') and self._active_session:
+            if self._active_session.undo_manager:
+                self._active_session.undo_manager.clear()
+            self._active_session.is_repaired_file = False
+            if self._active_session.doc:
+                pdf_handler.release_page_snapshots(self._active_session.doc)
+                pdf_handler.close_pdf_document(self._active_session.doc)
+            self._active_session.close()
+            self._active_session.pdf_path = None
+            self._active_session.original_file_path = None
+            self._active_session.current_page_index = 0
+            self._active_session.is_modified = False
+            if self._active_session.pages_model:
+                self._active_session.pages_model.remove_all()
         self.temp_stroke = None
         self.hide_text_editor()
-        self.pages_model.remove_all()
-        self.document_modified = False
         self.pdf_view.set_content_width(1)
         self.pdf_view.set_content_height(1)
         self.pdf_view.queue_draw()
@@ -2194,7 +2590,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             filter_img.add_mime_type(mime)
 
         def on_open_finish(file):
-            """Handle the open dialog result."""
             if file:
                 image_path = file.get_path()
                 try:
@@ -2727,7 +3122,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
     def _on_inline_editor_focus_leave(self, controller):
-        """Handle the inline editor focus leave event."""
+        """Commit active inline text edit when editor widget loses focus."""
         focus_widget = self.get_focus()
         if focus_widget:
             curr = focus_widget
@@ -2739,7 +3134,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         GLib.idle_add(self._commit_inline_edit)
 
     def _on_inline_editor_key(self, controller, keyval, keycode, state):
-        """Handle the inline editor key event."""
+        """Cancel inline editing and revert changes when Escape is pressed."""
         if keyval == Gdk.KEY_Escape:
             self._hide_inline_editor()
             self._update_ui_state()
@@ -2748,15 +3143,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def hide_text_editor(self):
-        """Hide text editor."""
+        """Dismiss the inline text editing widget."""
         self._hide_inline_editor()
 
     def _apply_and_hide_editor(self, force_apply=False):
-        """Apply and hide editor."""
+        """Commit pending changes and dismiss inline text editor."""
         self._commit_inline_edit()
 
     def check_unsaved_changes(self):
-        """Check unsaved changes."""
+        """Prompt user to save pending modifications. Returns True if cancelled."""
         if self.document_modified:
             response = show_save_changes_dialog(self)
             
@@ -2776,7 +3171,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def on_drop(self, drop_target, value, x, y):
-        """Handle the drop event."""
+        """Handle drag-and-drop of PDF documents into the main viewer."""
         if isinstance(value, Gio.File):
             filepath = value.get_path()
             if filepath and filepath.lower().endswith('.pdf'):
@@ -2788,7 +3183,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def _offer_merge_or_open(self, filepath):
-        """Offer merge or open."""
+        """Prompt whether to append dropped PDF pages or open as a separate document."""
         dialog = Gtk.MessageDialog(
             transient_for=self,
             modal=True,
@@ -2805,7 +3200,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
         
         def on_response(d, resp_id):
-            """Handle the dialog response event."""
             d.destroy()
             if resp_id == Gtk.ResponseType.ACCEPT:
                 self._merge_pdf_at_position(filepath, self.current_page_index + 1)
@@ -2818,7 +3212,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         dialog.present()
 
     def _merge_pdf_at_position(self, source_pdf_path, insert_position):
-        """Merge PDF at position."""
+        """Insert pages from another PDF file into the active document at insert_position."""
         success, message, pages_inserted = pdf_handler.merge_pdf_pages(
             self.doc, source_pdf_path, insert_position
         )
@@ -2833,7 +3227,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             show_error_dialog(self, message, _("err_merge_title"))
 
     def on_thumbnail_drop(self, drop_target, value, x, y):
-        """Handle the thumbnail drop event."""
+        """Handle drag-and-drop of a PDF onto the thumbnail sidebar to append pages."""
         if isinstance(value, Gio.File):
             filepath = value.get_path()
             if filepath and filepath.lower().endswith('.pdf'):
@@ -2844,7 +3238,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def on_open_clicked(self, button=None):
-        """Handle the open clicked event."""
+        """Prompt open file dialog to load an existing PDF."""
         if self.check_unsaved_changes():
              return
 
@@ -2855,7 +3249,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         filter_all.add_pattern("*")
 
         def on_open_finish(file):
-            """Handle the open dialog result."""
             if file:
                 GLib.idle_add(self.load_document, file.get_path())
 
@@ -2868,7 +3261,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         )
 
     def on_save_clicked(self, button):
-        """Handle the save clicked event."""
+        """Save active document to current path or prompt Save As if untitled."""
         if not self.doc:
             return
         if self.current_file_path:
@@ -2878,7 +3271,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.on_save_as(None, None)
 
     def on_save_as(self, action, param):
-        """Handle the save as event."""
+        """Prompt save file dialog to write PDF to a new destination."""
         self.commit_pending_format_change()
         if not self.doc: return
 
@@ -2888,7 +3281,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         filter_pdf.add_mime_type("application/pdf")
 
         def on_save_finish(file):
-            """Handle the save dialog result."""
             if file:
                 path = file.get_path()
                 if not path.lower().endswith('.pdf'): path += '.pdf'
@@ -2904,7 +3296,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         )
 
     def on_export_as(self, action=None, param=None):
-        """Handle the export as event."""
+        """Show modern export dialog with format and layout mode options."""
         self.show_export_dialog(initial_format="DOCX")
 
     def on_export_docx(self, action=None, param=None):
@@ -3074,7 +3466,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def on_print_activated(self, action, param):
-        """Handle the print activated event."""
+        """Initiate standard GTK print dialog workflow for the current document."""
         if not self.doc:
             show_error_dialog(self, _("print_no_doc"), _("print_no_doc_title"))
             return
@@ -3235,17 +3627,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
     def on_zoom_in(self, button=None, focal_point=None):
-        """Handle the zoom in event."""
         if not self.doc: return
         self._set_zoom(self.zoom_level * 1.2, focal_point=focal_point)
 
     def on_zoom_out(self, button=None, focal_point=None):
-        """Handle the zoom out event."""
         if not self.doc: return
         self._set_zoom(self.zoom_level / 1.2, focal_point=focal_point)
 
     def on_scroll_zoom(self, controller, dx, dy):
-        """Handle the scroll zoom event."""
+        """Zoom canvas in or out when Ctrl key is held during mouse scroll."""
         if controller.get_current_event_state() & Gdk.ModifierType.CONTROL_MASK:
             focal_point = getattr(self, '_last_pointer_pos', None)
             if dy < 0:
@@ -3256,17 +3646,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def on_prev_page(self, button):
-        """Handle the prev page event."""
         if self.doc and self.current_page_index > 0:
             self._load_page(self.current_page_index - 1)
 
     def on_next_page(self, button):
-        """Handle the next page event."""
         if self.doc and self.current_page_index < pdf_handler.get_page_count(self.doc) - 1:
             self._load_page(self.current_page_index + 1)
 
     def on_add_page(self, button):
-        """Handle the add page event."""
+        """Insert a new blank page with matching dimensions after current page."""
         if not self.doc:
             show_error_dialog(self, _("err_no_doc_msg"), _("err_no_doc_title"))
             return
@@ -3287,7 +3675,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             show_error_dialog(self, message, _("err_add_page_title"))
 
     def on_delete_page(self, button):
-        """Handle the delete page event."""
         self._delete_page_at_index(self.current_page_index)
 
     def _delete_page_at_index(self, page_to_delete):
@@ -3399,19 +3786,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         popover.popup()
 
     def update_page_label(self):
-        """Update page label."""
+        """Update the page indicator label with current page number and total count."""
         count = pdf_handler.get_page_count(self.doc)
         self.page_label.set_text(_("page_info_count").format(self.current_page_index + 1, count) if count > 0 else _("page_info_count").format(0, 0))
 
     def on_thumbnail_selected(self, selection_model, position, n_items):
-         """Handle the thumbnail selected event."""
+         """Navigate to page selected in the thumbnail sidebar."""
          selected_index = selection_model.get_selected()
          if selected_index != Gtk.INVALID_LIST_POSITION and selected_index != self.current_page_index:
               if hasattr(self, '_syncing_thumb') and self._syncing_thumb: return
               self._load_page(selected_index)
 
     def _sync_thumbnail_selection(self):
-         """Sync thumbnail selection."""
+         """Update sidebar thumbnail selection without re-triggering navigation."""
          if not self.doc or not self.thumbnail_selection_model: return
          self._syncing_thumb = True
          self.thumbnail_selection_model.set_selected(self.current_page_index)
@@ -3423,7 +3810,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return not getattr(self, 'view_mode', True)
 
     def on_page_reorder(self, from_index, to_index):
-         """Handle the page reorder event."""
+         """Move a page in the document when reordered via drag-and-drop in thumbnail list."""
          if getattr(self, 'view_mode', False) or not self.edit_mode:
              return
          if from_index == to_index or from_index < 0 or to_index < 0:
@@ -3442,7 +3829,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
 
     def on_pdf_view_pressed(self, gesture, n_press, x, y):
-        """Handle the pdf view pressed event."""
+        """Handle primary mouse button press for object selection, links, or tool starts."""
         if not self.doc or self.current_pdf_page_width == 0 or self.current_pdf_page_height == 0:
             return
 
@@ -3631,7 +4018,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             pass
 
     def on_text_format_changed(self, widget, *args):
-        """Handle the text format changed event."""
+        """Apply typography updates (font family, size, style, color, alignment) to selected text."""
         if self.font_scan_in_progress:
             return
 
@@ -3862,7 +4249,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self._update_ui_state()
 
     def on_shape_format_changed(self, widget, *args):
-        """Handle the shape format changed event."""
+        """Apply shape fill, stroke color, and line width updates to selection or next shape."""
         fill_rgba = self.shape_fill_button.get_rgba()
         fill_color = (fill_rgba.red, fill_rgba.green, fill_rgba.blue)
         stroke_rgba = self.shape_stroke_button.get_rgba()
@@ -3901,7 +4288,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_ui_state()
 
     def on_stroke_format_changed(self, widget, *args):
-        """Handle the stroke format changed event."""
+        """Apply stroke color or line width updates to active drawing tool or selected stroke."""
         stroke_rgba = self.stroke_color_button.get_rgba()
         stroke_color = (stroke_rgba.red, stroke_rgba.green, stroke_rgba.blue)
         stroke_width = self.stroke_width_spin.get_value()
@@ -3935,11 +4322,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_ui_state()
 
     def on_text_edit_done(self, button):
-        """Handle the text edit done event."""
+        """Explicitly commit pending inline text edits and dismiss the editor."""
         self._apply_and_hide_editor(force_apply=True)
 
     def on_key_pressed(self, controller, keyval, keycode, state):
-        """Handle the key pressed event."""
+        """Handle global keyboard shortcuts (undo/redo, delete, zoom, navigation, escape)."""
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
 
         if self.view_mode:
@@ -4107,7 +4494,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def on_tool_selected(self, button, tool_name):
-        """Handle the tool selected event."""
+        """Switch active editor tool mode (select, text, shapes, pen, highlighter)."""
         if self.inline_editor_widget is not None:
              print(_("dbg_applying_changes_before_tool"))
              self._apply_and_hide_editor(force_apply=True)
@@ -4133,7 +4520,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._update_stroke_format_controls(None)
 
     def on_drag_begin(self, gesture, start_x, start_y):
-        """Handle the drag begin event."""
+        """Initiate canvas drag gesture for selection, movement, resizing, or freehand drawing."""
         if not self.doc:
             return
 
@@ -4303,7 +4690,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             gesture.set_state(Gtk.EventSequenceState.DENIED)
 
     def on_drag_update(self, gesture, offset_x, offset_y):
-        """Handle the drag update event."""
+        """Update canvas interaction during drag (move/resize objects, text select, or draw strokes)."""
         if self.view_mode:
             if self.view_sel_start and self.view_drag_active:
                 sx, sy = self.view_sel_start
@@ -4507,7 +4894,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
     def on_drag_end(self, gesture, offset_x, offset_y):
-        """Handle the drag end event."""
+        """Finalize canvas drag interaction, committing created or modified objects to undo history."""
         if self.view_mode:
             self.view_drag_active = False
             if self.view_sel_rect:
@@ -4587,7 +4974,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     filter_img.add_mime_type(mime)
 
                 def on_image_selected(file):
-                    """Handle the image selected event."""
                     if file:
                         try:
                             with open(file.get_path(), 'rb') as f:
@@ -4750,17 +5136,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.status_label.set_text(_("symbol_copied", symbol))
 
     def _on_quick_guide_activated(self, action, param):
-        """Handle the quick guide activated event."""
+        """Display the interactive quick user guide dialog."""
         dialog = QuickGuideDialog(self)
         dialog.present()
 
     def _update_undo_redo_buttons(self, *args):
-        """Update undo redo buttons."""
+        """Sync undo/redo toolbar button sensitivity with UndoManager stacks."""
         self.undo_button.set_sensitive(bool(self.undo_manager.undo_stack))
         self.redo_button.set_sensitive(bool(self.undo_manager.redo_stack))
 
     def _refresh_thumbnail(self, page_index):
-        """Refresh thumbnail."""
+        """Regenerate and replace the thumbnail pixbuf for a modified page."""
         if not self.doc or not (0 <= page_index < pdf_handler.get_page_count(self.doc)):
             return
         try:
@@ -4779,7 +5165,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             print(f"Warning: Could not refresh thumbnail for page {page_index + 1}: {e}")
     
     def commit_pending_format_change(self):
-        """Commit pending format change."""
+        """Record pending text/shape style modifications into undo history."""
         if self.pending_format_change_obj and self.before_format_change_state:
             current_state = copy.deepcopy(self.pending_format_change_obj.__dict__)
             
@@ -4793,7 +5179,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.before_format_change_state = None
 
     def on_new_clicked(self, widget=None):
-        """Handle the new clicked event with customizable page dimensions."""
+        """Prompt user for dimensions and initialize a new empty PDF document."""
         if self.check_unsaved_changes():
             return
 
@@ -4805,12 +5191,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 show_error_dialog(self, error_msg)
                 self.close_document()
             elif doc:
-                self.doc = doc
-                self.current_file_path = None
-                self.current_page_index = 0
+                if self._active_session is None:
+                    self._active_session = self.create_session()
+                    self.sessions.append(self._active_session)
+                self._active_session.doc = doc
+                self._active_session.pdf_path = None
+                self._active_session.original_file_path = None
+                self._active_session.current_page_index = 0
                 _untitled = _("untitled")
                 self.set_title(f"{constants.APP_NAME} - {_untitled}*")
-                self.document_modified = True
+                self._active_session.is_modified = True
                 
                 self._load_thumbnails()
                 self.status_label.set_text(_("status_new_doc_created"))
@@ -4818,14 +5208,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         show_new_document_dialog(self, on_create)
 
     def do_close_request(self):
-        """Do close request."""
+        """Prompt to save unsaved changes before closing the window."""
         if self.check_unsaved_changes():
             return True
         else:
             self.close_document()
             return False
+
     def on_stroke_width_scroll(self, controller, dx, dy):
-        """Handle the stroke width scroll event."""
+        """Adjust stroke width of selected shape using mouse wheel scroll."""
         if not self.selected_shape:
             return False
         
@@ -4839,7 +5230,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return True
 
     def _toggle_view_edit_mode(self, button=None):
-        """Toggle view edit mode."""
+        """Toggle between read-only text-selection mode and interactive object edit mode."""
         self.view_mode = not self.view_mode
         if self.view_mode:
             self._apply_and_hide_editor()
@@ -4855,7 +5246,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
 
     def on_highlight_clicked(self, button):
-        """Handle the highlight clicked event."""
+        """Add a highlight annotation over selected text or canvas selection rectangle."""
         rgba = self.highlight_color_button.get_rgba()
         color = (rgba.red, rgba.green, rgba.blue)
         
@@ -4898,7 +5289,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             show_error_dialog(self, _("highlight_failed", err))
 
     def on_remove_highlight_clicked(self, button):
-        """Handle the remove highlight clicked event."""
+        """Remove highlight annotations overlapping current selection."""
         target_rect = None
         is_visual = False
         if self.view_mode and self.view_sel_rect:
@@ -4921,7 +5312,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._remove_highlight_at_region(target_rect, is_visual=is_visual)
 
     def _extract_word_at_position(self, text, click_pos_in_text):
-        """Extract word at position."""
+        """Extract contiguous non-whitespace word and its character indices at cursor."""
         if not text or click_pos_in_text < 0 or click_pos_in_text > len(text):
             return None, 0, 0
         
@@ -4937,7 +5328,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return text[start:end], start, end
 
     def _on_middle_click(self, gesture, n_press, x, y):
-        """Handle the middle click event."""
+        """Handle middle-click gesture to quickly select words or jump to links."""
         if not self.doc:
             return
         
@@ -4999,7 +5390,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self._update_ui_state()
 
     def _on_right_click(self, gesture, n_press, x, y):
-        """Handle the right click event."""
+        """Display context popover menu tailored to clicked text, shape, image, or empty area."""
         if not self.doc:
             return
         
@@ -5072,7 +5463,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             
             btn_copy = Gtk.Button(label=_("btn_copy"))
             def on_copy_clicked(b):
-                """Handle the copy clicked event."""
                 if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word'):
                     self.get_clipboard().set(self.selected_word)
                 else:
@@ -5092,16 +5482,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_underline = Gtk.Button(label=_("underline_tip"))
             btn_strikethrough = Gtk.Button(label=_("strikethrough_tip"))
             def on_bold_clicked(b):
-                """Handle the bold clicked event."""
                 self._toggle_text_bold(clicked_text)
             def on_italic_clicked(b):
-                """Handle the italic clicked event."""
                 self._toggle_text_italic(clicked_text)
             def on_underline_clicked(b):
-                """Handle the underline clicked event."""
                 self._toggle_text_underline(clicked_text)
             def on_strikethrough_clicked(b):
-                """Handle the strikethrough clicked event."""
                 self._toggle_text_strikethrough(clicked_text)
             btn_bold.connect("clicked", on_bold_clicked)
             btn_italic.connect("clicked", on_italic_clicked)
@@ -5153,7 +5539,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("delete_confirm"))
             btn_del.add_css_class("destructive-action")
             def on_delete_text(b):
-                """Handle the delete text event."""
                 self._handle_delete_with_confirmation(clicked_text, "delete_text_confirm")
             btn_del.connect("clicked", on_delete_text)
             popover_box.append(btn_del)
@@ -5166,7 +5551,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("menu_delete_shape"))
             btn_del.add_css_class("destructive-action")
             def on_delete_shape(b):
-                """Handle the delete shape event."""
                 self._handle_delete_with_confirmation(clicked_shape, "delete_shape_confirm")
             btn_del.connect("clicked", on_delete_shape)
             popover_box.append(btn_del)
@@ -5179,7 +5563,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("menu_delete_image"))
             btn_del.add_css_class("destructive-action")
             def on_delete_image(b):
-                """Handle the delete image event."""
                 self._handle_delete_with_confirmation(clicked_image, "delete_image_confirm")
             btn_del.connect("clicked", on_delete_image)
             popover_box.append(btn_del)
@@ -5225,7 +5608,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.context_popover.popup()
 
     def _handle_context_action(self, action, obj, x, y):
-        """Handle context action."""
+        """Execute actions dispatched from context menu popovers."""
         if hasattr(self, 'context_popover'):
             self.context_popover.popdown()
             
@@ -5257,7 +5640,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             page_x, page_y = obj
             clipboard = self.get_clipboard()
             def _on_paste_finished(cb, task):
-                """Handle the paste finished event."""
                 try:
                     text = cb.read_text_finish(task)
                     if text and text.strip():

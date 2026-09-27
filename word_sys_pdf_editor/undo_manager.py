@@ -269,15 +269,14 @@ class UndoManager:
         self.window.pdf_view.queue_draw()
 
     def clear(self):
-        """Clear the items."""
+        """Clear all undo and redo history."""
         self.undo_stack.clear()
         self.redo_stack.clear()
         self._update_ui_callback()
 
 class EditObjectCommand(Command):
-    """The EditObjectCommand class."""
+    """Command for object modifications (position, bounds, formatting, colors)."""
     def __init__(self, window, target_object, old_properties, new_properties):
-        """Initialize the EditObjectCommand."""
         super().__init__(window)
         self.target_object = target_object
         self.old_properties = old_properties
@@ -391,9 +390,8 @@ class EditObjectCommand(Command):
             self.window.pdf_view.queue_draw()
 
 class AddObjectCommand(Command):
-    """The AddObjectCommand class."""
+    """Command for newly added canvas objects."""
     def __init__(self, window, new_object):
-        """Initialize the AddObjectCommand."""
         super().__init__(window)
         self.new_object = new_object
         self.is_text = isinstance(new_object, EditableText)
@@ -470,9 +468,8 @@ class AddObjectCommand(Command):
 
 
 class DeleteObjectCommand(Command):
-    """The DeleteObjectCommand class."""
+    """Command for deleting canvas objects with restoration on undo."""
     def __init__(self, window, deleted_object):
-        """Initialize the DeleteObjectCommand."""
         super().__init__(window)
         self.deleted_object = deleted_object
         self.is_text = isinstance(deleted_object, EditableText)
@@ -538,9 +535,8 @@ class DeleteObjectCommand(Command):
         self.window.pdf_view.queue_draw()
 
 class CompositeCommand(Command):
-    """The CompositeCommand class."""
+    """Composite command executing multiple atomic actions in a single undo step."""
     def __init__(self, window, commands):
-        """Initialize the CompositeCommand."""
         super().__init__(window)
         self.commands = commands
         

@@ -416,7 +416,7 @@ def _get_span_style_signature(span):
 
 
 def extract_editable_text(doc, page_index):
-    """Extract editable text."""
+    """Extract editable text spans from a PDF page into EditableText models."""
     editable_texts = []
     if not doc or not (0 <= page_index < doc.page_count):
         return [], "Invalid document or page index for text extraction."
@@ -562,7 +562,7 @@ def _get_base14_font_variant(base_name, is_bold, is_italic):
     return pdf_base
 
 def apply_text_edit(doc, text_obj: EditableText, new_text: str):
-    """Apply text edit."""
+    """Burn edited text modifications into the underlying PDF page stream."""
     if not doc or text_obj.page_number is None:
         return False, "Invalid document or page number."
 
@@ -610,7 +610,7 @@ def apply_text_edit(doc, text_obj: EditableText, new_text: str):
         return False, f"Error during text application: {e}"
 
 def save_document(doc, save_path, incremental=False):
-    """Save document."""
+    """Save PyMuPDF document to disk with optional incremental saving and cleanup."""
     if not doc:
         return False, "Kaydedilecek belge yok."
 
@@ -836,7 +836,7 @@ def get_image_rgba_bytes(doc, xref):
             return None
 
 def extract_editable_images(doc, page_index):
-    """Extract editable images."""
+    """Extract raster image objects and bounding boxes from a PDF page."""
     editable_images = []
     if not doc or not (0 <= page_index < doc.page_count):
         return [], _("err_invalid_doc_page_extract")
@@ -892,7 +892,7 @@ def extract_editable_images(doc, page_index):
         return [], error_msg
 
 def add_image_to_page(doc, page_number, image_path, rect):
-    """Add image to page."""
+    """Insert image bytes onto a PDF page at the specified bounding box."""
     if not doc or page_number is None:
         return False, _("err_invalid_doc_page_add_image")
     try:
@@ -907,7 +907,7 @@ def add_image_to_page(doc, page_number, image_path, rect):
         return False, _("err_placing_image", e)
 
 def delete_image_from_page(doc, image_obj: EditableImage):
-    """Delete image from page."""
+    """Remove image drawing from page snapshot via targeted redaction."""
     if not doc or image_obj.page_number is None:
         return False, _("err_invalid_doc_page_delete_image")
     try:
@@ -931,7 +931,7 @@ def delete_image_from_page(doc, image_obj: EditableImage):
         return False, _("err_deleting_image", e)
 
 def delete_shape_from_page(doc, shape_obj: EditableShape):
-    """Delete shape from page."""
+    """Remove vector shape from page snapshot via targeted redaction."""
     if not doc or shape_obj.page_number is None:
         return False, _("err_invalid_doc_page_delete_shape")
     try:
@@ -960,7 +960,7 @@ def delete_shape_from_page(doc, shape_obj: EditableShape):
         return False, _("err_deleting_shape", e)
 
 def delete_stroke_from_page(doc, stroke_obj: EditableStroke):
-    """Delete stroke from page."""
+    """Remove freehand stroke from page snapshot via targeted redaction."""
     if not doc or stroke_obj.page_number is None:
         return False, "Invalid document or page number."
     try:
@@ -1174,7 +1174,7 @@ _page_snapshots: dict = {}
 _page_original_links: dict = {}
 
 def save_page_snapshot(doc, page_num: int, force: bool = False):
-    """Save page snapshot."""
+    """Cache an unedited copy of a PDF page to allow cleanly erasing original objects."""
     key = (id(doc), page_num)
     if key in _page_snapshots and not force:
         return  
@@ -1194,7 +1194,7 @@ def save_page_snapshot(doc, page_num: int, force: bool = False):
 
 
 def restore_page_from_snapshot(doc, page_num: int) -> bool:
-    """Restore page from snapshot."""
+    """Restore a page from its cached snapshot state."""
     key = (id(doc), page_num)
     if key not in _page_snapshots:
         return False
@@ -1238,7 +1238,7 @@ def restore_page_from_snapshot(doc, page_num: int) -> bool:
         return False
 
 def release_page_snapshots(doc):
-    """Release page snapshots."""
+    """Release and clear all cached page snapshots for a document."""
     doc_id = id(doc)
     keys_to_remove = [k for k in _page_snapshots if k[0] == doc_id]
     for k in keys_to_remove:
@@ -1247,7 +1247,7 @@ def release_page_snapshots(doc):
             del _page_original_links[k]
 
 def _apply_single_object_to_page(doc, page, obj):
-    """Apply single object to page."""
+    """Render a single object (text, image, shape, stroke) onto a PDF page with transforms."""
     rot = getattr(obj, "rotation", 0.0) % 360.0
 
     if isinstance(obj, EditableText):
@@ -1532,7 +1532,7 @@ def _apply_single_object_to_page(doc, page, obj):
 
 def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
                  exclude_obj=None, all_strokes=None):
-    """Rebuild page."""
+    """Re-render page from snapshot applying all active editable objects."""
     if not restore_page_from_snapshot(doc, page_num):
         print(f"Warning: no snapshot for page {page_num}, skipping restore")
     try:
@@ -1562,7 +1562,7 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
         return False, str(e)
 
 def apply_object_edit(doc, obj):
-    """Apply object edit."""
+    """Burn a modified canvas object into its target PDF page stream."""
     if not doc or not hasattr(obj, 'page_number') or obj.page_number is None:
         return False, "Invalid object or page number."
     try:
@@ -1589,7 +1589,7 @@ def create_new_pdf(width=595, height=842, num_pages=1):
         return None, _("err_creating_new_pdf", e)
 
 def insert_blank_page(doc, page_index=None, width=None, height=None):
-    """Insert blank page."""
+    """Insert a new empty PDF page with specified width and height at target index."""
     try:
         if width is None or height is None:
             if doc.page_count > 0:
@@ -1655,7 +1655,7 @@ def merge_pdf_pages(target_doc, source_pdf_path, insert_position=None):
         return False, _("err_merging_pdf", e), 0
 
 def move_page(doc, from_index, to_index):
-    """Move page."""
+    """Reorder a page from from_index to to_index in document."""
     try:
         if from_index < 0 or from_index >= doc.page_count:
             return False, _("err_invalid_page_index")
@@ -1707,7 +1707,7 @@ def move_page(doc, from_index, to_index):
         return False, _("err_moving_page", e)
 
 def delete_page(doc, page_index):
-    """Delete page."""
+    """Remove the page at index from document."""
     try:
         if not doc:
             return False, _("err_no_doc_msg_alt")

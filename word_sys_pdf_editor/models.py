@@ -1,6 +1,10 @@
 import gi
 gi.require_version('GdkPixbuf', '2.0')
-from gi.repository import GObject, GdkPixbuf
+from gi.repository import GObject, GdkPixbuf, Gio
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any, Tuple
+import os
+import uuid
 from .utils import normalize_color
 import re
 import copy
@@ -24,11 +28,9 @@ BASE14_FALLBACK_MAP = {
 }
 
 class EditableText:
-    """The EditableText class."""
+    """Data model representing extracted or newly added editable text on a PDF page."""
     def __init__(self, x, y, text, font_size=11, font_family="Liberation Sans",
                  color=(0, 0, 0), span_data=None, is_new=False, baseline=None, rotation=0.0, page_number=None, alignment="left"):
-        
-        """Initialize the EditableText."""
         self.x = x
         self.y = y
         self.text = text
@@ -194,11 +196,11 @@ class EditableText:
 
     @property
     def is_link(self):
-        """Check if link."""
+        """Return True if text contains a web URL."""
         return bool(self.text and re.search(r'https?://', self.text))
 
     def split_at_range(self, start_char, end_char):
-        """Split at range."""
+        """Split text into segments before, inside, and after a character selection range."""
         text = self.text
         if start_char < 0: start_char = 0
         if end_char > len(text): end_char = len(text)
@@ -244,9 +246,8 @@ class EditableText:
         return parts
 
 class EditableImage:
-    """The EditableImage class."""
+    """Data model representing an extracted or inserted image on a PDF page."""
     def __init__(self, bbox, page_number, xref, image_bytes, is_new=False, rotation=0.0):
-        """Initialize the EditableImage."""
         self.bbox = bbox
         self.original_bbox = bbox
         self.page_number = page_number
@@ -263,7 +264,7 @@ class EditableImage:
         self.rotation = float(angle) % 360.0
 
 class EditableShape:
-    """The EditableShape class."""
+    """Data model representing vector shapes such as rectangle, ellipse, checkmark, cross."""
     SHAPE_RECTANGLE = "rectangle"
     SHAPE_ELLIPSE = "ellipse"
     SHAPE_POLYGON = "polygon"
@@ -272,7 +273,6 @@ class EditableShape:
     
     def __init__(self, shape_type, bbox, fill_color=(255, 255, 255), 
                  stroke_color=(0, 0, 0), stroke_width=2.0, page_number=None, is_new=False, is_transparent=True, rotation=0.0):
-        """Initialize the EditableShape."""
         self.shape_type = shape_type
         self.bbox = bbox
         self.original_bbox = bbox
@@ -347,13 +347,12 @@ class EditableShape:
         ]
 
 class EditableStroke:
-    """The EditableStroke class for freehand pen and highlighter drawings."""
+    """Data model representing freehand pen and highlighter vector drawings."""
     TOOL_PEN = "pen"
     TOOL_HIGHLIGHTER = "highlighter"
 
     def __init__(self, points=None, stroke_color=(0, 0, 0), stroke_width=2.0,
                  opacity=1.0, tool_type="pen", page_number=None, is_new=True, rotation=0.0):
-        """Initialize the EditableStroke."""
         self.points = list(points) if points else []
         self.stroke_color = normalize_color(stroke_color)
         self.original_stroke_color = self.stroke_color
@@ -443,12 +442,112 @@ class EditableStroke:
         self.rotation = float(angle) % 360.0
 
 class PdfPage(GObject.GObject):
-    """The PdfPage class."""
+    """GObject model for PDF page index and thumbnail in sidebar list."""
     __gtype_name__ = 'PdfPage'
     index = GObject.Property(type=int)
     thumbnail = GObject.Property(type=GdkPixbuf.Pixbuf)
 
     def __init__(self, index, thumbnail):
-        """Initialize the PdfPage."""
         super().__init__(index=index, thumbnail=thumbnail)
+
+
+@dataclass
+class DocumentSession:
+    """Encapsulates the state of an open PDF document session.
+
+    Manages the document object, file paths, undo history, navigation,
+    zoom level, edit mode, and page object collections.
+    """
+    doc: Any = None
+    pdf_path: Optional[str] = None
+    original_file_path: Optional[str] = None
+    session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+    # Navigation & View
+    current_page_index: int = 0
+    zoom_level: float = 1.0
+    view_mode: bool = True
+
+    # Modification & Undo
+    is_modified: bool = False
+    allow_incremental_save: bool = True
+    is_repaired_file: bool = False
+    undo_manager: Any = None
+
+    # Page models & Object collections
+    pages_model: Any = None
+    editable_texts: List[Any] = field(default_factory=list)
+    editable_images: List[Any] = field(default_factory=list)
+    editable_shapes: List[Any] = field(default_factory=list)
+    editable_strokes: List[Any] = field(default_factory=list)
+
+    # Selected objects
+    selected_text: Any = None
+    selected_image: Any = None
+    selected_shape: Any = None
+    selected_stroke: Any = None
+
+    # View mode text selection
+    view_sel_start: Optional[Tuple[float, float]] = None
+    view_sel_rect: Optional[Tuple[float, float, float, float]] = None
+    view_selected_text: str = ""
+    view_drag_active: bool = False
+
+    # Word selection mode
+    selected_word: Optional[str] = None
+    selected_word_start_char: Optional[int] = None
+    selected_word_end_char: Optional[int] = None
+    word_selection_mode: bool = False
+
+    # Page render caches
+    page_cache: Dict[int, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Ensure Gio.ListStore for pages_model if not provided."""
+        if self.pages_model is None:
+            try:
+                self.pages_model = Gio.ListStore(item_type=PdfPage)
+            except Exception:
+                self.pages_model = None
+
+    @property
+    def title(self) -> str:
+        """Return the document filename or 'Untitled Document'."""
+        if self.pdf_path:
+            return os.path.basename(self.pdf_path)
+        return "Untitled Document"
+
+    @property
+    def display_title(self) -> str:
+        """Return title prefixed with '*' if document has unsaved modifications."""
+        t = self.title
+        return f"*{t}" if self.is_modified else t
+
+    @property
+    def page_count(self) -> int:
+        """Return the number of pages in the open document."""
+        if self.doc:
+            try:
+                return len(self.doc)
+            except Exception:
+                return 0
+        return 0
+
+    def close(self):
+        """Cleanly close the underlying document and free session resources."""
+        if self.doc is not None:
+            try:
+                self.doc.close()
+            except Exception:
+                pass
+            self.doc = None
+        self.page_cache.clear()
+        self.editable_texts.clear()
+        self.editable_images.clear()
+        self.editable_shapes.clear()
+        self.editable_strokes.clear()
+        self.selected_text = None
+        self.selected_image = None
+        self.selected_shape = None
+        self.selected_stroke = None
 

@@ -178,7 +178,6 @@ class WelcomeView(Adw.Bin):
         )
 
         def on_response(d, response_id):
-            """Handle the dialog response event."""
             d.destroy()
             if response_id == Gtk.ResponseType.OK:
                 set_language(lang_code)

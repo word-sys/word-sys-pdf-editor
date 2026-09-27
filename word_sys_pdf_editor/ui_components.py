@@ -57,14 +57,12 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         drag_source.set_actions(Gdk.DragAction.MOVE)
 
         def on_prepare(source, x, y, idx=page_index):
-            """Handle the prepare event."""
             if self.editor_window and getattr(self.editor_window, 'view_mode', False):
                 return None
             val = GObject.Value(GObject.TYPE_INT, idx)
             return Gdk.ContentProvider.new_for_value(val)
 
         def on_drag_begin(source, drag, idx=page_index, pic=picture):
-            """Handle the drag begin event."""
             pdf_pg = list_item.get_item()
             if pdf_pg and pdf_pg.thumbnail:
                 tex = Gdk.Texture.new_for_pixbuf(pdf_pg.thumbnail)
@@ -77,7 +75,6 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         drop_target = Gtk.DropTarget.new(GObject.TYPE_INT, Gdk.DragAction.MOVE)
 
         def on_drop(target, value, x, y, to_idx=page_index):
-            """Handle the drop event."""
             if self.editor_window and getattr(self.editor_window, 'view_mode', False):
                 return False
             from_idx = value
@@ -144,7 +141,6 @@ def show_confirm_dialog(parent_window, message, title="Confirm", destructive=Tru
 
     response = None
     def on_response(d, resp_id):
-        """Handle the dialog response event."""
         nonlocal response
         response = resp_id
         d.destroy()
@@ -182,7 +178,6 @@ def show_save_changes_dialog(parent_window):
 
     response = None
     def on_response(d, resp_id):
-        """Handle the dialog response event."""
         nonlocal response
         response = resp_id
         d.destroy()
