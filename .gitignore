@@ -13,6 +13,7 @@ debian/*.log
 debian/*.substvars
 debian/files
 debian/debhelper-build-stamp
+PLAN.md
 .pc/
 obj-*/
 *.deb
