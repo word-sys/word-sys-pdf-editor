@@ -467,6 +467,8 @@ class DocumentSession:
     current_page_index: int = 0
     zoom_level: float = 1.0
     view_mode: bool = True
+    scroll_x: float = 0.0
+    scroll_y: float = 0.0
 
     # Modification & Undo
     is_modified: bool = False
@@ -554,4 +556,6 @@ class DocumentSession:
         self.selected_image = None
         self.selected_shape = None
         self.selected_stroke = None
+        self.scroll_x = 0.0
+        self.scroll_y = 0.0
 

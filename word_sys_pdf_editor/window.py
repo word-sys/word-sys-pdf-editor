@@ -229,6 +229,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.commit_pending_format_change()
                 if self.inline_editor_widget is not None:
                     self._apply_and_hide_editor(force_apply=True)
+                if hasattr(self, 'pdf_scroll') and self.pdf_scroll:
+                    v_adj = self.pdf_scroll.get_vadjustment()
+                    h_adj = self.pdf_scroll.get_hadjustment()
+                    if v_adj:
+                        self._active_session.scroll_y = v_adj.get_value()
+                    if h_adj:
+                        self._active_session.scroll_x = h_adj.get_value()
                 pdf_handler.save_page_snapshot(
                     self._active_session.doc,
                     self._active_session.current_page_index,
@@ -283,6 +290,24 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.thumbnail_selection_model.set_selected(session.current_page_index)
                 except Exception:
                     pass
+            self.update_zoom_label()
+
+            if hasattr(self, 'pdf_scroll') and self.pdf_scroll:
+                saved_sx = getattr(session, 'scroll_x', 0.0)
+                saved_sy = getattr(session, 'scroll_y', 0.0)
+                if saved_sx > 0 or saved_sy > 0:
+                    def _restore_tab_scroll(sess=session, sx=saved_sx, sy=saved_sy):
+                        if getattr(self, '_active_session', None) == sess and hasattr(self, 'pdf_scroll') and self.pdf_scroll:
+                            v = self.pdf_scroll.get_vadjustment()
+                            h = self.pdf_scroll.get_hadjustment()
+                            if v and sy > 0:
+                                max_v = max(0.0, v.get_upper() - v.get_page_size())
+                                v.set_value(min(sy, max_v))
+                            if h and sx > 0:
+                                max_h = max(0.0, h.get_upper() - h.get_page_size())
+                                h.set_value(min(sx, max_h))
+                        return GLib.SOURCE_REMOVE
+                    GLib.idle_add(_restore_tab_scroll)
         else:
             self.set_title(constants.APP_NAME)
             if hasattr(self, 'stack') and self.stack:
@@ -1647,13 +1672,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if has_doc:
             self.update_page_label()
+            self.update_zoom_label()
             if self.document_modified and not self.get_title().endswith("*"):
                 self.set_title(self.get_title() + "*")
             elif not self.document_modified and self.get_title().endswith("*"):
                 self.set_title(self.get_title()[:-1])
         else:
             self.page_label.set_text(_("page_info_count").format(0, 0))
-            self.zoom_label.set_text("100%")
+            self.update_zoom_label()
             self.status_label.set_text(_("status_open_or_drop"))
             self.set_title(constants.APP_NAME)
             self.document_modified = False
@@ -3883,7 +3909,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         old_zoom = self.zoom_level
         self.zoom_level = clamped_zoom
-        self.zoom_label.set_text(f"{int(self.zoom_level * 100)}%")
+        self.update_zoom_label()
 
         page = self.doc.load_page(self.current_page_index)
         new_page_w = int(page.rect.width * self.zoom_level)
@@ -4118,6 +4144,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Update the page indicator label with current page number and total count."""
         count = pdf_handler.get_page_count(self.doc)
         self.page_label.set_text(_("page_info_count").format(self.current_page_index + 1, count) if count > 0 else _("page_info_count").format(0, 0))
+
+    def update_zoom_label(self):
+        """Update the zoom indicator label with current active session zoom level."""
+        zoom = getattr(self, 'zoom_level', 1.0)
+        if hasattr(self, 'zoom_label') and self.zoom_label is not None:
+            self.zoom_label.set_text(f"{int(round(zoom * 100))}%")
 
     def on_thumbnail_selected(self, selection_model, position, n_items):
          """Navigate to page selected in the thumbnail sidebar."""
