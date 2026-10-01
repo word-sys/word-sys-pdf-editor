@@ -215,6 +215,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
 
         if self._active_session is session:
+            if hasattr(self, 'stack') and self.stack and session.doc is not None:
+                self.stack.set_visible_child_name("editor")
+                self.set_title(f"{constants.APP_NAME} - {session.display_title}")
+                if hasattr(self, 'tab_bar') and self.tab_bar:
+                    self.tab_bar.set_visible(True)
             # Ensure paned is parented correctly even if session unchanged
             if getattr(session, 'bin_widget', None) and hasattr(self, 'paned'):
                 if self.paned.get_parent() != session.bin_widget:
@@ -386,8 +391,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not selected_page:
             return
         target_session = self.get_session_by_tab_page(selected_page)
-        if target_session and target_session != self._active_session:
-            self.set_active_session(target_session)
+        if target_session:
+            if hasattr(self, 'stack') and self.stack and self.stack.get_visible_child_name() == "welcome":
+                self.stack.set_visible_child_name("editor")
+                if hasattr(self, 'tab_bar') and self.tab_bar:
+                    self.tab_bar.set_visible(True)
+            if target_session != self._active_session:
+                self.set_active_session(target_session)
+            elif target_session.doc is not None:
+                self.set_title(f"{constants.APP_NAME} - {target_session.display_title}")
 
     def _on_tab_close_page(self, tab_view, page) -> bool:
         """Handle tab close request, prompting to save unsaved modifications."""
@@ -2070,8 +2082,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.stack.add_named(new_welcome, "welcome")
 
         self.stack.set_visible_child_name("welcome")
+        has_open_docs = any(s.doc is not None for s in self.sessions)
         if hasattr(self, 'tab_bar') and self.tab_bar:
-            self.tab_bar.set_visible(False)
+            self.tab_bar.set_visible(has_open_docs)
         self.set_title(constants.APP_NAME)
 
     def on_close_tab(self, action=None, param=None):

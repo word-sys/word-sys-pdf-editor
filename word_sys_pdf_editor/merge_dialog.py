@@ -59,7 +59,7 @@ class SourcePageCard(Gtk.Box):
         pic_box.set_margin_end(8)
 
         self.picture = Gtk.Picture()
-        self.picture.set_size_request(140, 180)
+        self.picture.set_size_request(120, 160)
         self.picture.set_can_shrink(True)
         self.picture.set_keep_aspect_ratio(True)
         pic_box.append(self.picture)
@@ -407,7 +407,7 @@ class TargetPageCard(Gtk.Box):
         pic_box.set_margin_end(8)
 
         self.picture = Gtk.Picture()
-        self.picture.set_size_request(140, 180)
+        self.picture.set_size_request(120, 160)
         self.picture.set_can_shrink(True)
         self.picture.set_keep_aspect_ratio(True)
 
@@ -593,7 +593,8 @@ class MergeDialog(Adw.Window):
         self.set_transient_for(parent_window)
         self.set_modal(True)
         self.set_title(_("merge_workspace_title"))
-        self.set_default_size(1080, 720)
+        self.set_default_size(820, 520)
+        self.set_size_request(680, 420)
         self.set_resizable(True)
 
         self._build_ui()
