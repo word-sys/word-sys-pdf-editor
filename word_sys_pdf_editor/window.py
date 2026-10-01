@@ -410,11 +410,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.tab_view.close_page_finish(page, False)
                     return True
 
+            try:
+                page.set_icon(None)
+            except Exception:
+                pass
             self.tab_view.close_page_finish(page, True)
             target_session.tab_page = None
             self.remove_session(target_session)
             return True
 
+        try:
+            page.set_icon(None)
+        except Exception:
+            pass
         self.tab_view.close_page_finish(page, True)
         return True
 
@@ -475,11 +483,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             page = target_session.tab_page
             target_session.tab_page = None
             try:
+                page.set_icon(None)
                 self.tab_view.close_page(page)
             except Exception:
                 pass
 
         target_session.close()
+
+        if getattr(self, '_is_closing', False):
+            return
 
         if self._active_session == target_session or self._active_session not in self.sessions:
             selected_page = self.tab_view.get_selected_page() if hasattr(self, 'tab_view') and self.tab_view else None
@@ -867,6 +879,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         header.pack_end(self.mode_toggle_button)
         menu = Gio.Menu()
         menu.append(_("menu_save_as"), "win.save_as")
+        menu.append(_("menu_merge_documents"), "win.merge_documents")
 
         export_menu = Gio.Menu()
         export_menu.append(_("menu_export_as"), "win.export_as")
@@ -1375,6 +1388,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_save_as.connect('activate', self.on_save_as)
         self.add_action(action_save_as)
 
+        action_merge = Gio.SimpleAction.new('merge_documents', None)
+        action_merge.connect('activate', self.on_merge_documents)
+        self.add_action(action_merge)
+
         action_export_as = Gio.SimpleAction.new('export_as', None)
         action_export_as.connect('activate', self.on_export_as)
         self.add_action(action_export_as)
@@ -1448,6 +1465,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             app.set_accels_for_action("win.prev_tab", ["<Control>Page_Up", "<Control><Shift>Tab", "<Control><Shift>ISO_Left_Tab"])
             app.set_accels_for_action("win.save", ["<Control>s"])
             app.set_accels_for_action("win.save_as", ["<Control><Shift>s"])
+            app.set_accels_for_action("win.merge_documents", ["<Control><Shift>m"])
             app.set_accels_for_action("win.undo", ["<Control>z"])
             app.set_accels_for_action("win.redo", ["<Control>y", "<Control><Shift>z"])
             app.set_accels_for_action("win.print", ["<Control>p"])
@@ -3650,6 +3668,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             callback=on_save_finish
         )
 
+    def on_merge_documents(self, _action=None, _param=None):
+        from .merge_dialog import MergeDialog
+        if getattr(self, "_merge_dialog", None) is not None:
+            self._merge_dialog.present()
+            return
+        self._merge_dialog = MergeDialog(parent_window=self)
+        self._merge_dialog.connect("close-request", self._on_merge_dialog_closed)
+        self._merge_dialog.present()
+
+    def _on_merge_dialog_closed(self, dialog):
+        if hasattr(dialog, "cleanup"):
+            dialog.cleanup()
+        self._merge_dialog = None
+        return False
+
     def on_export_as(self, action=None, param=None):
         """Show modern export dialog with format and layout mode options."""
         self.show_export_dialog(initial_format="DOCX")
@@ -5598,10 +5631,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def do_close_request(self):
         """Prompt to save unsaved changes in all open tabs before closing the window."""
+        if getattr(self, "_merge_dialog", None) is not None:
+            try:
+                self._merge_dialog.cleanup()
+                self._merge_dialog.close()
+            except Exception:
+                pass
+            self._merge_dialog = None
+
         modified_sessions = [s for s in self.sessions if s and s.is_modified and s.doc is not None]
         for s in modified_sessions:
             if self.check_unsaved_changes(s):
                 return True
+        self._is_closing = True
         for s in list(self.sessions):
             self.remove_session(s)
         return False
