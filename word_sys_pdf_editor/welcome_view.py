@@ -86,6 +86,15 @@ class WelcomeView(Adw.Bin):
         button_box.set_margin_top(16)
         main_box.append(button_box)
 
+        has_open_docs = bool(
+            hasattr(self.parent_window, 'sessions') and
+            any(s.doc is not None for s in self.parent_window.sessions)
+        )
+        if has_open_docs:
+            return_button = Gtk.Button(label=_("btn_return_to_workspace"))
+            return_button.connect("clicked", lambda b: self.parent_window.go_to_welcome())
+            button_box.append(return_button)
+
         new_button = Gtk.Button(label=_("btn_new"))
         new_button.set_tooltip_text(f"{_('btn_new')} (Ctrl+N)")
         new_button.set_action_name("win.new")

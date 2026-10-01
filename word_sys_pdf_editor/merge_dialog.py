@@ -39,7 +39,7 @@ class SourcePageCard(Gtk.Box):
         header_box.append(page_lbl)
 
         dim_text = f"{int(page_width)} × {int(page_height)}"
-        dim_lbl = Gtk.Label(label=dim_text, hexpand=True, xalign=0.0)
+        dim_lbl = Gtk.Label(label=dim_text, hexpand=True, xalign=0.0, ellipsize=Pango.EllipsizeMode.END)
         dim_lbl.add_css_class("dim-label")
         dim_lbl.add_css_class("caption")
         header_box.append(dim_lbl)
@@ -59,7 +59,7 @@ class SourcePageCard(Gtk.Box):
         pic_box.set_margin_end(8)
 
         self.picture = Gtk.Picture()
-        self.picture.set_size_request(120, 160)
+        self.picture.set_size_request(100, 140)
         self.picture.set_can_shrink(True)
         self.picture.set_keep_aspect_ratio(True)
         pic_box.append(self.picture)
@@ -134,41 +134,45 @@ class SourceDocumentPanel(Gtk.Box):
         self.page_badge.add_css_class("caption")
         top_row.append(self.page_badge)
 
+        header_card.append(top_row)
+
+        actions_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        actions_row.set_margin_start(10)
+        actions_row.set_margin_end(10)
+        actions_row.set_margin_bottom(6)
+
+        self.file_lbl = Gtk.Label(label="", hexpand=True, xalign=0.0, ellipsize=Pango.EllipsizeMode.MIDDLE)
+        self.file_lbl.add_css_class("dim-label")
+        self.file_lbl.add_css_class("caption")
+        actions_row.append(self.file_lbl)
+
         self.choose_btn = Gtk.Button.new_from_icon_name("document-open-symbolic")
         self.choose_btn.set_tooltip_text(_("merge_btn_choose_pdf"))
         self.choose_btn.add_css_class("flat")
         self.choose_btn.connect("clicked", self.on_choose_clicked)
-        top_row.append(self.choose_btn)
+        actions_row.append(self.choose_btn)
 
         self.add_all_btn = Gtk.Button.new_from_icon_name("list-add-symbolic")
         self.add_all_btn.set_tooltip_text(_("merge_add_all_tip"))
         self.add_all_btn.add_css_class("flat")
         self.add_all_btn.set_sensitive(False)
         self.add_all_btn.connect("clicked", self.on_add_all_clicked)
-        top_row.append(self.add_all_btn)
+        actions_row.append(self.add_all_btn)
 
         self.clear_btn = Gtk.Button.new_from_icon_name("edit-clear-symbolic")
         self.clear_btn.set_tooltip_text(_("merge_clear_tip"))
         self.clear_btn.add_css_class("flat")
         self.clear_btn.set_sensitive(False)
         self.clear_btn.connect("clicked", lambda b: self.clear())
-        top_row.append(self.clear_btn)
+        actions_row.append(self.clear_btn)
 
-        header_card.append(top_row)
-
-        self.file_lbl = Gtk.Label(label="", xalign=0.0, ellipsize=Pango.EllipsizeMode.MIDDLE)
-        self.file_lbl.add_css_class("dim-label")
-        self.file_lbl.add_css_class("caption")
-        self.file_lbl.set_margin_start(10)
-        self.file_lbl.set_margin_end(10)
-        self.file_lbl.set_margin_bottom(8)
-        header_card.append(self.file_lbl)
+        header_card.append(actions_row)
 
         self.append(header_card)
 
         self.empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER, vexpand=True)
-        self.empty_box.set_margin_start(20)
-        self.empty_box.set_margin_end(20)
+        self.empty_box.set_margin_start(16)
+        self.empty_box.set_margin_end(16)
 
         empty_icon = Gtk.Image.new_from_icon_name("document-open-symbolic")
         empty_icon.set_pixel_size(48)
@@ -180,6 +184,7 @@ class SourceDocumentPanel(Gtk.Box):
         self.empty_box.append(empty_title)
 
         empty_desc = Gtk.Label(label=_("merge_empty_source_desc"), wrap=True, justify=Gtk.Justification.CENTER)
+        empty_desc.set_max_width_chars(28)
         empty_desc.add_css_class("dim-label")
         empty_desc.add_css_class("caption")
         self.empty_box.append(empty_desc)
@@ -375,7 +380,7 @@ class TargetPageCard(Gtk.Box):
 
         role_str = "A" if page_entry.get("source_role") == "source_a" else "B"
         src_page = page_entry.get("page_index", 0) + 1
-        src_badge = Gtk.Label(label=f"Doc {role_str} : p.{src_page}", hexpand=True, xalign=0.0)
+        src_badge = Gtk.Label(label=f"Doc {role_str} : p.{src_page}", hexpand=True, xalign=0.0, ellipsize=Pango.EllipsizeMode.END)
         src_badge.add_css_class("dim-label")
         src_badge.add_css_class("caption")
         header_box.append(src_badge)
@@ -407,7 +412,7 @@ class TargetPageCard(Gtk.Box):
         pic_box.set_margin_end(8)
 
         self.picture = Gtk.Picture()
-        self.picture.set_size_request(120, 160)
+        self.picture.set_size_request(100, 140)
         self.picture.set_can_shrink(True)
         self.picture.set_keep_aspect_ratio(True)
 
@@ -462,28 +467,32 @@ class TargetDocumentPanel(Gtk.Box):
         self.page_badge.add_css_class("caption")
         top_row.append(self.page_badge)
 
+        header_card.append(top_row)
+
+        desc_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        desc_row.set_margin_start(10)
+        desc_row.set_margin_end(10)
+        desc_row.set_margin_bottom(6)
+
+        desc_lbl = Gtk.Label(label=_("merge_workspace_subtitle"), hexpand=True, xalign=0.0, ellipsize=Pango.EllipsizeMode.END)
+        desc_lbl.add_css_class("dim-label")
+        desc_lbl.add_css_class("caption")
+        desc_row.append(desc_lbl)
+
         self.clear_btn = Gtk.Button.new_from_icon_name("edit-clear-symbolic")
         self.clear_btn.set_tooltip_text(_("merge_clear_target_tip"))
         self.clear_btn.add_css_class("flat")
         self.clear_btn.set_sensitive(False)
         self.clear_btn.connect("clicked", lambda b: self.clear())
-        top_row.append(self.clear_btn)
+        desc_row.append(self.clear_btn)
 
-        header_card.append(top_row)
-
-        desc_lbl = Gtk.Label(label=_("merge_workspace_subtitle"), xalign=0.0)
-        desc_lbl.add_css_class("dim-label")
-        desc_lbl.add_css_class("caption")
-        desc_lbl.set_margin_start(10)
-        desc_lbl.set_margin_end(10)
-        desc_lbl.set_margin_bottom(8)
-        header_card.append(desc_lbl)
+        header_card.append(desc_row)
 
         self.append(header_card)
 
         self.empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER, vexpand=True)
-        self.empty_box.set_margin_start(20)
-        self.empty_box.set_margin_end(20)
+        self.empty_box.set_margin_start(16)
+        self.empty_box.set_margin_end(16)
 
         empty_icon = Gtk.Image.new_from_icon_name("edit-copy-symbolic")
         empty_icon.set_pixel_size(48)
@@ -495,6 +504,7 @@ class TargetDocumentPanel(Gtk.Box):
         self.empty_box.append(empty_title)
 
         empty_desc = Gtk.Label(label=_("merge_empty_target_desc"), wrap=True, justify=Gtk.Justification.CENTER)
+        empty_desc.set_max_width_chars(28)
         empty_desc.add_css_class("dim-label")
         empty_desc.add_css_class("caption")
         self.empty_box.append(empty_desc)
@@ -593,8 +603,8 @@ class MergeDialog(Adw.Window):
         self.set_transient_for(parent_window)
         self.set_modal(True)
         self.set_title(_("merge_workspace_title"))
-        self.set_default_size(820, 520)
-        self.set_size_request(680, 420)
+        self.set_default_size(700, 520)
+        self.set_size_request(480, 380)
         self.set_resizable(True)
 
         self._build_ui()
@@ -617,20 +627,32 @@ class MergeDialog(Adw.Window):
 
         main_box.append(header)
 
-        panels_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0, vexpand=True, homogeneous=True)
+        panels_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0, vexpand=True, hexpand=True)
 
         self.panel_a = SourceDocumentPanel(self, role="source_a", title=_("merge_source_a"))
+        self.panel_a.set_hexpand(True)
         panels_box.append(self.panel_a)
 
-        panels_box.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        sep1 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        sep1.set_hexpand(False)
+        panels_box.append(sep1)
 
         self.target_panel = TargetDocumentPanel(self, title=_("merge_target_doc"))
+        self.target_panel.set_hexpand(True)
         panels_box.append(self.target_panel)
 
-        panels_box.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        sep2 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        sep2.set_hexpand(False)
+        panels_box.append(sep2)
 
         self.panel_b = SourceDocumentPanel(self, role="source_b", title=_("merge_source_b"))
+        self.panel_b.set_hexpand(True)
         panels_box.append(self.panel_b)
+
+        panel_size_group = Gtk.SizeGroup.new(Gtk.SizeGroupMode.HORIZONTAL)
+        panel_size_group.add_widget(self.panel_a)
+        panel_size_group.add_widget(self.target_panel)
+        panel_size_group.add_widget(self.panel_b)
 
         main_box.append(panels_box)
 

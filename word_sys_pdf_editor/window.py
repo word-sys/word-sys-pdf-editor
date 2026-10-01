@@ -219,6 +219,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.stack.set_visible_child_name("editor")
                 self.set_title(f"{constants.APP_NAME} - {session.display_title}")
                 if hasattr(self, 'tab_bar') and self.tab_bar:
+                    self.tab_bar.set_autohide(False)
                     self.tab_bar.set_visible(True)
             # Ensure paned is parented correctly even if session unchanged
             if getattr(session, 'bin_widget', None) and hasattr(self, 'paned'):
@@ -286,6 +287,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, 'stack') and self.stack:
                 self.stack.set_visible_child_name("editor")
             if hasattr(self, 'tab_bar') and self.tab_bar:
+                self.tab_bar.set_autohide(False)
                 self.tab_bar.set_visible(True)
             if hasattr(self, 'pdf_scroll'):
                 has_objects = bool(session.editable_texts or session.editable_shapes or session.editable_strokes or session.editable_images or session.is_modified)
@@ -321,9 +323,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.stack.set_visible_child_name("welcome")
                     if hasattr(self, 'tab_bar') and self.tab_bar:
                         self.tab_bar.set_visible(False)
+                        self.tab_bar.set_autohide(True)
                 else:
                     self.stack.set_visible_child_name("editor")
                     if hasattr(self, 'tab_bar') and self.tab_bar:
+                        self.tab_bar.set_autohide(False)
                         self.tab_bar.set_visible(True)
 
         self._update_tab_title(session)
@@ -395,6 +399,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, 'stack') and self.stack and self.stack.get_visible_child_name() == "welcome":
                 self.stack.set_visible_child_name("editor")
                 if hasattr(self, 'tab_bar') and self.tab_bar:
+                    self.tab_bar.set_autohide(False)
                     self.tab_bar.set_visible(True)
             if target_session != self._active_session:
                 self.set_active_session(target_session)
@@ -936,6 +941,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.tab_view.connect("notify::selected-page", self._on_tab_selected_page_changed)
         self.tab_view.connect("close-page", self._on_tab_close_page)
         self.tab_view.connect("page-reordered", self._on_tab_page_reordered)
+
+        tab_click = Gtk.GestureClick.new()
+        tab_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        tab_click.connect("pressed", self._on_tab_bar_pressed)
+        self.tab_bar.add_controller(tab_click)
 
         self.main_box.append(self.tab_bar)
 
@@ -2059,17 +2069,35 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
         self._update_ui_state()
 
+    def _on_tab_bar_pressed(self, gesture, n_press, x, y):
+        """Switch back to editor if clicking the tab bar while on welcome screen."""
+        if hasattr(self, 'stack') and self.stack and self.stack.get_visible_child_name() == "welcome":
+            if any(s.doc is not None for s in self.sessions):
+                self.stack.set_visible_child_name("editor")
+                if hasattr(self, 'tab_bar') and self.tab_bar:
+                    self.tab_bar.set_autohide(False)
+                    self.tab_bar.set_visible(True)
+                if self._active_session and self._active_session.doc is not None:
+                    self.set_title(f"{constants.APP_NAME} - {self._active_session.display_title}")
+
     def go_to_welcome(self):
         """Navigate to welcome hub view."""
         if hasattr(self, 'stack') and self.stack:
             if self.stack.get_visible_child_name() == "welcome":
                 # Toggle back to editor if any document is open
-                if any(s.doc is not None for s in self.sessions):
+                active = self._active_session if (self._active_session and self._active_session.doc is not None) else None
+                if not active:
+                    for s in self.sessions:
+                        if s.doc is not None:
+                            active = s
+                            break
+                if active:
+                    self.set_active_session(active)
                     self.stack.set_visible_child_name("editor")
                     if hasattr(self, 'tab_bar') and self.tab_bar:
+                        self.tab_bar.set_autohide(False)
                         self.tab_bar.set_visible(True)
-                    if self._active_session:
-                        self.set_title(f"{constants.APP_NAME} - {self._active_session.display_title}")
+                    self.set_title(f"{constants.APP_NAME} - {active.display_title}")
                     return
 
         if self.check_unsaved_changes():
@@ -2084,6 +2112,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.stack.set_visible_child_name("welcome")
         has_open_docs = any(s.doc is not None for s in self.sessions)
         if hasattr(self, 'tab_bar') and self.tab_bar:
+            self.tab_bar.set_autohide(not has_open_docs)
             self.tab_bar.set_visible(has_open_docs)
         self.set_title(constants.APP_NAME)
 
@@ -5677,6 +5706,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _toggle_view_edit_mode(self, button=None):
         """Toggle between read-only text-selection mode and interactive object edit mode."""
+        if hasattr(self, 'stack') and self.stack and self.stack.get_visible_child_name() == "welcome":
+            if any(s.doc is not None for s in self.sessions):
+                self.stack.set_visible_child_name("editor")
+                if hasattr(self, 'tab_bar') and self.tab_bar:
+                    self.tab_bar.set_autohide(False)
+                    self.tab_bar.set_visible(True)
+                if self._active_session and self._active_session.doc is not None:
+                    self.set_title(f"{constants.APP_NAME} - {self._active_session.display_title}")
         self.view_mode = not self.view_mode
         if self.view_mode:
             self._apply_and_hide_editor()
