@@ -1,7 +1,7 @@
 {
     "app-id": "io.github.word_sys.word-sys-pdf-editor",
     "runtime": "org.gnome.Platform",
-    "runtime-version": "50",
+    "runtime-version": "51",
     "sdk": "org.gnome.Sdk",
     "command": "word-sys-pdf-editor",
     "finish-args": [
@@ -95,7 +95,8 @@
                 {
                     "type": "git",
                     "url": "https://github.com/word-sys/word-sys-pdf-editor.git",
-                    "tag": "v1.11.1"
+                    "tag": "v1.11.1",
+                    "commit": "b21c151ac7e0d01012943a553ced0136d0112926"
                 }
             ]
         }
