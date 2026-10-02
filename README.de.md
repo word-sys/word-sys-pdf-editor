@@ -15,7 +15,7 @@ Lizenz: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Empfohlene stabile Version: v1.11.0** — Für die bestmögliche Stabilität wird dringend empfohlen, Version **1.11.0** zu verwenden. Details zur Installation finden Sie in den nachfolgenden Abschnitten.
+> **Empfohlene stabile Version: v1.11.1** — Für die bestmögliche Stabilität wird dringend empfohlen, Version **1.11.1** zu verwenden. Details zur Installation finden Sie in den nachfolgenden Abschnitten.
 
 ---
 
@@ -88,18 +88,18 @@ Es gibt mehrere Möglichkeiten, word-sys's PDF Editor auf Ihrem System zu instal
 
 Dies ist der einfachste Installationsweg für Debian-, Ubuntu- und Pardus-basierte Distributionen.
 
-1.  Laden Sie das neueste `.deb`-Paket von der [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases)-Seite herunter. Die Datei heißt üblicherweise `word-sys-pdf-editor_1.11.0_all.deb`.
+1.  Laden Sie das neueste `.deb`-Paket von der [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases)-Seite herunter. Die Datei heißt üblicherweise `word-sys-pdf-editor_1.11.1_all.deb`.
 
     > [!TIP]
-    > **Verwenden Sie Version 1.11.0** für die stabilste Nutzung: Suchen Sie nach `word-sys-pdf-editor_1.11.0_all.deb` auf der Releases-Seite.
+    > **Verwenden Sie Version 1.11.1** für die stabilste Nutzung: Suchen Sie nach `word-sys-pdf-editor_1.11.1_all.deb` auf der Releases-Seite.
 
 2.  Öffnen Sie ein Terminal in dem Verzeichnis, in das Sie die `.deb`-Datei heruntergeladen haben.
 3.  Führen Sie folgenden Befehl aus, um das Paket zu installieren:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.11.0_all.deb
+    sudo apt install ./word-sys-pdf-editor_1.11.1_all.deb
     ```
-    *(Hinweis: Ersetzen Sie `word-sys-pdf-editor_1.11.0_all.deb` durch den genauen Dateinamen, falls dieser abweicht.)*
+    *(Hinweis: Ersetzen Sie `word-sys-pdf-editor_1.11.1_all.deb` durch den genauen Dateinamen, falls dieser abweicht.)*
 4.  Falls während der Installation ein Abhängigkeitsfehler auftritt, führen Sie folgenden Befehl aus, um fehlende Abhängigkeiten zu beheben:
     ```bash
     sudo apt --fix-broken install
@@ -114,7 +114,7 @@ Diese Methode ist sofort auf allen Linux-Distributionen einsatzbereit.
 
 1.  Laden Sie das `.AppImage` oder `*-linux-x64.tar.gz`-Paket von der [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases)-Seite herunter.
 
-    > **Verwenden Sie Version 1.11.0** für die stabilste Nutzung: Achten Sie auf das Tag `v1.11.0` auf der Releases-Seite.
+    > **Verwenden Sie Version 1.11.1** für die stabilste Nutzung: Achten Sie auf das Tag `v1.11.1` auf der Releases-Seite.
 
 #### A. AppImage-Installation
 
@@ -161,7 +161,7 @@ Diese Methode ist sofort auf allen Linux-Distributionen einsatzbereit.
 Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellcode ausführen oder zur Entwicklung beitragen möchten.
 
 > [!TIP]
-> Verwenden Sie für eine stabile Version das Tag **v1.11.0** beim Klonen. Wenn Sie neueste Änderungen testen möchten, können Sie direkt den Branch `main` klonen (dieser kann jedoch weniger stabil sein).
+> Verwenden Sie für eine stabile Version das Tag **v1.11.1** beim Klonen. Wenn Sie neueste Änderungen testen möchten, können Sie direkt den Branch `main` klonen (dieser kann jedoch weniger stabil sein).
 
 ---
 
@@ -179,9 +179,9 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 2.  **Quellcode herunterladen:**
 
-    **Empfohlen (stabil v1.11.0):**
+    **Empfohlen (stabil v1.11.1):**
     ```bash
-    git clone --branch v1.11.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -224,9 +224,9 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 2.  **Quellcode herunterladen:**
 
-    **Empfohlen (stabil v1.11.0):**
+    **Empfohlen (stabil v1.11.1):**
     ```bash
-    git clone --branch v1.11.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -258,9 +258,9 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 1.  **Quellcode herunterladen:**
 
-    **Empfohlen (stabil v1.11.0):**
+    **Empfohlen (stabil v1.11.1):**
     ```bash
-    git clone --branch v1.11.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 

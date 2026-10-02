@@ -1,3 +1,4 @@
+import os
 import sys
 import gi
 gi.require_version('Gtk', '4.0')
@@ -10,7 +11,8 @@ class PdfEditorApplication(Adw.Application):
     """The main GTK4/libadwaita application class for the PDF Editor."""
     def __init__(self):
         """Initialise application and basic menu actions."""
-        super().__init__(application_id='org.word_sys.pdfeditor',
+        app_id = os.environ.get('FLATPAK_ID', 'org.word_sys.pdfeditor')
+        super().__init__(application_id=app_id,
                          flags=Gio.ApplicationFlags.HANDLES_OPEN)
         self.window = None
 

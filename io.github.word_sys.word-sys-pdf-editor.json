@@ -1,5 +1,5 @@
 {
-    "app-id": "org.word_sys.pdfeditor",
+    "app-id": "io.github.word_sys.word-sys-pdf-editor",
     "runtime": "org.gnome.Platform",
     "runtime-version": "50",
     "sdk": "org.gnome.Sdk",
@@ -87,18 +87,15 @@
             "buildsystem": "simple",
             "build-commands": [
                 "pip3 install --verbose --exists-action=i --no-index --no-build-isolation --no-deps --prefix=${FLATPAK_DEST} .",
-                "install -Dm644 org.word_sys.pdfeditor.desktop /app/share/applications/org.word_sys.pdfeditor.desktop",
-                "install -Dm644 org.word_sys.pdfeditor.metainfo.xml /app/share/metainfo/org.word_sys.pdfeditor.metainfo.xml",
                 "install -Dm644 io.github.word_sys.word-sys-pdf-editor.desktop /app/share/applications/io.github.word_sys.word-sys-pdf-editor.desktop",
                 "install -Dm644 io.github.word_sys.word-sys-pdf-editor.metainfo.xml /app/share/metainfo/io.github.word_sys.word-sys-pdf-editor.metainfo.xml",
-                "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/org.word_sys.pdfeditor.svg",
-                "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/io.github.word_sys.word-sys-pdf-editor.svg",
-                "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/f-pv1.svg"
+                "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/io.github.word_sys.word-sys-pdf-editor.svg"
             ],
             "sources": [
                 {
-                    "type": "dir",
-                    "path": "."
+                    "type": "git",
+                    "url": "https://github.com/word-sys/word-sys-pdf-editor.git",
+                    "tag": "v1.11.1"
                 }
             ]
         }

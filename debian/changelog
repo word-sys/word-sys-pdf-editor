@@ -1,3 +1,18 @@
+word-sys-pdf-editor (1.11.1) bookworm; urgency=medium
+
+  * Added Multi-Document Tab architecture with Adw.TabView and Adw.TabBar (Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab)
+  * Added Visual Document Merging Workspace with drag-and-drop page ordering, live preview, and TOC normalization
+  * Integrated native pure-Python anyconvert conversion engine (PDF to DOCX, PPTX, ODT, ODP, TXT)
+  * Completely removed LibreOffice, soffice subprocesses, and flatpak-spawn dependencies
+  * Added 90-degree Page Clockwise and Counter-Clockwise rotation with keyboard shortcuts (Ctrl+Shift+R/L)
+  * Replaced system-wide file scanning with app-managed Recently Opened Files hub
+  * Added 4-way text alignment (Left, Center, Right, Justify) and text strikethrough formatting
+  * Expanded full internationalization across 7 languages (EN, TR, FR, DE, ES, IT, RU)
+  * Updated interactive Quick Start Guide and documentation with 6 high-resolution screenshots
+  * Flathub modernization: updated to GNOME Platform 50 runtime and native portal file chooser
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Fri, 02 Oct 2026 15:30:00 +0300
+
 word-sys-pdf-editor (1.11.0) bookworm; urgency=medium
 
   * Added Modern Libadwaita customizable New Document dialog with 18 presets and unit conversion

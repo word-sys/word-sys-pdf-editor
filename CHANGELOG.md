@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.11.1] - 2026-10-02
+
+### Added
+- **Multi-Document Tabs**: Integrated `Adw.TabView` and `Adw.TabBar` allowing multiple PDFs to be opened and edited concurrently in dedicated tabs with individual undo/redo histories, zoom states, and dirty indicators (`Ctrl+W` to close, `Ctrl+Tab` / `Ctrl+PageDown` for next tab, `Ctrl+Shift+Tab` / `Ctrl+PageUp` for previous tab).
+- **Visual Document Merging Workspace**: Side-by-side workspace (`Ctrl+Shift+M`) for combining pages from two source PDFs into a target document with drag-and-drop page ordering, live zoomable previews, insertion markers, inspector details, and bookmark/TOC hierarchy normalization.
+- **Native Pure-Python anyconvert Document Engine**: Replaced external LibreOffice subprocess calls with pure-Python `anyconvert` library for converting PDFs into DOCX, PPTX, ODT, ODP, and TXT with both Pixel-Accurate Canvas and Semantic Flow modes.
+- **Page Rotation**: 90-degree Clockwise and Counter-Clockwise page rotation (`Ctrl+Shift+R` and `Ctrl+Shift+L`) with persistent PyMuPDF rotation preservation.
+- **Dedicated Recently Opened Files Hub**: App-managed recent files list with universal file icons, eliminating system-wide file scanning overhead.
+- **Text Alignment & Formatting**: Added 4-way text alignment (Left, Center, Right, Justify) and strikethrough formatting support.
+- **7 Supported Languages**: Complete UI and documentation localization across English, Turkish, French, German, Spanish, Italian, and Russian.
+- **Updated Quick Start Guide**: Expanded guide and shortcuts cheatsheet covering tabs, merging, rotation, and multi-format export with 6 high-resolution screenshots.
+
+### Changed
+- **Packaging Modernization**: Purged `soffice` and `flatpak-spawn` permissions from Flatpak and AppImage packaging. Updated Flatpak runtime to GNOME Platform 50 with portal-based file chooser access.
+
+---
+
 ## [1.11.0] - 2026-09-15
 
 ### Added
