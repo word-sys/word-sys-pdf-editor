@@ -38,9 +38,12 @@ class TestPart18MergeLocalization(unittest.TestCase):
             "merge_empty_source_title", "merge_empty_source_desc",
             "merge_empty_target_title", "merge_empty_target_desc",
             "merge_btn_choose_pdf", "merge_btn_save", "merge_add_all_tip",
-            "merge_clear_tip", "merge_clear_target_tip", "merge_add_page",
             "merge_move_up_tip", "merge_move_down_tip", "merge_remove_page_tip",
-            "merge_page_count"
+            "merge_page_count", "merge_zoom_in", "merge_zoom_out", "merge_zoom_fit",
+            "merge_insert_at_end", "merge_insert_after", "merge_insert_marker",
+            "merge_inspector_title", "merge_inspector_no_selection",
+            "merge_inspector_source", "merge_inspector_page", "merge_inspector_size",
+            "merge_inspector_portrait", "merge_inspector_landscape"
         ]
         for lang_code in ["en", "tr", "fr", "de", "es", "it", "ru"]:
             self.assertIn(lang_code, _STRINGS)
