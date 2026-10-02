@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import gi
 try:
@@ -8,7 +9,7 @@ except ImportError:
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 gi.require_version('GdkPixbuf', '2.0')
-from gi.repository import Gtk, Gdk, Adw, Gio, GLib, Pango, GdkPixbuf
+from gi.repository import Gtk, Gdk, Adw, Gio, GLib, Pango, GdkPixbuf, GObject
 
 from .i18n import _
 from . import pdf_handler
@@ -427,6 +428,27 @@ class SourcePageCard(Gtk.Box):
         click_ctrl.connect("pressed", self._on_gesture_pressed)
         pic_box.add_controller(click_ctrl)
 
+        drag_source = Gtk.DragSource.new()
+        drag_source.set_actions(Gdk.DragAction.COPY)
+
+        def on_prepare(_source, _x, _y):
+            payload = json.dumps({
+                "type": "merge_page_transfer",
+                "role": self.panel.role,
+                "page_index": self.page_index
+            })
+            val = GObject.Value(GObject.TYPE_STRING, payload)
+            return Gdk.ContentProvider.new_for_value(val)
+
+        def on_drag_begin(source, _drag):
+            if hasattr(self, "pixbuf") and self.pixbuf:
+                tex = Gdk.Texture.new_for_pixbuf(self.pixbuf)
+                Gtk.DragSource.set_icon(source, tex, 0, 0)
+
+        drag_source.connect("prepare", on_prepare)
+        drag_source.connect("drag-begin", on_drag_begin)
+        pic_box.add_controller(drag_source)
+
     def set_thumbnail(self, pixbuf):
         self.pixbuf = pixbuf
         if pixbuf:
@@ -437,10 +459,8 @@ class SourcePageCard(Gtk.Box):
         self._add_to_target()
 
     def _on_gesture_pressed(self, _gesture, n_press, _x, _y):
-        if n_press == 1:
+        if n_press == 2:
             self._preview_page()
-        elif n_press == 2:
-            self._add_to_target()
 
     def _preview_page(self):
         if self.panel and self.panel.doc and not self.panel.doc.is_closed:
@@ -798,6 +818,24 @@ class InsertionMarker(Gtk.Box):
         click.connect("pressed", self._on_clicked)
         self.add_controller(click)
 
+        drop_target = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.COPY | Gdk.DragAction.MOVE)
+
+        def on_enter(_target, _x, _y):
+            self.set_active(True)
+            return Gdk.DragAction.COPY | Gdk.DragAction.MOVE
+
+        def on_leave(_target):
+            self.set_active(self.target_panel.insertion_index == self.index)
+
+        def on_drop(_target, value, _x, _y):
+            self.set_active(self.target_panel.insertion_index == self.index)
+            return self.target_panel.handle_drop(value, target_index=self.index)
+
+        drop_target.connect("enter", on_enter)
+        drop_target.connect("leave", on_leave)
+        drop_target.connect("drop", on_drop)
+        self.add_controller(drop_target)
+
     def set_active(self, active: bool):
         self.is_active = active
         if active:
@@ -901,6 +939,37 @@ class TargetPageCard(Gtk.Box):
         click_ctrl.set_button(1)
         click_ctrl.connect("pressed", self._on_card_pressed)
         pic_box.add_controller(click_ctrl)
+
+        drag_source = Gtk.DragSource.new()
+        drag_source.set_actions(Gdk.DragAction.MOVE)
+
+        def on_prepare(_source, _x, _y):
+            payload = json.dumps({
+                "type": "merge_target_reorder",
+                "from_index": self.target_idx
+            })
+            val = GObject.Value(GObject.TYPE_STRING, payload)
+            return Gdk.ContentProvider.new_for_value(val)
+
+        def on_drag_begin(source, _drag):
+            pixbuf = self.page_entry.get("thumbnail_pixbuf")
+            if pixbuf:
+                tex = Gdk.Texture.new_for_pixbuf(pixbuf)
+                Gtk.DragSource.set_icon(source, tex, 0, 0)
+
+        drag_source.connect("prepare", on_prepare)
+        drag_source.connect("drag-begin", on_drag_begin)
+        pic_box.add_controller(drag_source)
+
+        card_drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.COPY | Gdk.DragAction.MOVE)
+
+        def on_card_drop(_target, value, _x, y):
+            alloc_h = self.get_allocated_height()
+            insert_idx = self.target_idx if (alloc_h > 0 and y < alloc_h / 2) else self.target_idx + 1
+            return self.target_panel.handle_drop(value, target_index=insert_idx)
+
+        card_drop.connect("drop", on_card_drop)
+        self.add_controller(card_drop)
 
     def set_zoom(self, zoom_level: float):
         self.zoom_level = zoom_level
@@ -1099,11 +1168,19 @@ class TargetDocumentPanel(Gtk.Box):
         empty_desc.add_css_class("caption")
         self.empty_box.append(empty_desc)
 
+        empty_drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.COPY | Gdk.DragAction.MOVE)
+        empty_drop.connect("drop", lambda _t, val, _x, _y: self.handle_drop(val, target_index=0))
+        self.empty_box.add_controller(empty_drop)
+
         self.append(self.empty_box)
 
         self.scroll = Gtk.ScrolledWindow()
         self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.scroll.set_vexpand(True)
+
+        scroll_drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.COPY | Gdk.DragAction.MOVE)
+        scroll_drop.connect("drop", lambda _t, val, _x, _y: self.handle_drop(val, target_index=None))
+        self.scroll.add_controller(scroll_drop)
 
         self.ribbon_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.ribbon_box.set_margin_start(8)
@@ -1348,6 +1425,82 @@ class TargetDocumentPanel(Gtk.Box):
                 self.selected_idx = to_idx
             self._rebuild_ribbon()
 
+    def move_page_to_insertion(self, from_idx: int, insertion_idx: int):
+        if not (0 <= from_idx < len(self.pages)):
+            return
+        if insertion_idx < 0:
+            insertion_idx = 0
+        if insertion_idx > len(self.pages):
+            insertion_idx = len(self.pages)
+        if from_idx == insertion_idx or from_idx + 1 == insertion_idx:
+            return
+        if from_idx < insertion_idx:
+            to_idx = insertion_idx - 1
+        else:
+            to_idx = insertion_idx
+        self.move_page(from_idx, to_idx)
+
+    def handle_drop(self, value, target_index: int | None = None) -> bool:
+        try:
+            if hasattr(value, "get_string"):
+                val_str = value.get_string()
+            elif isinstance(value, str):
+                val_str = value
+            else:
+                val_str = str(value)
+
+            data = json.loads(val_str)
+            action_type = data.get("type")
+
+            if action_type == "merge_page_transfer":
+                role = data.get("role")
+                page_idx = data.get("page_index")
+                if role is None or page_idx is None:
+                    return False
+                panel = self.dialog.panel_a if role == "source_a" else self.dialog.panel_b
+                if not panel or not panel.doc or panel.doc.is_closed:
+                    return False
+
+                src_card = None
+                for card in panel.page_cards:
+                    if card.page_index == page_idx:
+                        src_card = card
+                        break
+
+                pixbuf = src_card.pixbuf if src_card else None
+                w = src_card.page_width if src_card else 0.0
+                h = src_card.page_height if src_card else 0.0
+
+                if (w == 0.0 or h == 0.0) and panel.doc and page_idx < len(panel.doc):
+                    page = panel.doc[page_idx]
+                    w = page.rect.width
+                    h = page.rect.height
+
+                self.add_page(
+                    source_role=role,
+                    source_path=panel.file_path,
+                    source_doc=panel.doc,
+                    page_index=page_idx,
+                    thumbnail_pixbuf=pixbuf,
+                    page_width=w,
+                    page_height=h,
+                    insert_at=target_index
+                )
+                return True
+
+            elif action_type == "merge_target_reorder":
+                from_idx = data.get("from_index")
+                if from_idx is None or not (0 <= from_idx < len(self.pages)):
+                    return False
+                if target_index is None:
+                    target_index = len(self.pages)
+                self.move_page_to_insertion(from_idx, target_index)
+                return True
+
+            return False
+        except Exception:
+            return False
+
     def clear(self):
         self.pages.clear()
         self.selected_idx = None
@@ -1516,17 +1669,16 @@ class MergeDialog(Adw.Window):
                 if not path.lower().endswith(".pdf"):
                     path += ".pdf"
                 try:
-                    merged_doc = fitz.open()
-                    for entry in self.target_panel.pages:
-                        src_doc = entry.get("source_doc")
-                        p_idx = entry.get("page_index", 0)
-                        if src_doc and not src_doc.is_closed:
-                            merged_doc.insert_pdf(src_doc, from_page=p_idx, to_page=p_idx)
-                    merged_doc.save(path)
-                    merged_doc.close()
-                    if self.parent_window and hasattr(self.parent_window, "load_document"):
-                        self.parent_window.load_document(path)
-                    self.close()
+                    primary_doc = self.panel_a.doc if (self.panel_a and self.panel_a.doc) else None
+                    success = pdf_handler.export_merged_pdf(
+                        self.target_panel.pages,
+                        path,
+                        primary_metadata_doc=primary_doc
+                    )
+                    if success:
+                        if self.parent_window and hasattr(self.parent_window, "load_document"):
+                            self.parent_window.load_document(path)
+                        self.close()
                 except Exception:
                     pass
 

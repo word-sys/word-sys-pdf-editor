@@ -1897,3 +1897,88 @@ def get_block_at_pos(doc, page_index, pos_unzoomed):
     except Exception as e:
         print(f"get_block_at_pos error: {e}")
         return None
+
+def export_merged_pdf(pages: list, output_path: str, primary_metadata_doc=None) -> bool:
+    if not pages:
+        return False
+    merged_doc = fitz.open()
+    temp_path = output_path + ".tmp_merged"
+    try:
+        page_map = {}
+        for target_idx, entry in enumerate(pages):
+            src_doc = entry.get("source_doc")
+            p_idx = entry.get("page_index", 0)
+            if src_doc and not src_doc.is_closed:
+                merged_doc.insert_pdf(src_doc, from_page=p_idx, to_page=p_idx)
+                key = (id(src_doc), p_idx + 1)
+                page_map.setdefault(key, []).append(target_idx + 1)
+
+        if merged_doc.page_count == 0:
+            return False
+
+        source_docs = []
+        for entry in pages:
+            doc = entry.get("source_doc")
+            if doc and not doc.is_closed and doc not in source_docs:
+                source_docs.append(doc)
+
+        meta_doc = primary_metadata_doc if (primary_metadata_doc and not primary_metadata_doc.is_closed) else (source_docs[0] if source_docs else None)
+        if meta_doc and meta_doc.metadata:
+            meta = meta_doc.metadata.copy()
+            merged_doc.set_metadata(meta)
+
+        merged_toc = []
+        seen_items = set()
+        for doc in source_docs:
+            try:
+                toc = doc.get_toc()
+                for item in toc:
+                    lvl, title, pno = item[0], item[1], item[2]
+                    key = (id(doc), pno)
+                    target_pages = page_map.get(key, [])
+                    for tgt_pno in target_pages:
+                        dedup_key = (lvl, title, tgt_pno)
+                        if dedup_key not in seen_items:
+                            seen_items.add(dedup_key)
+                            merged_toc.append([lvl, title, tgt_pno])
+            except Exception:
+                pass
+
+        if merged_toc:
+            merged_toc.sort(key=lambda x: x[2])
+            norm_toc = []
+            prev_lvl = 0
+            for item in merged_toc:
+                lvl = item[0]
+                if prev_lvl == 0:
+                    lvl = 1
+                elif lvl > prev_lvl + 1:
+                    lvl = prev_lvl + 1
+                elif lvl < 1:
+                    lvl = 1
+                prev_lvl = lvl
+                new_item = list(item)
+                new_item[0] = lvl
+                norm_toc.append(new_item)
+            try:
+                merged_doc.set_toc(norm_toc)
+            except Exception:
+                pass
+
+        merged_doc.save(temp_path, garbage=3, deflate=True)
+        merged_doc.close()
+        import os
+        os.replace(temp_path, output_path)
+        return True
+    finally:
+        try:
+            if not merged_doc.is_closed:
+                merged_doc.close()
+        except Exception:
+            pass
+        import os
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
