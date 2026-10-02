@@ -13,7 +13,7 @@ from gi.repository import Gtk, Gdk, Adw, GObject
 from word_sys_pdf_editor.window import PdfEditorWindow
 from word_sys_pdf_editor.ui_components import PageThumbnailFactory
 
-class TestPart1ViewModePageLock(unittest.TestCase):
+class TestViewModePageLock(unittest.TestCase):
     def test_window_edit_mode_property(self):
         """Test edit_mode property tracks inverse of view_mode."""
         mock_win = MagicMock(spec=PdfEditorWindow)
@@ -96,13 +96,13 @@ class TestPart1ViewModePageLock(unittest.TestCase):
             self.assertTrue(drop_res_edit, "Drop must return True in Edit Mode")
             mock_window.on_page_reorder.assert_called_once_with(1, 0)
 
-            print("SUCCESS: Part 1 View Mode Page Reordering Lock fully verified!")
+            print("SUCCESS: View Mode Page Reordering Lock fully verified!")
             app.quit()
 
         app.connect("activate", run_tests)
         app.run([])
 
-class TestPart2DeleteConfirmationSuppression(unittest.TestCase):
+class TestDeleteConfirmationSuppression(unittest.TestCase):
     def test_settings_get_and_set(self):
         """Test get_setting and set_setting persist values properly."""
         from word_sys_pdf_editor.i18n import get_setting, set_setting
@@ -184,7 +184,7 @@ class TestPart2DeleteConfirmationSuppression(unittest.TestCase):
                     mock_win._update_confirm_delete_menu_state.assert_called_once_with(False)
         finally:
             set_setting("confirm_delete_objects", original)
-class TestPart3LanguageSupport(unittest.TestCase):
+class TestLanguageSupport(unittest.TestCase):
     def test_supported_languages_list(self):
         """Test that get_supported_languages returns 7 defined languages."""
         from word_sys_pdf_editor.i18n import get_supported_languages
@@ -232,7 +232,7 @@ class TestPart3LanguageSupport(unittest.TestCase):
         app.connect("activate", run_view_test)
         app.run([])
 
-class TestPart5PageRotationBackend(unittest.TestCase):
+class TestPageRotationBackend(unittest.TestCase):
     def test_rotate_page_clockwise_and_counterclockwise(self):
         """Test rotating page by 90 degrees CW and CCW."""
         import fitz
@@ -314,7 +314,7 @@ class TestPart5PageRotationBackend(unittest.TestCase):
         mock_win.pdf_view.queue_draw.assert_called()
 
 @unittest.skipIf(Gdk.Display.get_default() is None, "Screen display not available (headless build environment)")
-class TestPart6PageRotationUI(unittest.TestCase):
+class TestPageRotationUI(unittest.TestCase):
     def test_rotate_current_page_and_undo_registration(self):
         """Test rotate_current_page executes RotatePageCommand and adds to undo_manager."""
         import fitz
@@ -392,7 +392,7 @@ class TestPart6PageRotationUI(unittest.TestCase):
         app.connect("activate", run_menu_test)
         app.run([])
 
-class TestPart7ObjectRotationDataModel(unittest.TestCase):
+class TestObjectRotationDataModel(unittest.TestCase):
     def test_models_rotation_attributes_and_setters(self):
         """Test rotation attribute and set_rotation method across all model classes."""
         from word_sys_pdf_editor.models import EditableText, EditableImage, EditableShape, EditableStroke
@@ -519,7 +519,7 @@ class TestPart7ObjectRotationDataModel(unittest.TestCase):
         self.assertIsNone(found_outside, "Point (110, 190) must NOT hit rotated shape")
 
 
-class TestPart8CanvasStalkRotationHandle(unittest.TestCase):
+class TestCanvasStalkRotationHandle(unittest.TestCase):
     def test_rotation_stalk_handle_detection_unrotated_and_rotated(self):
         """Test _find_resize_handle_at_pos detects 'rotate' at stalk tip for both unrotated and rotated objects."""
         from word_sys_pdf_editor.window import PdfEditorWindow
@@ -664,7 +664,7 @@ class TestPart8CanvasStalkRotationHandle(unittest.TestCase):
         self.assertEqual(cmd.new_rotation, 45.0)
 
 
-class TestPart9ObjectRotationToolbarAndUndo(unittest.TestCase):
+class TestObjectRotationToolbarAndUndo(unittest.TestCase):
     def test_rotate_object_command_execute_and_undo(self):
         """Test RotateObjectCommand execution, PDF baking, and undo reversion."""
         import fitz
@@ -799,7 +799,7 @@ class TestPart9ObjectRotationToolbarAndUndo(unittest.TestCase):
         mock_win.rotate_obj_ccw_button.set_sensitive.assert_called_with(False)
 
 
-class TestPart10RecentlyOpenedFilesHub(unittest.TestCase):
+class TestRecentlyOpenedFilesHub(unittest.TestCase):
     def setUp(self):
         import tempfile
         from word_sys_pdf_editor.i18n import get_setting, set_setting
@@ -1397,8 +1397,8 @@ class TestTextRotationDirectionAndPageRotationHitboxes(unittest.TestCase):
 
 
 
-class TestPart11TextStrikethrough(unittest.TestCase):
-    """Atomic unit tests for Part 11: Text Strikethrough."""
+class TestTextStrikethrough(unittest.TestCase):
+    """Atomic unit tests for Text Strikethrough."""
 
     def test_editable_text_is_strikethrough_default_and_mutation(self):
         """EditableText must default to is_strikethrough=False and allow mutation."""
@@ -1512,8 +1512,8 @@ class TestPart11TextStrikethrough(unittest.TestCase):
 
 
 
-class TestPart12TextAlignment(unittest.TestCase):
-    """Atomic unit tests for Part 12: 4-Way Text Alignment."""
+class TestTextAlignment(unittest.TestCase):
+    """Atomic unit tests for 4-Way Text Alignment."""
 
     def test_editable_text_alignment_default_and_mutation(self):
         """EditableText must default to alignment='left' and allow mutation."""

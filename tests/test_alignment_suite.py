@@ -1,5 +1,5 @@
 """
-Comprehensive unit and integration test suite for Part 12: 4-Way Text Alignment.
+Comprehensive unit and integration test suite for 4-Way Text Alignment.
 Tests:
 - EditableText model default and custom alignment properties
 - Range splitting and cloning alignment preservation

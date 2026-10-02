@@ -12,7 +12,7 @@ from word_sys_pdf_editor.models import EditableText, EditableShape, EditableStro
 
 
 class TestAnyConvertIntegration(unittest.TestCase):
-    """Thorough unit tests for Part 13: AnyConvert Backend Integration."""
+    """Thorough unit tests for AnyConvert Backend Integration."""
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()

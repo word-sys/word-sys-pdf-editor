@@ -30,7 +30,7 @@ def drain_events(cycles=10):
             ctx.iteration(False)
 
 
-class TestPart18MergeLocalization(unittest.TestCase):
+class TestMergeLocalization(unittest.TestCase):
     def test_merge_localization_keys_across_all_7_languages(self):
         keys = [
             "menu_merge_documents", "merge_workspace_title", "merge_workspace_subtitle",
@@ -54,10 +54,10 @@ class TestPart18MergeLocalization(unittest.TestCase):
 
 
 @unittest.skipIf(Gdk.Display.get_default() is None, "Screen display not available (headless build environment)")
-class TestPart18MergeWorkspace(unittest.TestCase):
+class TestMergeWorkspace(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = Adw.Application(application_id="org.wordsys.test.part18")
+        cls.app = Adw.Application(application_id="org.wordsys.test.merge")
         cls.app.register(None)
 
         cls.temp_dir = tempfile.TemporaryDirectory()

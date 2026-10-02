@@ -7,11 +7,359 @@ except ImportError:
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Gdk, Adw, Gio, GLib, Pango
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import Gtk, Gdk, Adw, Gio, GLib, Pango, GdkPixbuf
 
 from .i18n import _
 from . import pdf_handler
 from .ui_components import show_open_file_dialog, show_error_dialog
+
+
+class PagePreviewDialog(Adw.Window):
+    def __init__(self, parent_window, doc, page_index: int, source_role: str = "", file_path: str = "", on_add_callback=None):
+        super().__init__()
+        self.parent_window = parent_window
+        self.doc = doc
+        self.current_page_idx = page_index
+        self.source_role = source_role
+        self.file_path = file_path
+        self.on_add_callback = on_add_callback
+        self.zoom_level = 1.0
+
+        self.set_transient_for(parent_window)
+        self.set_modal(True)
+        title_name = Path(file_path).name if file_path else _("merge_preview_page")
+        self.set_title(f"{title_name} - {_('merge_preview_page')}")
+        self.set_default_size(840, 780)
+        self.set_size_request(440, 400)
+        self.set_resizable(True)
+
+        self._build_ui()
+        self._render_current_page()
+
+    def _build_ui(self):
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.set_content(main_box)
+
+        header = Adw.HeaderBar()
+        close_btn = Gtk.Button(label=_("btn_cancel"))
+        close_btn.connect("clicked", lambda b: self.close())
+        header.pack_start(close_btn)
+
+        self.prev_btn = Gtk.Button.new_from_icon_name("go-previous-symbolic")
+        self.prev_btn.set_tooltip_text(_("prev_page_tip"))
+        self.prev_btn.add_css_class("flat")
+        self.prev_btn.connect("clicked", lambda b: self._go_page(self.current_page_idx - 1))
+        header.pack_start(self.prev_btn)
+
+        self.page_info_lbl = Gtk.Label(label="")
+        self.page_info_lbl.add_css_class("heading")
+        header.pack_start(self.page_info_lbl)
+
+        self.next_btn = Gtk.Button.new_from_icon_name("go-next-symbolic")
+        self.next_btn.set_tooltip_text(_("next_page_tip"))
+        self.next_btn.add_css_class("flat")
+        self.next_btn.connect("clicked", lambda b: self._go_page(self.current_page_idx + 1))
+        header.pack_start(self.next_btn)
+
+        if self.on_add_callback:
+            add_btn = Gtk.Button(label=_("merge_add_page"))
+            add_btn.add_css_class("suggested-action")
+            add_btn.connect("clicked", self._on_add_clicked)
+            header.pack_end(add_btn)
+
+        zoom_fit_btn = Gtk.Button.new_from_icon_name("zoom-fit-best-symbolic")
+        zoom_fit_btn.set_tooltip_text(_("merge_zoom_fit"))
+        zoom_fit_btn.add_css_class("flat")
+        zoom_fit_btn.connect("clicked", lambda b: self._zoom_fit())
+        header.pack_end(zoom_fit_btn)
+
+        zoom_in_btn = Gtk.Button.new_from_icon_name("zoom-in-symbolic")
+        zoom_in_btn.set_tooltip_text(_("merge_zoom_in"))
+        zoom_in_btn.add_css_class("flat")
+        zoom_in_btn.connect("clicked", lambda b: self._set_zoom(self.zoom_level + 0.25))
+        header.pack_end(zoom_in_btn)
+
+        self.zoom_lbl = Gtk.Label(label="100%")
+        self.zoom_lbl.add_css_class("caption")
+        self.zoom_lbl.add_css_class("dim-label")
+        header.pack_end(self.zoom_lbl)
+
+        zoom_out_btn = Gtk.Button.new_from_icon_name("zoom-out-symbolic")
+        zoom_out_btn.set_tooltip_text(_("merge_zoom_out"))
+        zoom_out_btn.add_css_class("flat")
+        zoom_out_btn.connect("clicked", lambda b: self._set_zoom(self.zoom_level - 0.25))
+        header.pack_end(zoom_out_btn)
+
+        main_box.append(header)
+
+        self.scroll = Gtk.ScrolledWindow()
+        self.scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.scroll.set_vexpand(True)
+        self.scroll.set_hexpand(True)
+
+        self.pic_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        self.pic_box.set_margin_top(16)
+        self.pic_box.set_margin_bottom(16)
+        self.pic_box.set_margin_start(16)
+        self.pic_box.set_margin_end(16)
+
+        self.picture = Gtk.Picture()
+        self.picture.set_can_shrink(True)
+        self.picture.set_keep_aspect_ratio(True)
+        self.pic_box.append(self.picture)
+
+        self.scroll.set_child(self.pic_box)
+        main_box.append(self.scroll)
+
+        key_ctrl = Gtk.EventControllerKey.new()
+        key_ctrl.connect("key-pressed", self._on_key_pressed)
+        self.add_controller(key_ctrl)
+
+    def _on_add_clicked(self, _button=None):
+        if self.on_add_callback:
+            self.on_add_callback(self.current_page_idx)
+        self.close()
+
+    def _zoom_fit(self):
+        if not self.doc or self.doc.is_closed or not (0 <= self.current_page_idx < self.doc.page_count):
+            self._set_zoom(1.0)
+            return
+        sw_w = self.scroll.get_allocated_width() - 48
+        sw_h = self.scroll.get_allocated_height() - 48
+        page = self.doc.load_page(self.current_page_idx)
+        pw = page.rect.width
+        ph = page.rect.height
+        if sw_w > 100 and sw_h > 100 and pw > 0 and ph > 0:
+            fit_zoom = min(sw_w / pw, sw_h / ph)
+            fit_zoom = max(0.5, min(3.0, round(fit_zoom, 2)))
+            self._set_zoom(fit_zoom)
+        else:
+            self._set_zoom(1.0)
+
+    def _set_zoom(self, zoom: float):
+        zoom = max(0.5, min(3.0, zoom))
+        self.zoom_level = zoom
+        self.zoom_lbl.set_text(f"{int(zoom * 100)}%")
+        self._render_current_page()
+
+    def _go_page(self, new_idx: int):
+        if self.doc and 0 <= new_idx < self.doc.page_count:
+            self.current_page_idx = new_idx
+            self._render_current_page()
+
+    def _render_current_page(self):
+        if not self.doc or self.doc.is_closed or not (0 <= self.current_page_idx < self.doc.page_count):
+            return
+        try:
+            page = self.doc.load_page(self.current_page_idx)
+            disp_w = max(50, int(page.rect.width * self.zoom_level))
+            disp_h = max(50, int(page.rect.height * self.zoom_level))
+            self.picture.set_size_request(disp_w, disp_h)
+
+            scale = min(4.0, max(1.5, 1.5 * self.zoom_level))
+            mat = fitz.Matrix(scale, scale)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            gdk_pixbuf = GdkPixbuf.Pixbuf.new_from_data(
+                pix.samples, GdkPixbuf.Colorspace.RGB, False, 8,
+                pix.width, pix.height, pix.stride
+            )
+            self.picture.set_paintable(Gdk.Texture.new_for_pixbuf(gdk_pixbuf))
+
+            total = self.doc.page_count
+            self.page_info_lbl.set_text(_("merge_preview_page_info", self.current_page_idx + 1, total))
+            self.prev_btn.set_sensitive(self.current_page_idx > 0)
+            self.next_btn.set_sensitive(self.current_page_idx < total - 1)
+        except Exception as e:
+            print(f"Error previewing page: {e}")
+
+    def _on_key_pressed(self, _ctrl, keyval, _keycode, _state):
+        if keyval in (Gdk.KEY_Left, Gdk.KEY_Page_Up):
+            self._go_page(self.current_page_idx - 1)
+            return True
+        elif keyval in (Gdk.KEY_Right, Gdk.KEY_Page_Down, Gdk.KEY_space):
+            self._go_page(self.current_page_idx + 1)
+            return True
+        elif keyval == Gdk.KEY_Escape:
+            self.close()
+            return True
+        return False
+
+
+class MergedPreviewDialog(Adw.Window):
+    def __init__(self, parent_window, doc=None, target_panel=None, merged_doc=None):
+        super().__init__()
+        self.parent_window = parent_window
+        self.doc = doc if doc is not None else merged_doc
+        self.target_panel = target_panel
+        self.current_page_idx = 0
+        self.zoom_level = 1.0
+
+        self.set_transient_for(parent_window)
+        self.set_modal(True)
+        self.set_title(_("merge_full_preview_title"))
+        self.set_default_size(880, 800)
+        self.set_size_request(450, 400)
+        self.set_resizable(True)
+
+        self._build_ui()
+        self._render_current_page()
+        self.connect("close-request", self._on_close_request)
+
+    def _build_ui(self):
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.set_content(main_box)
+
+        header = Adw.HeaderBar()
+        close_btn = Gtk.Button(label=_("btn_cancel"))
+        close_btn.connect("clicked", lambda b: self.close())
+        header.pack_start(close_btn)
+
+        self.prev_btn = Gtk.Button.new_from_icon_name("go-previous-symbolic")
+        self.prev_btn.set_tooltip_text(_("prev_page_tip"))
+        self.prev_btn.add_css_class("flat")
+        self.prev_btn.connect("clicked", lambda b: self._go_page(self.current_page_idx - 1))
+        header.pack_start(self.prev_btn)
+
+        self.page_info_lbl = Gtk.Label(label="")
+        self.page_info_lbl.add_css_class("heading")
+        header.pack_start(self.page_info_lbl)
+
+        self.next_btn = Gtk.Button.new_from_icon_name("go-next-symbolic")
+        self.next_btn.set_tooltip_text(_("next_page_tip"))
+        self.next_btn.add_css_class("flat")
+        self.next_btn.connect("clicked", lambda b: self._go_page(self.current_page_idx + 1))
+        header.pack_start(self.next_btn)
+
+        if self.parent_window and hasattr(self.parent_window, "_on_save_clicked"):
+            save_btn = Gtk.Button(label=_("merge_btn_save"))
+            save_btn.add_css_class("suggested-action")
+            save_btn.connect("clicked", lambda b: self._on_save_clicked())
+            header.pack_end(save_btn)
+
+        zoom_fit_btn = Gtk.Button.new_from_icon_name("zoom-fit-best-symbolic")
+        zoom_fit_btn.set_tooltip_text(_("merge_zoom_fit"))
+        zoom_fit_btn.add_css_class("flat")
+        zoom_fit_btn.connect("clicked", lambda b: self._zoom_fit())
+        header.pack_end(zoom_fit_btn)
+
+        zoom_in_btn = Gtk.Button.new_from_icon_name("zoom-in-symbolic")
+        zoom_in_btn.set_tooltip_text(_("merge_zoom_in"))
+        zoom_in_btn.add_css_class("flat")
+        zoom_in_btn.connect("clicked", lambda b: self._set_zoom(self.zoom_level + 0.25))
+        header.pack_end(zoom_in_btn)
+
+        self.zoom_lbl = Gtk.Label(label="100%")
+        self.zoom_lbl.add_css_class("caption")
+        self.zoom_lbl.add_css_class("dim-label")
+        header.pack_end(self.zoom_lbl)
+
+        zoom_out_btn = Gtk.Button.new_from_icon_name("zoom-out-symbolic")
+        zoom_out_btn.set_tooltip_text(_("merge_zoom_out"))
+        zoom_out_btn.add_css_class("flat")
+        zoom_out_btn.connect("clicked", lambda b: self._set_zoom(self.zoom_level - 0.25))
+        header.pack_end(zoom_out_btn)
+
+        main_box.append(header)
+
+        self.scroll = Gtk.ScrolledWindow()
+        self.scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.scroll.set_vexpand(True)
+        self.scroll.set_hexpand(True)
+
+        self.pic_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        self.pic_box.set_margin_top(16)
+        self.pic_box.set_margin_bottom(16)
+        self.pic_box.set_margin_start(16)
+        self.pic_box.set_margin_end(16)
+
+        self.picture = Gtk.Picture()
+        self.picture.set_can_shrink(True)
+        self.picture.set_keep_aspect_ratio(True)
+        self.pic_box.append(self.picture)
+
+        self.scroll.set_child(self.pic_box)
+        main_box.append(self.scroll)
+
+        key_ctrl = Gtk.EventControllerKey.new()
+        key_ctrl.connect("key-pressed", self._on_key_pressed)
+        self.add_controller(key_ctrl)
+
+    def _on_save_clicked(self):
+        if self.parent_window and hasattr(self.parent_window, "_on_save_clicked"):
+            self.parent_window._on_save_clicked(None)
+
+    def _zoom_fit(self):
+        if not self.doc or self.doc.is_closed or not (0 <= self.current_page_idx < self.doc.page_count):
+            self._set_zoom(1.0)
+            return
+        sw_w = self.scroll.get_allocated_width() - 48
+        sw_h = self.scroll.get_allocated_height() - 48
+        page = self.doc.load_page(self.current_page_idx)
+        pw = page.rect.width
+        ph = page.rect.height
+        if sw_w > 100 and sw_h > 100 and pw > 0 and ph > 0:
+            fit_zoom = min(sw_w / pw, sw_h / ph)
+            fit_zoom = max(0.5, min(3.0, round(fit_zoom, 2)))
+            self._set_zoom(fit_zoom)
+        else:
+            self._set_zoom(1.0)
+
+    def _set_zoom(self, zoom: float):
+        zoom = max(0.5, min(3.0, zoom))
+        self.zoom_level = zoom
+        self.zoom_lbl.set_text(f"{int(zoom * 100)}%")
+        self._render_current_page()
+
+    def _go_page(self, new_idx: int):
+        if self.doc and 0 <= new_idx < self.doc.page_count:
+            self.current_page_idx = new_idx
+            self._render_current_page()
+
+    def _render_current_page(self):
+        if not self.doc or self.doc.is_closed or not (0 <= self.current_page_idx < self.doc.page_count):
+            return
+        try:
+            page = self.doc.load_page(self.current_page_idx)
+            disp_w = max(50, int(page.rect.width * self.zoom_level))
+            disp_h = max(50, int(page.rect.height * self.zoom_level))
+            self.picture.set_size_request(disp_w, disp_h)
+
+            scale = min(4.0, max(1.5, 1.5 * self.zoom_level))
+            mat = fitz.Matrix(scale, scale)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            gdk_pixbuf = GdkPixbuf.Pixbuf.new_from_data(
+                pix.samples, GdkPixbuf.Colorspace.RGB, False, 8,
+                pix.width, pix.height, pix.stride
+            )
+            self.picture.set_paintable(Gdk.Texture.new_for_pixbuf(gdk_pixbuf))
+
+            total = self.doc.page_count
+            self.page_info_lbl.set_text(_("merge_preview_page_info", self.current_page_idx + 1, total))
+            self.prev_btn.set_sensitive(self.current_page_idx > 0)
+            self.next_btn.set_sensitive(self.current_page_idx < total - 1)
+        except Exception as e:
+            print(f"Error previewing merged page: {e}")
+
+    def _on_key_pressed(self, _ctrl, keyval, _keycode, _state):
+        if keyval in (Gdk.KEY_Left, Gdk.KEY_Page_Up):
+            self._go_page(self.current_page_idx - 1)
+            return True
+        elif keyval in (Gdk.KEY_Right, Gdk.KEY_Page_Down, Gdk.KEY_space):
+            self._go_page(self.current_page_idx + 1)
+            return True
+        elif keyval == Gdk.KEY_Escape:
+            self.close()
+            return True
+        return False
+
+    def _on_close_request(self, _window):
+        if self.doc and not self.doc.is_closed:
+            try:
+                self.doc.close()
+            except Exception:
+                pass
+        return False
 
 
 class SourcePageCard(Gtk.Box):
@@ -29,7 +377,7 @@ class SourcePageCard(Gtk.Box):
         self.set_margin_top(4)
         self.set_margin_bottom(4)
 
-        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         header_box.set_margin_start(8)
         header_box.set_margin_end(8)
         header_box.set_margin_top(6)
@@ -44,6 +392,12 @@ class SourcePageCard(Gtk.Box):
         dim_lbl.add_css_class("caption")
         header_box.append(dim_lbl)
 
+        self.preview_btn = Gtk.Button.new_from_icon_name("view-reveal-symbolic")
+        self.preview_btn.add_css_class("flat")
+        self.preview_btn.set_tooltip_text(_("merge_preview_page"))
+        self.preview_btn.connect("clicked", lambda b: self._preview_page())
+        header_box.append(self.preview_btn)
+
         add_btn = Gtk.Button.new_from_icon_name("list-add-symbolic")
         add_btn.add_css_class("flat")
         add_btn.set_tooltip_text(_("merge_add_page"))
@@ -52,16 +406,18 @@ class SourcePageCard(Gtk.Box):
 
         self.append(header_box)
 
-        pic_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.CENTER)
+        pic_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.FILL, hexpand=True)
         pic_box.set_margin_top(4)
         pic_box.set_margin_bottom(8)
         pic_box.set_margin_start(8)
         pic_box.set_margin_end(8)
 
         self.picture = Gtk.Picture()
-        self.picture.set_size_request(100, 140)
         self.picture.set_can_shrink(True)
         self.picture.set_keep_aspect_ratio(True)
+        self.picture.set_hexpand(True)
+        self.picture.set_halign(Gtk.Align.FILL)
+        self.picture.set_size_request(60, 85)
         pic_box.append(self.picture)
 
         self.append(pic_box)
@@ -69,7 +425,7 @@ class SourcePageCard(Gtk.Box):
         click_ctrl = Gtk.GestureClick.new()
         click_ctrl.set_button(1)
         click_ctrl.connect("pressed", self._on_gesture_pressed)
-        self.add_controller(click_ctrl)
+        pic_box.add_controller(click_ctrl)
 
     def set_thumbnail(self, pixbuf):
         self.pixbuf = pixbuf
@@ -81,8 +437,23 @@ class SourcePageCard(Gtk.Box):
         self._add_to_target()
 
     def _on_gesture_pressed(self, _gesture, n_press, _x, _y):
-        if n_press == 2:
+        if n_press == 1:
+            self._preview_page()
+        elif n_press == 2:
             self._add_to_target()
+
+    def _preview_page(self):
+        if self.panel and self.panel.doc and not self.panel.doc.is_closed:
+            dialog = self.panel.dialog
+            preview_win = PagePreviewDialog(
+                parent_window=dialog,
+                doc=self.panel.doc,
+                page_index=self.page_index,
+                source_role=self.panel.role,
+                file_path=self.panel.file_path or "",
+                on_add_callback=lambda idx: self._add_to_target()
+            )
+            preview_win.present()
 
     def _add_to_target(self):
         if self.panel and self.panel.dialog and self.panel.dialog.target_panel:
@@ -281,7 +652,7 @@ class SourceDocumentPanel(Gtk.Box):
             return False
 
         try:
-            pixbuf = pdf_handler.generate_thumbnail(self.doc, index, target_width=140)
+            pixbuf = pdf_handler.generate_thumbnail(self.doc, index, target_width=450)
             if index < len(self.page_cards):
                 self.page_cards[index].set_thumbnail(pixbuf)
         except Exception:
@@ -471,6 +842,12 @@ class TargetPageCard(Gtk.Box):
         src_badge.add_css_class("caption")
         header_box.append(src_badge)
 
+        self.preview_btn = Gtk.Button.new_from_icon_name("view-reveal-symbolic")
+        self.preview_btn.add_css_class("flat")
+        self.preview_btn.set_tooltip_text(_("merge_preview_page"))
+        self.preview_btn.connect("clicked", lambda b: self._preview_page())
+        header_box.append(self.preview_btn)
+
         self.insert_marker_btn = Gtk.Button.new_from_icon_name("list-add-symbolic")
         self.insert_marker_btn.add_css_class("flat")
         self.insert_marker_btn.set_tooltip_text(_("merge_insert_after", target_idx + 1))
@@ -497,7 +874,7 @@ class TargetPageCard(Gtk.Box):
 
         self.append(header_box)
 
-        pic_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.CENTER)
+        pic_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.FILL, hexpand=True)
         pic_box.set_margin_top(4)
         pic_box.set_margin_bottom(8)
         pic_box.set_margin_start(8)
@@ -506,6 +883,9 @@ class TargetPageCard(Gtk.Box):
         self.picture = Gtk.Picture()
         self.picture.set_can_shrink(True)
         self.picture.set_keep_aspect_ratio(True)
+        self.picture.set_hexpand(True)
+        self.picture.set_halign(Gtk.Align.FILL)
+        self.picture.set_size_request(60, 85)
 
         pixbuf = page_entry.get("thumbnail_pixbuf")
         if pixbuf:
@@ -520,13 +900,26 @@ class TargetPageCard(Gtk.Box):
         click_ctrl = Gtk.GestureClick.new()
         click_ctrl.set_button(1)
         click_ctrl.connect("pressed", self._on_card_pressed)
-        self.add_controller(click_ctrl)
+        pic_box.add_controller(click_ctrl)
 
     def set_zoom(self, zoom_level: float):
         self.zoom_level = zoom_level
-        w = max(50, int(100 * zoom_level))
-        h = max(70, int(140 * zoom_level))
-        self.picture.set_size_request(w, h)
+        if abs(zoom_level - 1.0) < 0.05:
+            self.picture.set_hexpand(True)
+            self.picture.set_halign(Gtk.Align.FILL)
+            self.picture.set_size_request(60, 85)
+        elif zoom_level < 1.0:
+            w = max(60, int(180 * zoom_level))
+            h = max(85, int(250 * zoom_level))
+            self.picture.set_hexpand(False)
+            self.picture.set_halign(Gtk.Align.CENTER)
+            self.picture.set_size_request(w, h)
+        else:
+            w = int(240 * zoom_level)
+            h = int(340 * zoom_level)
+            self.picture.set_hexpand(True)
+            self.picture.set_halign(Gtk.Align.FILL)
+            self.picture.set_size_request(w, h)
 
     def set_selected(self, selected: bool):
         self.is_selected = selected
@@ -545,6 +938,24 @@ class TargetPageCard(Gtk.Box):
                 self.target_panel.select_page(None)
             else:
                 self.target_panel.select_page(self.target_idx)
+        elif n_press == 2:
+            self._preview_page()
+
+    def _preview_page(self):
+        src_doc = self.page_entry.get("source_doc")
+        src_page = self.page_entry.get("page_index", 0)
+        src_path = self.page_entry.get("source_path", "")
+        if src_doc and not src_doc.is_closed:
+            dialog = self.target_panel.dialog
+            preview_win = PagePreviewDialog(
+                parent_window=dialog,
+                doc=src_doc,
+                page_index=src_page,
+                source_role=self.page_entry.get("source_role", ""),
+                file_path=src_path,
+                on_add_callback=None
+            )
+            preview_win.present()
 
     def update_position(self, target_idx: int, total_pages: int):
         self.target_idx = target_idx
@@ -658,6 +1069,13 @@ class TargetDocumentPanel(Gtk.Box):
         self.zoom_fit_btn.connect("clicked", lambda b: self.zoom_fit())
         preview_toolbar.append(self.zoom_fit_btn)
 
+        self.preview_btn = Gtk.Button.new_from_icon_name("document-print-preview-symbolic")
+        self.preview_btn.add_css_class("flat")
+        self.preview_btn.set_tooltip_text(_("merge_btn_preview"))
+        self.preview_btn.set_sensitive(False)
+        self.preview_btn.connect("clicked", lambda b: self.dialog._on_preview_merged_clicked(b) if self.dialog else None)
+        preview_toolbar.append(self.preview_btn)
+
         header_card.append(preview_toolbar)
 
         self.append(header_card)
@@ -717,6 +1135,12 @@ class TargetDocumentPanel(Gtk.Box):
         self.insp_pos_lbl.add_css_class("dim-label")
         self.insp_pos_lbl.add_css_class("caption")
         insp_hdr.append(self.insp_pos_lbl)
+
+        self.insp_preview_btn = Gtk.Button.new_from_icon_name("view-reveal-symbolic")
+        self.insp_preview_btn.add_css_class("flat")
+        self.insp_preview_btn.set_tooltip_text(_("merge_preview_page"))
+        self.insp_preview_btn.connect("clicked", lambda b: self._preview_selected_page())
+        insp_hdr.append(self.insp_preview_btn)
 
         self.inspector_close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
         self.inspector_close_btn.add_css_class("flat")
@@ -856,6 +1280,24 @@ class TargetDocumentPanel(Gtk.Box):
         self.insp_pos_lbl.set_text(f"#{self.selected_idx + 1} / {len(self.pages)}")
         self.inspector_card.set_visible(True)
 
+    def _preview_selected_page(self):
+        if self.selected_idx is None or not (0 <= self.selected_idx < len(self.pages)):
+            return
+        entry = self.pages[self.selected_idx]
+        src_doc = entry.get("source_doc")
+        src_page = entry.get("page_index", 0)
+        src_path = entry.get("source_path", "")
+        if src_doc and not src_doc.is_closed:
+            preview_win = PagePreviewDialog(
+                parent_window=self.dialog,
+                doc=src_doc,
+                page_index=src_page,
+                source_role=entry.get("source_role", ""),
+                file_path=src_path,
+                on_add_callback=None
+            )
+            preview_win.present()
+
     def add_page(self, source_role: str, source_path: str, source_doc, page_index: int,
                  thumbnail_pixbuf, page_width: float, page_height: float, insert_at: int | None = None):
         entry = {
@@ -948,6 +1390,7 @@ class TargetDocumentPanel(Gtk.Box):
         self.zoom_out_btn.set_sensitive(count > 0 and self.zoom_index > 0)
         self.zoom_in_btn.set_sensitive(count > 0 and self.zoom_index < len(ZOOM_LEVELS) - 1)
         self.zoom_fit_btn.set_sensitive(count > 0)
+        self.preview_btn.set_sensitive(count > 0)
         self.empty_box.set_visible(count == 0)
         self.scroll.set_visible(count > 0)
 
@@ -991,6 +1434,13 @@ class MergeDialog(Adw.Window):
         self.save_btn.connect("clicked", self._on_save_clicked)
         header.pack_end(self.save_btn)
 
+        self.preview_merged_btn = Gtk.Button.new_from_icon_name("document-print-preview-symbolic")
+        self.preview_merged_btn.add_css_class("flat")
+        self.preview_merged_btn.set_tooltip_text(_("merge_btn_preview"))
+        self.preview_merged_btn.set_sensitive(False)
+        self.preview_merged_btn.connect("clicked", self._on_preview_merged_clicked)
+        header.pack_end(self.preview_merged_btn)
+
         main_box.append(header)
 
         panels_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0, vexpand=True, hexpand=True)
@@ -1033,9 +1483,61 @@ class MergeDialog(Adw.Window):
     def _on_target_pages_changed(self):
         count = len(self.target_panel.pages)
         self.save_btn.set_sensitive(count > 0)
+        self.preview_merged_btn.set_sensitive(count > 0)
+
+    def _on_preview_merged_clicked(self, _button):
+        if not self.target_panel.pages:
+            return
+        merged_doc = fitz.open()
+        for entry in self.target_panel.pages:
+            src_doc = entry.get("source_doc")
+            p_idx = entry.get("page_index", 0)
+            if src_doc and not src_doc.is_closed:
+                merged_doc.insert_pdf(src_doc, from_page=p_idx, to_page=p_idx)
+        if merged_doc.page_count == 0:
+            merged_doc.close()
+            return
+        preview_win = MergedPreviewDialog(parent_window=self, merged_doc=merged_doc)
+        preview_win.present()
 
     def _on_save_clicked(self, _button):
-        pass
+        if not self.target_panel.pages:
+            return
+        from .ui_components import show_save_file_dialog
+        filter_pdf = Gtk.FileFilter(name=_("filter_pdf"))
+        filter_pdf.add_pattern("*.pdf")
+        filter_pdf.add_mime_type("application/pdf")
+
+        def on_save_finish(file, _filter=None):
+            if file:
+                path = file.get_path()
+                if not path:
+                    return
+                if not path.lower().endswith(".pdf"):
+                    path += ".pdf"
+                try:
+                    merged_doc = fitz.open()
+                    for entry in self.target_panel.pages:
+                        src_doc = entry.get("source_doc")
+                        p_idx = entry.get("page_index", 0)
+                        if src_doc and not src_doc.is_closed:
+                            merged_doc.insert_pdf(src_doc, from_page=p_idx, to_page=p_idx)
+                    merged_doc.save(path)
+                    merged_doc.close()
+                    if self.parent_window and hasattr(self.parent_window, "load_document"):
+                        self.parent_window.load_document(path)
+                    self.close()
+                except Exception:
+                    pass
+
+        show_save_file_dialog(
+            parent_window=self,
+            title=_("merge_btn_save"),
+            initial_name="merged.pdf",
+            filters=[filter_pdf],
+            default_filter=filter_pdf,
+            callback=on_save_finish
+        )
 
     def _on_close_request(self, _window):
         self.cleanup()

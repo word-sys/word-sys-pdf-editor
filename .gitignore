@@ -1,12 +1,20 @@
+# Python cache and bytecode
 __pycache__/
-.debhelper/
+**/__pycache__/
 *.py[cod]
 *$py.class
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 venv/
 .env
 dist/
 build/
 .build_venv
+.debhelper/
 
 debian/word-sys-pdf-editor/
 debian/*.log

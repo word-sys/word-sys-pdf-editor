@@ -26,13 +26,13 @@ from word_sys_pdf_editor.window import PdfEditorWindow
 from word_sys_pdf_editor.undo_manager import UndoManager
 
 
-class TestPart16DocumentSession(unittest.TestCase):
-    """Test suite for Part 16 DocumentSession architecture and window session management."""
+class TestDocumentSession(unittest.TestCase):
+    """Test suite for DocumentSession architecture and window session management."""
 
     @classmethod
     def setUpClass(cls):
         """Initialize GTK and Adw application once for window tests."""
-        cls.app = Adw.Application(application_id="org.test.part16")
+        cls.app = Adw.Application(application_id="org.test.session")
 
     def test_document_session_defaults(self):
         """Verify DocumentSession default attributes and properties."""
@@ -95,12 +95,12 @@ class TestPart16DocumentSession(unittest.TestCase):
 
 
 @unittest.skipIf(Gdk.Display.get_default() is None, "Screen display not available (headless build environment)")
-class TestPart16WindowIntegration(unittest.TestCase):
+class TestWindowIntegration(unittest.TestCase):
     """Window-level session integration tests."""
 
     @classmethod
     def setUpClass(cls):
-        cls.app = Adw.Application(application_id="org.test.part16_win")
+        cls.app = Adw.Application(application_id="org.test.session_win")
 
     def test_window_session_pool_initialization(self):
         """Verify PdfEditorWindow initializes sessions pool and active_session."""

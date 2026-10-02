@@ -27,13 +27,13 @@ from word_sys_pdf_editor.window import PdfEditorWindow
 
 
 @unittest.skipIf(Gdk.Display.get_default() is None, "Screen display not available (headless build environment)")
-class TestPart17TabBarAndTabView(unittest.TestCase):
-    """Test suite for Part 17: TabBar & TabView integration and multi-document tabs."""
+class TestTabBarAndTabView(unittest.TestCase):
+    """Test suite for TabBar & TabView integration and multi-document tabs."""
 
     @classmethod
     def setUpClass(cls):
         """Initialize GTK and Adw application once for window tests."""
-        cls.app = Adw.Application(application_id="org.test.part17")
+        cls.app = Adw.Application(application_id="org.test.tabs")
 
     def setUp(self):
         """Create a fresh PdfEditorWindow instance for each test."""

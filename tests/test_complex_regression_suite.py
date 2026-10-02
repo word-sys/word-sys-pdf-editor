@@ -92,7 +92,7 @@ class TestFullRegressionSuite(unittest.TestCase):
         pdf_handler._page_original_links.clear()
 
     # =========================================================================
-    # PART 1: Collateral Deletion Tests (Bug 1 & Variants)
+    # Section 1: Collateral Deletion Tests (Bug 1 & Variants)
     # =========================================================================
 
     def test_collateral_deletion_adjacent_text(self):
@@ -196,7 +196,7 @@ class TestFullRegressionSuite(unittest.TestCase):
         self.assertIn("Adjacent Normal", text_content)
 
     # =========================================================================
-    # PART 2: Page Switching and Addition Tests (Bug 2 & Variants)
+    # Section 2: Page Switching and Addition Tests (Bug 2 & Variants)
     # =========================================================================
 
     def test_page_switch_multiple_texts_and_add_after_return(self):
@@ -313,7 +313,7 @@ class TestFullRegressionSuite(unittest.TestCase):
         self.assertIn("P2 First", doc[2].get_text())
 
     # =========================================================================
-    # PART 3: Page Lifecycle & Snapshot Remapping Tests
+    # Section 3: Page Lifecycle & Snapshot Remapping Tests
     # =========================================================================
 
     def test_delete_page_remaps_snapshots_correctly(self):
@@ -403,7 +403,7 @@ class TestFullRegressionSuite(unittest.TestCase):
         self.assertIn("Added to Shifted Page", p2_text)
 
     # =========================================================================
-    # PART 4: Rotated Redaction & Direction Extraction Tests
+    # Section 4: Rotated Redaction & Direction Extraction Tests
     # =========================================================================
 
     def test_rotated_text_redaction_quad_accuracy(self):

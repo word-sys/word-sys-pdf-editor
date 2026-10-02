@@ -1,5 +1,5 @@
 """
-Comprehensive unit and integration test suite for Part 11: Text Strikethrough.
+Comprehensive unit and integration test suite for Text Strikethrough.
 Tests:
 - Model properties, cloning, range splitting
 - PyMuPDF vector strikethrough drawing (horizontal and rotated)

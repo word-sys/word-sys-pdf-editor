@@ -1,4 +1,4 @@
-"""Comprehensive test suite for Part 14: Export Dialog & Format Expansion."""
+"""Comprehensive test suite for Export Dialog & Format Expansion."""
 
 import os
 import sys
@@ -239,7 +239,7 @@ class TestAsynchronousExportExecution(unittest.TestCase):
         cls.test_pdf = os.path.join(cls.temp_dir.name, "sample.pdf")
         doc = fitz.open()
         page = doc.new_page(width=400, height=400)
-        page.insert_text(fitz.Point(50, 50), "Part 14 Export Verification Header", fontsize=14)
+        page.insert_text(fitz.Point(50, 50), "Export Verification Header", fontsize=14)
         page.insert_text(fitz.Point(50, 100), "Testing AnyConvert asynchronous background export.", fontsize=11)
         doc.save(cls.test_pdf)
         doc.close()
@@ -316,7 +316,7 @@ class TestAsynchronousExportExecution(unittest.TestCase):
         self.assertTrue(res.get("success"), f"TXT export failed: {res.get('error')}")
         self.assertTrue(os.path.exists(out_path))
         content = Path(out_path).read_text(encoding="utf-8")
-        self.assertIn("Part 14 Export Verification Header", content)
+        self.assertIn("Export Verification Header", content)
 
     def test_async_export_invalid_format(self):
         out_path = os.path.join(self.temp_dir.name, "output.xyz")

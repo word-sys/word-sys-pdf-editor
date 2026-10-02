@@ -17,7 +17,8 @@ from gi.repository import Gtk, Gdk, Adw, GLib, Gio
 sys.path.insert(0, '/home/word-sys/word-sys-pdf-editor')
 from word_sys_pdf_editor.merge_dialog import (
     MergeDialog, SourceDocumentPanel, TargetDocumentPanel,
-    SourcePageCard, TargetPageCard, InsertionMarker, ZOOM_LEVELS
+    SourcePageCard, TargetPageCard, InsertionMarker, ZOOM_LEVELS,
+    PagePreviewDialog, MergedPreviewDialog
 )
 from word_sys_pdf_editor.i18n import _STRINGS, _
 
@@ -29,14 +30,15 @@ def drain_events(cycles=10):
             ctx.iteration(False)
 
 
-class TestPart19MergePreviewLocalization(unittest.TestCase):
-    def test_part19_keys_exist_in_all_languages(self):
+class TestMergePreviewLocalization(unittest.TestCase):
+    def test_keys_exist_in_all_languages(self):
         keys = [
             "merge_zoom_in", "merge_zoom_out", "merge_zoom_fit",
             "merge_insert_at_end", "merge_insert_after", "merge_insert_marker",
             "merge_inspector_title", "merge_inspector_no_selection",
             "merge_inspector_source", "merge_inspector_page", "merge_inspector_size",
-            "merge_inspector_portrait", "merge_inspector_landscape"
+            "merge_inspector_portrait", "merge_inspector_landscape",
+            "merge_btn_preview", "merge_preview_page", "merge_full_preview_title", "merge_preview_page_info"
         ]
         for lang_code in ["en", "tr", "fr", "de", "es", "it", "ru"]:
             self.assertIn(lang_code, _STRINGS)
@@ -48,10 +50,10 @@ class TestPart19MergePreviewLocalization(unittest.TestCase):
 
 
 @unittest.skipIf(Gdk.Display.get_default() is None, "Screen display not available (headless build environment)")
-class TestPart19MergePreview(unittest.TestCase):
+class TestMergePreview(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = Adw.Application(application_id="org.wordsys.test.part19")
+        cls.app = Adw.Application(application_id="org.wordsys.test.merge_preview")
         cls.app.register(None)
 
         cls.temp_dir = tempfile.TemporaryDirectory()
@@ -289,6 +291,138 @@ class TestPart19MergePreview(unittest.TestCase):
         self.assertFalse(target.zoom_in_btn.get_sensitive())
         self.assertFalse(target.zoom_fit_btn.get_sensitive())
 
+    def test_page_preview_dialog_features(self):
+        self.dialog.panel_a.load_file(self.pdf_a_path)
+        drain_events(20)
+
+        added_pages = []
+        def on_add(page_idx):
+            added_pages.append(page_idx)
+
+        preview = PagePreviewDialog(
+            parent_window=self.dialog,
+            doc=self.dialog.panel_a.doc,
+            page_index=0,
+            source_role="source_a",
+            file_path=self.pdf_a_path,
+            on_add_callback=on_add
+        )
+        drain_events(10)
+
+        self.assertEqual(preview.current_page_idx, 0)
+        self.assertFalse(preview.prev_btn.get_sensitive())
+        self.assertTrue(preview.next_btn.get_sensitive())
+        info_text = preview.page_info_lbl.get_text()
+        self.assertTrue("1" in info_text and "3" in info_text)
+        self.assertEqual(preview.zoom_level, 1.0)
+        self.assertEqual(preview.zoom_lbl.get_text(), "100%")
+
+        preview._go_page(1)
+        self.assertEqual(preview.current_page_idx, 1)
+        self.assertTrue(preview.prev_btn.get_sensitive())
+        self.assertTrue(preview.next_btn.get_sensitive())
+        self.assertIn("2", preview.page_info_lbl.get_text())
+
+        preview._go_page(2)
+        self.assertEqual(preview.current_page_idx, 2)
+        self.assertTrue(preview.prev_btn.get_sensitive())
+        self.assertFalse(preview.next_btn.get_sensitive())
+
+        w, h = preview.picture.get_size_request()
+        self.assertEqual(w, 595)
+        self.assertEqual(h, 842)
+
+        preview._set_zoom(1.5)
+        self.assertEqual(preview.zoom_level, 1.5)
+        self.assertEqual(preview.zoom_lbl.get_text(), "150%")
+        w15, h15 = preview.picture.get_size_request()
+        self.assertEqual(w15, int(595 * 1.5))
+        self.assertEqual(h15, int(842 * 1.5))
+
+        preview._set_zoom(5.0)
+        self.assertEqual(preview.zoom_level, 3.0)
+        preview._set_zoom(0.1)
+        self.assertEqual(preview.zoom_level, 0.5)
+
+        preview._zoom_fit()
+        self.assertGreater(preview.zoom_level, 0)
+
+        preview._go_page(0)
+        preview._on_key_pressed(None, Gdk.KEY_Right, 0, 0)
+        self.assertEqual(preview.current_page_idx, 1)
+        preview._on_key_pressed(None, Gdk.KEY_Left, 0, 0)
+        self.assertEqual(preview.current_page_idx, 0)
+
+        preview._on_add_clicked()
+        self.assertEqual(added_pages, [0])
+
+        preview.close()
+        drain_events()
+
+    def test_merged_preview_dialog_features(self):
+        merged_doc = fitz.open()
+        p1 = merged_doc.new_page(width=595, height=842)
+        p1.draw_rect(fitz.Rect(10, 10, 50, 50), color=(1, 0, 0))
+        p2 = merged_doc.new_page(width=400, height=600)
+        p2.draw_rect(fitz.Rect(20, 20, 60, 60), color=(0, 1, 0))
+
+        preview = MergedPreviewDialog(parent_window=self.dialog, merged_doc=merged_doc)
+        drain_events(10)
+
+        self.assertEqual(preview.current_page_idx, 0)
+        self.assertEqual(preview.doc.page_count, 2)
+        merged_info = preview.page_info_lbl.get_text()
+        self.assertTrue("1" in merged_info and "2" in merged_info)
+        self.assertFalse(preview.prev_btn.get_sensitive())
+        self.assertTrue(preview.next_btn.get_sensitive())
+
+        preview._go_page(1)
+        self.assertEqual(preview.current_page_idx, 1)
+        self.assertTrue(preview.prev_btn.get_sensitive())
+        self.assertFalse(preview.next_btn.get_sensitive())
+
+        preview._set_zoom(1.25)
+        self.assertEqual(preview.zoom_level, 1.25)
+
+        preview._on_close_request(preview)
+        self.assertTrue(merged_doc.is_closed)
+        preview.close()
+        drain_events()
+
+    def test_preview_buttons_and_triggers(self):
+        self.dialog.panel_a.load_file(self.pdf_a_path)
+        drain_events(20)
+
+        self.assertFalse(self.dialog.preview_merged_btn.get_sensitive())
+        self.assertFalse(self.dialog.target_panel.preview_btn.get_sensitive())
+
+        self.dialog.panel_a.page_cards[0]._add_to_target()
+        self.assertTrue(self.dialog.preview_merged_btn.get_sensitive())
+        self.assertTrue(self.dialog.target_panel.preview_btn.get_sensitive())
+
+        self.dialog._on_preview_merged_clicked(self.dialog.preview_merged_btn)
+        drain_events(10)
+
+        card = self.dialog.panel_a.page_cards[0]
+        self.assertIsNotNone(card.preview_btn)
+        card._preview_page()
+        drain_events(10)
+
+        target_card = self.dialog.target_panel.page_cards[0]
+        self.assertIsNotNone(target_card.preview_btn)
+        target_card._preview_page()
+        drain_events(10)
+
+        self.dialog.target_panel.select_page(0)
+        self.assertTrue(self.dialog.target_panel.insp_preview_btn.get_visible())
+        self.dialog.target_panel._preview_selected_page()
+        drain_events(10)
+
+        self.dialog.target_panel.clear()
+        self.assertFalse(self.dialog.preview_merged_btn.get_sensitive())
+        self.assertFalse(self.dialog.target_panel.preview_btn.get_sensitive())
+
 
 if __name__ == "__main__":
     unittest.main()
+
