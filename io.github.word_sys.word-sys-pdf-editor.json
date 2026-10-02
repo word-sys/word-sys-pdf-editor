@@ -86,10 +86,12 @@
             "name": "word-sys-pdf-editor",
             "buildsystem": "simple",
             "build-commands": [
+                "sed -i 's/GLib.set_prgname(\"word-sys-pdf-editor\")/GLib.set_prgname(os.environ.get(\"FLATPAK_ID\", \"io.github.word_sys.word-sys-pdf-editor\"))/' word_sys_pdf_editor/main.py",
                 "pip3 install --verbose --exists-action=i --no-index --no-build-isolation --no-deps --prefix=${FLATPAK_DEST} .",
                 "install -Dm644 io.github.word_sys.word-sys-pdf-editor.desktop /app/share/applications/io.github.word_sys.word-sys-pdf-editor.desktop",
                 "install -Dm644 io.github.word_sys.word-sys-pdf-editor.metainfo.xml /app/share/metainfo/io.github.word_sys.word-sys-pdf-editor.metainfo.xml",
-                "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/io.github.word_sys.word-sys-pdf-editor.svg"
+                "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/io.github.word_sys.word-sys-pdf-editor.svg",
+                "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/f-pv1.svg"
             ],
             "sources": [
                 {

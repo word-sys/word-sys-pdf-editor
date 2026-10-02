@@ -1,5 +1,6 @@
 import gi
 import random
+import os
 from pathlib import Path
 
 gi.require_version('Gtk', '4.0')

@@ -66,9 +66,23 @@ def main():
             except Exception:
                 pass
 
-    GLib.set_prgname("word-sys-pdf-editor")
+    from pathlib import Path
+    app_id = os.environ.get('FLATPAK_ID', 'word-sys-pdf-editor')
+    GLib.set_prgname(app_id)
     GLib.set_application_name("word-sys's PDF Editor")
-    Gtk.Window.set_default_icon_name("f-pv1")
     Adw.init()
+
+    try:
+        from gi.repository import Gdk
+        display = Gdk.Display.get_default()
+        if display:
+            theme = Gtk.IconTheme.get_for_display(display)
+            icons_dir = Path(__file__).resolve().parent / "icons"
+            if icons_dir.exists():
+                theme.add_search_path(str(icons_dir))
+    except Exception as e:
+        print(f"Warning registering icon theme search path: {e}")
+
+    Gtk.Window.set_default_icon_name("f-pv1")
     app = PdfEditorApplication()
     return app.run(sys.argv)
