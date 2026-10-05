@@ -11,7 +11,7 @@ case "$1" in
         python3 -m venv --system-site-packages "${VENV_DIR}"
 
         echo "word-sys-pdf-editor: Installing PyMuPDF, numpy, and anyconvert (this may take a moment)..."
-        "${VENV_DIR}/bin/pip" install --upgrade --quiet pymupdf numpy anyconvert
+        "${VENV_DIR}/bin/pip" install --upgrade --quiet pymupdf numpy "anyconvert>=0.1.9"
 
         echo "word-sys-pdf-editor: Setup complete."
         ;;

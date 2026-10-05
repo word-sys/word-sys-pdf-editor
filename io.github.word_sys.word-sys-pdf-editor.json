@@ -77,8 +77,8 @@
             "sources": [
                 {
                     "type": "file",
-                    "url": "https://files.pythonhosted.org/packages/c3/ad/70ec844364ef631de8ff5eecae890e144f2d8ce843a46c08c0ca3379e6a3/anyconvert-0.1.8-py3-none-any.whl",
-                    "sha256": "70daaf3688a8851e6770242b16c499be9e45ca38c526e30283a53b8a000db3e3"
+                    "url": "https://files.pythonhosted.org/packages/af/fa/24df268e6f66f5e705212debeb50ef6a1834dda66643aa10383431378d4f/anyconvert-0.1.9-py3-none-any.whl",
+                    "sha256": "d99112468b5083aec9eab96d4b59707bdda5848cda485d3652f91fe7c2a0ca50"
                 }
             ]
         },
