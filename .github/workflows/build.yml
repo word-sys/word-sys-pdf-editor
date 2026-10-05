@@ -69,9 +69,6 @@ jobs:
             *.zip
             *.7z
             *.deb
-            *.dsc
-            *.buildinfo
-            *.changes
           if-no-files-found: warn
 
   release:
@@ -101,8 +98,5 @@ jobs:
             release-assets/*.zip
             release-assets/*.7z
             release-assets/*.deb
-            release-assets/*.dsc
-            release-assets/*.buildinfo
-            release-assets/*.changes
           draft: false
           prerelease: false

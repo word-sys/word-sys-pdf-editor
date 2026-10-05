@@ -94,22 +94,15 @@ cp AppDir/usr/lib/librsvg-2.so* AppDir/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders/ 2>
 echo "--- Generating AppImage ---"
 build_tmp/linuxdeploy --appdir AppDir --output appimage --desktop-file=word-sys-pdf-editor.desktop --icon-file=word_sys_pdf_editor/img/f-pv1.png
 
-# Standardized AppImage naming for architecture
+# Standardized AppImage naming for architecture (separated by arch)
 GENERATED_APPIMAGE="$(ls word*${LINUXDEPLOY_ARCH}.AppImage 2>/dev/null || ls *.AppImage 2>/dev/null | head -n 1)"
 if [ -f "$GENERATED_APPIMAGE" ]; then
     mv "$GENERATED_APPIMAGE" "word-sys-pdf-editor-${ARCH_NAME}.AppImage"
-    # Keep legacy symlink / copy for x86_64 compatibility
-    if [ "$ARCH_NAME" = "x86_64" ]; then
-        cp "word-sys-pdf-editor-${ARCH_NAME}.AppImage" word-sys-pdf-editor.AppImage
-    fi
 fi
 
 echo "--- Packaging portable distribution archives ---"
 # 1. tar.gz
 tar -czf "word-sys-pdf-editor-linux-${ARCH_NAME}.tar.gz" AppDir
-if [ "$ARCH_NAME" = "x86_64" ]; then
-    cp "word-sys-pdf-editor-linux-${ARCH_NAME}.tar.gz" word-sys-pdf-editor-linux-x64.tar.gz
-fi
 
 # 2. tar.xz
 tar -cJf "word-sys-pdf-editor-linux-${ARCH_NAME}.tar.xz" AppDir
@@ -126,18 +119,14 @@ fi
 
 echo "--- Building Debian package ---"
 mkdir -p debian_build
-rsync -a --exclude=debian_build --exclude=AppDir --exclude=build_tmp . debian_build/
+rsync -a --exclude=debian_build --exclude=AppDir --exclude=build_tmp --exclude=".git" --exclude=".venv" --exclude="*.AppImage" --exclude="*.tar.*" --exclude="*.zip" --exclude="*.7z" --exclude="*.deb" --exclude="*.buildinfo" --exclude="*.changes" --exclude="*.dsc" . debian_build/
 cd debian_build
-dpkg-buildpackage -us -uc 2>&1 || true
+dpkg-buildpackage -b -uc -us 2>&1 || true
 cd ..
 
-# Collect debian artifacts: .deb, .buildinfo, .changes, .dsc, .tar.xz
+# Collect ONLY binary debian package (.deb)
 mv debian_build/../*.deb ./ 2>/dev/null || true
-mv debian_build/../*.buildinfo ./ 2>/dev/null || true
-mv debian_build/../*.changes ./ 2>/dev/null || true
-mv debian_build/../*.dsc ./ 2>/dev/null || true
-mv debian_build/../*.tar.xz ./ 2>/dev/null || true
-mv word-sys-pdf-editor_* ./ 2>/dev/null || true
+rm -f debian_build/../*.buildinfo debian_build/../*.changes debian_build/../*.dsc debian_build/../*.tar.* 2>/dev/null || true
 
 rm -rf debian_build build_tmp
 echo "=== Build completed for $ARCH_NAME ==="

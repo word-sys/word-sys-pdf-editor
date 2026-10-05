@@ -8,7 +8,7 @@ Homepage: https://github.com/word-sys/word-sys-pdf-editor
 Rules-Requires-Root: no
 
 Package: word-sys-pdf-editor
-Architecture: all
+Architecture: any
 Depends: ${misc:Depends},
          python3 (>= 3.10),
          python3-venv,
