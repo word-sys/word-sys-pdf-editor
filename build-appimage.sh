@@ -99,6 +99,17 @@ GENERATED_APPIMAGE="$(ls word*${LINUXDEPLOY_ARCH}.AppImage 2>/dev/null || ls *.A
 if [ -f "$GENERATED_APPIMAGE" ]; then
     mv "$GENERATED_APPIMAGE" "word-sys-pdf-editor-${ARCH_NAME}.AppImage"
 fi
+echo "--- Building Debian package ---"
+mkdir -p debian_build
+rsync -a --exclude=debian_build --exclude=AppDir --exclude=build_tmp --exclude=".git" --exclude=".venv" . debian_build/
+cd debian_build
+dpkg-buildpackage -b -uc -us 2>&1 || true
+cd ..
+
+# Collect ONLY binary debian package (.deb)
+mv debian_build/../*.deb ./ 2>/dev/null || true
+rm -f debian_build/../*.buildinfo debian_build/../*.changes debian_build/../*.dsc 2>/dev/null || true
+rm -rf debian_build
 
 echo "--- Packaging portable distribution archives ---"
 # 1. tar.gz
@@ -117,16 +128,5 @@ if command -v 7z >/dev/null 2>&1; then
     7z a -mx=9 "word-sys-pdf-editor-linux-${ARCH_NAME}.7z" AppDir >/dev/null
 fi
 
-echo "--- Building Debian package ---"
-mkdir -p debian_build
-rsync -a --exclude=debian_build --exclude=AppDir --exclude=build_tmp --exclude=".git" --exclude=".venv" --exclude="*.AppImage" --exclude="*.tar.*" --exclude="*.zip" --exclude="*.7z" --exclude="*.deb" --exclude="*.buildinfo" --exclude="*.changes" --exclude="*.dsc" . debian_build/
-cd debian_build
-dpkg-buildpackage -b -uc -us 2>&1 || true
-cd ..
-
-# Collect ONLY binary debian package (.deb)
-mv debian_build/../*.deb ./ 2>/dev/null || true
-rm -f debian_build/../*.buildinfo debian_build/../*.changes debian_build/../*.dsc debian_build/../*.tar.* 2>/dev/null || true
-
-rm -rf debian_build build_tmp
+rm -rf build_tmp
 echo "=== Build completed for $ARCH_NAME ==="
