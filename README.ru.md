@@ -15,7 +15,7 @@
 ---
 
 > [!TIP]
-> **Рекомендуемая стабильная версия: v1.11.1** — Для наиболее стабильной работы настоятельно рекомендуется использовать версию **1.11.1**. Инструкции по установке приведены ниже.
+> **Рекомендуемая стабильная версия: v1.11.2** — Для наиболее стабильной работы настоятельно рекомендуется использовать версию **1.11.2**. Инструкции по установке приведены ниже.
 
 ---
 
@@ -88,16 +88,16 @@ anyconvert input.pdf -f docx -m canvas -o output.docx
 
 Наиболее простой способ для дистрибутивов на базе Debian, Ubuntu и Pardus.
 
-1.  Скачайте свежий пакет `.deb` со страницы [**Релизы GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). Имя файла обычно выглядит как `word-sys-pdf-editor_1.11.1_all.deb`.
+1.  Скачайте свежий пакет `.deb` со страницы [**Релизы GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). Имя файла: `word-sys-pdf-editor_1.11.2_amd64.deb` (или `_arm64.deb` для ARM64).
 
     > [!TIP]
-    > **Используйте версию 1.11.1** для максимальной стабильности: найдите файл `word-sys-pdf-editor_1.11.1_all.deb` на странице релизов.
+    > **Используйте версию 1.11.2** для максимальной стабильности: найдите файл `word-sys-pdf-editor_1.11.2_amd64.deb` на странице релизов.
 
 2.  Откройте терминал в папке с загруженным `.deb` пакетом.
 3.  Выполните команду установки:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.11.1_all.deb
+    sudo apt install ./word-sys-pdf-editor_1.11.2_amd64.deb
     ```
     *(Примечание: укажите точное имя загруженного файла, если оно отличается.)*
 4.  При возникновении ошибок зависимостей выполните команду исправления:
@@ -112,31 +112,31 @@ anyconvert input.pdf -f docx -m canvas -o output.docx
 
 Универсальный запуск на любых дистрибутивах Linux.
 
-1.  Скачайте пакет `.AppImage` или архив `*-linux-x64.tar.gz` со страницы [**Релизы GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases).
+1.  Скачайте пакет `.AppImage` или архив `*-linux-*.tar.gz` со страницы [**Релизы GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases) (`word-sys-pdf-editor-x86_64.AppImage` или `word-sys-pdf-editor-linux-x86_64.tar.gz`).
 
-    > **Используйте версию 1.11.1** для максимальной надежности: ориентируйтесь на тег `v1.11.1`.
+    > **Используйте версию 1.11.2** для максимальной надежности: ориентируйтесь на тег `v1.11.2`.
 
 #### A. Установка AppImage
 
-1. Откройте терминал в каталоге с файлом `word-sys-pdf-editor.AppImage`.
+1. Откройте терминал в каталоге с файлом `word-sys-pdf-editor-x86_64.AppImage`.
 
 2. Сделайте файл исполняемым:
     ```bash
-    chmod +x word-sys-pdf-editor.AppImage
+    chmod +x word-sys-pdf-editor-x86_64.AppImage
     ```
 
 3. Запустите AppImage двойным щелчком или из терминала:
     ```bash
-    ./word-sys-pdf-editor.AppImage
+    ./word-sys-pdf-editor-x86_64.AppImage
     ```
 
 #### B. Установка бинарного архива (tar.gz)
 
-1. Откройте терминал в каталоге с файлом `word-sys-pdf-editor-linux-x64.tar.gz`.
+1. Откройте терминал в каталоге с файлом `word-sys-pdf-editor-linux-x86_64.tar.gz`.
 
 2. Распакуйте архив:
     ```bash
-    tar -xzf word-sys-pdf-editor-linux-x64.tar.gz
+    tar -xzf word-sys-pdf-editor-linux-x86_64.tar.gz
     ```
 
 3. Перейдите в распакованный каталог:
@@ -161,7 +161,7 @@ anyconvert input.pdf -f docx -m canvas -o output.docx
 Подходит для тех, кто хочет запускать приложение непосредственно из исходников или участвовать в разработке.
 
 > [!TIP]
-> Для стабильной работы используйте тег **v1.11.1** при клонировании. Для тестирования актуальных разработок клонируйте ветку `main` (может быть менее стабильной).
+> Для стабильной работы используйте тег **v1.11.2** при клонировании. Для тестирования актуальных разработок клонируйте ветку `main` (может быть менее стабильной).
 
 ---
 
@@ -179,9 +179,9 @@ anyconvert input.pdf -f docx -m canvas -o output.docx
 
 2.  **Загрузка исходного кода:**
 
-    **Рекомендуется (стабильная v1.11.1):**
+    **Рекомендуется (стабильная v1.11.2):**
     ```bash
-    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -224,9 +224,9 @@ anyconvert input.pdf -f docx -m canvas -o output.docx
 
 2.  **Загрузка исходного кода:**
 
-    **Рекомендуется (стабильная v1.11.1):**
+    **Рекомендуется (стабильная v1.11.2):**
     ```bash
-    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -258,9 +258,9 @@ anyconvert input.pdf -f docx -m canvas -o output.docx
 
 1.  **Загрузка исходного кода:**
 
-    **Рекомендуется (стабильная v1.11.1):**
+    **Рекомендуется (стабильная v1.11.2):**
     ```bash
-    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 

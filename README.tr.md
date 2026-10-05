@@ -15,7 +15,7 @@ Lisans: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Önerilen Kararlı Sürüm: v1.11.1** — En kararlı deneyim için **1.11.1** sürümünü kullanmanız önemle tavsiye edilir. Kurulum ayrıntıları için aşağıdaki bölümleri inceleyebilirsiniz.
+> **Önerilen Kararlı Sürüm: v1.11.2** — En kararlı deneyim için **1.11.2** sürümünü kullanmanız önemle tavsiye edilir. Kurulum ayrıntıları için aşağıdaki bölümleri inceleyebilirsiniz.
 
 ---
 
@@ -88,16 +88,16 @@ word-sys's PDF Editor'ü sisteminize kurmanın birden çok yolu bulunmaktadır:
 
 Pardus, Debian ve Ubuntu tabanlı dağıtımlar için en kolay kurulum yöntemidir.
 
-1.  [**GitHub Sürümleri**](https://github.com/word-sys/word-sys-pdf-editor/releases) sayfasından en güncel `.deb` paketini indirin. Dosya adı genellikle `word-sys-pdf-editor_1.11.1_all.deb` şeklindedir.
+1.  [**GitHub Sürümleri**](https://github.com/word-sys/word-sys-pdf-editor/releases) sayfasından en güncel `.deb` paketini indirin. Dosya adı `word-sys-pdf-editor_1.11.2_amd64.deb` (veya ARM64 için `_arm64.deb`) şeklindedir.
 
     > [!TIP]
-    > En kararlı deneyim için **1.11.1 sürümünü** tercih edin: Sürümler sayfasında `word-sys-pdf-editor_1.11.1_all.deb` dosyasını bulun.
+    > En kararlı deneyim için **1.11.2 sürümünü** tercih edin: Sürümler sayfasında `word-sys-pdf-editor_1.11.2_amd64.deb` dosyasını bulun.
 
 2.  `.deb` dosyasını indirdiğiniz dizinde bir uçbirim (terminal) açın.
 3.  Paketi kurmak için aşağıdaki komutu çalıştırın:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.11.1_all.deb
+    sudo apt install ./word-sys-pdf-editor_1.11.2_amd64.deb
     ```
     *(Not: İndirdiğiniz dosya adı farklıysa komuttaki dosya adını güncelleyin.)*
 4.  Kurulum sırasında bağımlılık sorunu yaşarsanız eksik paketleri gidermek için şu komutu çalıştırın:
@@ -112,31 +112,31 @@ Pardus, Debian ve Ubuntu tabanlı dağıtımlar için en kolay kurulum yöntemid
 
 Tüm Linux dağıtımlarında kurulum yapmadan doğrudan çalıştırmak için uygundur.
 
-1.  [**GitHub Sürümleri**](https://github.com/word-sys/word-sys-pdf-editor/releases) sayfasından `.AppImage` veya `*-linux-x64.tar.gz` paketini indirin.
+1.  [**GitHub Sürümleri**](https://github.com/word-sys/word-sys-pdf-editor/releases) sayfasından `.AppImage` veya `*-linux-*.tar.gz` paketini indirin (`word-sys-pdf-editor-x86_64.AppImage` veya `word-sys-pdf-editor-linux-x86_64.tar.gz`).
 
-    > En kararlı sürüm için sürümler sayfasındaki `v1.11.1` etiketini kullanın.
+    > En kararlı sürüm için sürümler sayfasındaki `v1.11.2` etiketini kullanın.
 
 #### A. AppImage ile Çalıştırma
 
-1. `word-sys-pdf-editor.AppImage` dosyasının bulunduğu dizinde terminal açın.
+1. `word-sys-pdf-editor-x86_64.AppImage` dosyasının bulunduğu dizinde terminal açın.
 
 2. Dosyaya çalıştırma yetkisi verin:
     ```bash
-    chmod +x word-sys-pdf-editor.AppImage
+    chmod +x word-sys-pdf-editor-x86_64.AppImage
     ```
 
 3. Dosyaya çift tıklayarak ya da terminalden çalıştırın:
     ```bash
-    ./word-sys-pdf-editor.AppImage
+    ./word-sys-pdf-editor-x86_64.AppImage
     ```
 
 #### B. Tar.gz Arşivi ile Çalıştırma
 
-1. `word-sys-pdf-editor-linux-x64.tar.gz` dosyasının bulunduğu dizinde terminal açın.
+1. `word-sys-pdf-editor-linux-x86_64.tar.gz` dosyasının bulunduğu dizinde terminal açın.
 
 2. Arşivi çıkartın:
     ```bash
-    tar -xzf word-sys-pdf-editor-linux-x64.tar.gz
+    tar -xzf word-sys-pdf-editor-linux-x86_64.tar.gz
     ```
 
 3. Çıkartılan dizine girin:
@@ -161,7 +161,7 @@ Tüm Linux dağıtımlarında kurulum yapmadan doğrudan çalıştırmak için u
 Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda bulunmak isteyenler için uygundur.
 
 > [!TIP]
-> Kararlı bir deneyim için klonlarken **v1.11.1** etiketini kullanın. Geliştirme aşamasındaki en son değişiklikleri denemek isterseniz doğrudan `main` dalını klonlayabilirsiniz.
+> Kararlı bir deneyim için klonlarken **v1.11.2** etiketini kullanın. Geliştirme aşamasındaki en son değişiklikleri denemek isterseniz doğrudan `main` dalını klonlayabilirsiniz.
 
 ---
 
@@ -179,9 +179,9 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 2.  **Kaynak Kodu İndirin:**
 
-    **Önerilen (kararlı v1.11.1):**
+    **Önerilen (kararlı v1.11.2):**
     ```bash
-    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -224,9 +224,9 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 2.  **Kaynak Kodu İndirin:**
 
-    **Önerilen (kararlı v1.11.1):**
+    **Önerilen (kararlı v1.11.2):**
     ```bash
-    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -258,9 +258,9 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 1.  **Kaynak Kodu İndirin:**
 
-    **Önerilen (kararlı v1.11.1):**
+    **Önerilen (kararlı v1.11.2):**
     ```bash
-    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 

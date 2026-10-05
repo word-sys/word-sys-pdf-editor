@@ -44,6 +44,11 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="1.11.2" date="2026-10-05">
+      <description>
+        <p>Updated anyconvert conversion engine to 0.1.9, improved vector icon rendering and desktop shell window tracking, and separated amd64 and arm64 architecture packages.</p>
+      </description>
+    </release>
     <release version="1.11.1" date="2026-10-02">
       <description>
         <p>Multi-Document Tabs, Visual Document Merging Workspace with drag-and-drop page ordering, native pure-Python anyconvert export (DOCX, PPTX, ODT, ODP, TXT), 90-degree Page Rotation, dedicated app-managed Recent Files hub, 4-way text alignment, strikethrough formatting, 7 language translations, updated Quick Start Guide, and Flathub GNOME 50 modernization.</p>

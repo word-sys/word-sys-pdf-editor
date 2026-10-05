@@ -1,3 +1,13 @@
+word-sys-pdf-editor (1.11.2) bookworm; urgency=medium
+
+  * Updated anyconvert document conversion engine to v0.1.9
+  * Fixed application icon resolution and vector scaling across Flatpak and direct execution
+  * Fixed window class mapping for Flatpak integration in desktop environments
+  * Separated architecture builds and Debian packages for amd64 and arm64
+  * Cleaned up release packaging pipeline and eliminated redundant asset bloat
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Mon, 05 Oct 2026 18:25:00 +0300
+
 word-sys-pdf-editor (1.11.1) bookworm; urgency=medium
 
   * Added Multi-Document Tab architecture with Adw.TabView and Adw.TabBar (Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab)

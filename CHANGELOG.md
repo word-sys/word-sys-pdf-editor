@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.11.2] - 2026-10-05
+
+### Changed
+- **anyconvert Engine Update**: Updated native document conversion engine to `anyconvert` 0.1.9 across all platforms and package manifests.
+- **Release Packaging Optimization**: Fully separated architecture artifacts for `x86_64` (amd64) and `aarch64` (arm64), including standalone `.deb` packages. Removed duplicate asset copies and eliminated oversized source tarballs from automated build releases.
+
+### Fixed
+- **Application Icon and Desktop Integration**: Fixed icon lookup path to ensure crisp vector SVG rendering on the Welcome screen, About dialog, and system docks across Flatpak and direct execution.
+- **Flatpak Window Class Mapping**: Aligned application program name with desktop file metadata for proper window tracking and icon association in GNOME Shell and desktop environments.
+
 ## [1.11.1] - 2026-10-02
 
 ### Added

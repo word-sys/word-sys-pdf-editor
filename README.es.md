@@ -15,7 +15,7 @@ Licencia: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Versión estable recomendada: v1.11.1** — Para disfrutar de la mayor estabilidad, se recomienda encarecidamente utilizar la versión **1.11.1**. Consulte las secciones de instalación a continuación para obtener más información.
+> **Versión estable recomendada: v1.11.2** — Para disfrutar de la mayor estabilidad, se recomienda encarecidamente utilizar la versión **1.11.2**. Consulte las secciones de instalación a continuación para obtener más información.
 
 ---
 
@@ -88,18 +88,18 @@ Existen varios métodos para instalar word-sys's PDF Editor en su sistema:
 
 Es la vía más sencilla para distribuciones basadas en Debian, Ubuntu y Pardus.
 
-1.  Descargue el paquete `.deb` más reciente desde la página de [**Versiones de GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). Por lo general el archivo se llama `word-sys-pdf-editor_1.11.1_all.deb`.
+1.  Descargue el paquete `.deb` más reciente desde la página de [**Versiones de GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). El archivo se llama `word-sys-pdf-editor_1.11.2_amd64.deb` (o `_arm64.deb` para ARM64).
 
     > [!TIP]
-    > **Utilice la versión 1.11.1** para la mejor estabilidad: busque `word-sys-pdf-editor_1.11.1_all.deb` en la página de versiones.
+    > **Utilice la versión 1.11.2** para la mejor estabilidad: busque `word-sys-pdf-editor_1.11.2_amd64.deb` en la página de versiones.
 
 2.  Abra un terminal en el directorio donde descargó el paquete `.deb`.
 3.  Ejecute el siguiente comando para instalarlo:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.11.1_all.deb
+    sudo apt install ./word-sys-pdf-editor_1.11.2_amd64.deb
     ```
-    *(Nota: Sustituya `word-sys-pdf-editor_1.11.1_all.deb` por el nombre exacto del archivo que haya descargado si difiere.)*
+    *(Nota: Sustituya `word-sys-pdf-editor_1.11.2_amd64.deb` por el nombre exacto del archivo que haya descargado si difiere.)*
 4.  Si se presenta un error de dependencias, ejecute el siguiente comando para solucionarlo:
     ```bash
     sudo apt --fix-broken install
@@ -112,31 +112,31 @@ Es la vía más sencilla para distribuciones basadas en Debian, Ubuntu y Pardus.
 
 Este método funciona de inmediato en prácticamente cualquier distribución Linux.
 
-1.  Descargue el paquete `.AppImage` o `*-linux-x64.tar.gz` desde la página de [**Versiones de GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases).
+1.  Descargue el paquete `.AppImage` o `*-linux-*.tar.gz` desde la página de [**Versiones de GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases) (`word-sys-pdf-editor-x86_64.AppImage` o `word-sys-pdf-editor-linux-x86_64.tar.gz`).
 
-    > **Utilice la versión 1.11.1** para máxima estabilidad: busque la etiqueta `v1.11.1` en la página de lanzamientos.
+    > **Utilice la versión 1.11.2** para máxima estabilidad: busque la etiqueta `v1.11.2` en la página de lanzamientos.
 
 #### A. Instalación de AppImage
 
-1. Abra un terminal en la carpeta donde descargó `word-sys-pdf-editor.AppImage`.
+1. Abra un terminal en la carpeta donde descargó `word-sys-pdf-editor-x86_64.AppImage`.
 
 2. Asigne permisos de ejecución:
     ```bash
-    chmod +x word-sys-pdf-editor.AppImage
+    chmod +x word-sys-pdf-editor-x86_64.AppImage
     ```
 
 3. Haga doble clic en el archivo AppImage o ejecútelo en el terminal:
     ```bash
-    ./word-sys-pdf-editor.AppImage
+    ./word-sys-pdf-editor-x86_64.AppImage
     ```
 
 #### B. Instalación del paquete binario (tar.gz)
 
-1. Abra un terminal en el directorio donde descargó `word-sys-pdf-editor-linux-x64.tar.gz`.
+1. Abra un terminal en el directorio donde descargó `word-sys-pdf-editor-linux-x86_64.tar.gz`.
 
 2. Descomprima el archivo:
     ```bash
-    tar -xzf word-sys-pdf-editor-linux-x64.tar.gz
+    tar -xzf word-sys-pdf-editor-linux-x86_64.tar.gz
     ```
 
 3. Acceda al directorio extraído:
@@ -161,7 +161,7 @@ Este método funciona de inmediato en prácticamente cualquier distribución Lin
 Este método es ideal para quienes deseen ejecutar la aplicación directamente desde el código fuente o contribuir al desarrollo.
 
 > [!TIP]
-> Para una versión estable, clone la etiqueta **v1.11.1**. Si desea probar los cambios de desarrollo más recientes, clone la rama `main` (que puede presentar menor estabilidad).
+> Para una versión estable, clone la etiqueta **v1.11.2**. Si desea probar los cambios de desarrollo más recientes, clone la rama `main` (que puede presentar menor estabilidad).
 
 ---
 
@@ -179,9 +179,9 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 2.  **Descargar el código fuente:**
 
-    **Recomendado (versión estable v1.11.1):**
+    **Recomendado (versión estable v1.11.2):**
     ```bash
-    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -224,9 +224,9 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 2.  **Descargar el código fuente:**
 
-    **Recomendado (versión estable v1.11.1):**
+    **Recomendado (versión estable v1.11.2):**
     ```bash
-    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -258,9 +258,9 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 1.  **Descargar el código fuente:**
 
-    **Recomendado (versión estable v1.11.1):**
+    **Recomendado (versión estable v1.11.2):**
     ```bash
-    git clone --branch v1.11.1 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
