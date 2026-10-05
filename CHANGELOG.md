@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 - **Application Icon and Desktop Integration**: Fixed icon lookup path to ensure crisp vector SVG rendering on the Welcome screen, About dialog, and system docks across Flatpak and direct execution.
 - **Flatpak Window Class Mapping**: Aligned application program name with desktop file metadata for proper window tracking and icon association in GNOME Shell and desktop environments.
 
+---
+
 ## [1.11.1] - 2026-10-02
 
 ### Added
