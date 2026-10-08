@@ -232,6 +232,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 padding: 0;
                 margin: 0;
             }
+            .acroform-dropdown {
+                background-color: rgba(255, 255, 255, 0.95);
+                border: 1px solid rgba(53, 132, 228, 0.6);
+                border-radius: 3px;
+                min-height: 20px;
+                font-size: 13px;
+                padding: 0 4px;
+                color: #111111;
+            }
+            .acroform-dropdown:focus {
+                border: 2px solid @accent_color;
+            }
         """)
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), css_provider,
@@ -3154,6 +3166,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 active_bool = bool(field.is_checked)
                 if widget.get_active() != active_bool:
                     widget.set_active(active_bool)
+            elif isinstance(widget, Gtk.DropDown):
+                export_items = entry_data.get("export_items", [])
+                display_items = entry_data.get("display_items", [])
+                val_str = str(field.value if field.value is not None else "")
+                target_idx = None
+                if val_str in export_items:
+                    target_idx = export_items.index(val_str)
+                elif val_str in display_items:
+                    target_idx = display_items.index(val_str)
+                if target_idx is not None and widget.get_selected() != target_idx:
+                    widget.set_selected(target_idx)
         finally:
             self._syncing_form_field = False
 
@@ -3370,6 +3393,86 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 focus_ctrl = Gtk.EventControllerFocus()
                 focus_ctrl.connect("enter", _on_check_focus_enter)
                 chk.add_controller(focus_ctrl)
+
+                self.pdf_overlay.add_overlay(container)
+                self._form_field_overlay_widgets[field.field_id] = entry_data
+
+            elif ftype in ("combobox", "listbox", "choice"):
+                raw_choices = getattr(field, 'choice_values', []) or []
+                display_items = []
+                export_items = []
+                for item in raw_choices:
+                    if isinstance(item, (list, tuple)):
+                        exp = str(item[0]) if len(item) > 0 else ""
+                        disp = str(item[1]) if len(item) > 1 else exp
+                    else:
+                        exp = str(item)
+                        disp = str(item)
+                    display_items.append(disp)
+                    export_items.append(exp)
+
+                if not display_items:
+                    init_str = str(field.value if field.value is not None else "")
+                    display_items = [init_str] if init_str else [""]
+                    export_items = [init_str] if init_str else [""]
+
+                dropdown = Gtk.DropDown.new_from_strings(display_items)
+                dropdown.add_css_class("acroform-dropdown")
+                if getattr(field, 'is_read_only', False):
+                    dropdown.set_sensitive(False)
+
+                val_str = str(field.value if field.value is not None else "")
+                selected_idx = 0
+                if val_str in export_items:
+                    selected_idx = export_items.index(val_str)
+                elif val_str in display_items:
+                    selected_idx = display_items.index(val_str)
+                dropdown.set_selected(selected_idx)
+
+                dropdown.set_halign(Gtk.Align.START)
+                dropdown.set_valign(Gtk.Align.START)
+                dropdown.set_margin_start(wx)
+                dropdown.set_margin_top(wy)
+                dropdown.set_size_request(ww, wh)
+
+                container = dropdown
+                input_widget = dropdown
+
+                entry_data = {
+                    "field": field,
+                    "container": container,
+                    "widget": input_widget,
+                    "initial_val": field.value,
+                    "current_val": field.value,
+                    "display_items": display_items,
+                    "export_items": export_items,
+                }
+
+                def _on_dropdown_selected(dd, pspec, ed=entry_data):
+                    if getattr(self, '_syncing_form_field', False):
+                        return
+                    sel_idx = dd.get_selected()
+                    exp_items = ed.get("export_items", [])
+                    if sel_idx < 0 or sel_idx >= len(exp_items):
+                        return
+                    new_val = exp_items[sel_idx]
+                    old_val = ed["field"].value
+                    if new_val == old_val:
+                        return
+                    ed["current_val"] = new_val
+                    ed["initial_val"] = new_val
+                    self._sync_form_field_value(ed["field"], new_val, record_undo=True, old_val_override=old_val)
+
+                def _on_dropdown_focus_enter(ctrl, ed=entry_data):
+                    self.selected_form_field = ed["field"]
+                    if hasattr(self, 'pdf_view') and self.pdf_view:
+                        self.pdf_view.queue_draw()
+                    self._update_ui_state()
+
+                dropdown.connect("notify::selected", _on_dropdown_selected)
+                focus_ctrl = Gtk.EventControllerFocus()
+                focus_ctrl.connect("enter", _on_dropdown_focus_enter)
+                dropdown.add_controller(focus_ctrl)
 
                 self.pdf_overlay.add_overlay(container)
                 self._form_field_overlay_widgets[field.field_id] = entry_data
@@ -5321,15 +5424,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._set_zoom(1.0, focal_point=getattr(self, '_last_pointer_pos', None))
             return True
 
-        is_text_focused = (
+        is_input_focused = (
             (self.inline_editor_widget is not None)
-            or isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView))
+            or isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView, Gtk.DropDown))
         )
 
         if keyval == Gdk.KEY_Delete:
             self.commit_pending_format_change()
             obj_to_delete = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
-            if obj_to_delete and not is_text_focused:
+            if obj_to_delete and not is_input_focused:
                 self._handle_delete_with_confirmation(obj_to_delete, "delete_confirm_title")
                 return True
             elif self.selected_image:
@@ -5346,7 +5449,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.selected_image = None
                     self._update_ui_state()
         # Arrow key nudge movement (1pt normal / 10pt with Shift) for selected objects
-        if not is_text_focused and keyval in (Gdk.KEY_Left, Gdk.KEY_Right, Gdk.KEY_Up, Gdk.KEY_Down):
+        if not is_input_focused and keyval in (Gdk.KEY_Left, Gdk.KEY_Right, Gdk.KEY_Up, Gdk.KEY_Down):
             selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
             if selected_obj:
                 step = 10.0 if bool(state & Gdk.ModifierType.SHIFT_MASK) else 1.0
@@ -5393,7 +5496,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 return True
 
         # Single-key tool selection shortcuts (when not editing text)
-        if not ctrl and not (state & Gdk.ModifierType.ALT_MASK) and not is_text_focused:
+        if not ctrl and not (state & Gdk.ModifierType.ALT_MASK) and not is_input_focused:
             tool_shortcuts = {
                 Gdk.KEY_v: "add_checkmark",
                 Gdk.KEY_V: "add_checkmark",
