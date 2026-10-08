@@ -1353,6 +1353,12 @@ def update_acroform_field_value(doc, page_index: int, field_identifier: Any, new
 
             if match:
                 w.field_value = new_value
+                if not getattr(w, 'border_color', None):
+                    w.border_color = (0.35, 0.35, 0.35)
+                    w.border_width = 1.0
+                    w.border_style = "S"
+                    if not getattr(w, 'fill_color', None):
+                        w.fill_color = (1.0, 1.0, 1.0)
                 w.update()
                 updated = True
                 break
@@ -1437,44 +1443,95 @@ def draw_acroform_overlay(cr, fields, zoom_level=1.0, active_field=None):
             getattr(f, "field_id", "") == getattr(active_field, "field_id", "")
         ))
 
-        ftype = getattr(f, "field_type", "text")
+        ftype = getattr(f, "field_type", "text").lower()
         is_req = getattr(f, "is_required", False)
         is_ro = getattr(f, "is_read_only", False)
+        is_checked = bool(getattr(f, "is_checked", False))
 
         if is_active:
             cr.set_source_rgba(0.2, 0.45, 0.9, 0.18)
             cr.rectangle(x1, y1, w, h)
             cr.fill()
-            cr.set_source_rgba(0.15, 0.45, 0.9, 0.9)
+            cr.set_source_rgba(0.15, 0.45, 0.9, 0.95)
             cr.set_line_width(2.0 / zoom)
             cr.rectangle(x1, y1, w, h)
             cr.stroke()
         else:
             if is_ro:
-                cr.set_source_rgba(0.7, 0.7, 0.7, 0.08)
+                cr.set_source_rgba(0.85, 0.85, 0.85, 0.25)
                 cr.rectangle(x1, y1, w, h)
                 cr.fill()
-                cr.set_source_rgba(0.6, 0.6, 0.6, 0.4)
+                cr.set_source_rgba(0.5, 0.5, 0.5, 0.6)
                 cr.set_line_width(1.0 / zoom)
                 cr.set_dash([3.0 / zoom, 3.0 / zoom])
                 cr.rectangle(x1, y1, w, h)
                 cr.stroke()
-            elif ftype in ("checkbox", "radio"):
-                cr.set_source_rgba(0.3, 0.55, 0.9, 0.08)
-                cr.rectangle(x1, y1, w, h)
-                cr.fill()
-                cr.set_source_rgba(0.3, 0.55, 0.9, 0.5)
-                cr.set_line_width(1.0 / zoom)
-                cr.rectangle(x1, y1, w, h)
+            elif ftype == "radio":
+                cx = x1 + w / 2.0
+                cy = y1 + h / 2.0
+                r = max(2.0, min(w, h) / 2.0 - (1.0 / zoom))
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.92)
+                cr.arc(cx, cy, r, 0, 2 * math.pi)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.25, 0.25, 0.25, 0.9)
+                cr.set_line_width(1.5 / zoom)
                 cr.stroke()
+                if is_checked:
+                    cr.set_source_rgba(0.15, 0.15, 0.15, 0.95)
+                    cr.arc(cx, cy, max(1.5, r * 0.5), 0, 2 * math.pi)
+                    cr.fill()
+            elif ftype in ("checkbox", "check", "cb"):
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.92)
+                cr.rectangle(x1, y1, w, h)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.25, 0.25, 0.25, 0.9)
+                cr.set_line_width(1.5 / zoom)
+                cr.stroke()
+                if is_checked:
+                    cr.set_source_rgba(0.1, 0.5, 0.15, 0.95)
+                    cr.set_line_width(2.0 / zoom)
+                    cr.move_to(x1 + w * 0.22, y1 + h * 0.52)
+                    cr.line_to(x1 + w * 0.44, y1 + h * 0.76)
+                    cr.line_to(x1 + w * 0.80, y1 + h * 0.26)
+                    cr.stroke()
+            elif ftype in ("combobox", "choice", "dropdown", "ch", "listbox"):
+                cr.set_source_rgba(0.93, 0.96, 1.0, 0.5)
+                cr.rectangle(x1, y1, w, h)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.40, 0.50, 0.70, 0.85)
+                cr.set_line_width(1.2 / zoom)
+                cr.stroke()
+                arr_x = x1 + w - min(14.0 / zoom, w * 0.25)
+                arr_y = y1 + h / 2.0
+                cr.set_source_rgba(0.35, 0.45, 0.6, 0.85)
+                cr.move_to(arr_x - 3.5 / zoom, arr_y - 2.0 / zoom)
+                cr.line_to(arr_x + 3.5 / zoom, arr_y - 2.0 / zoom)
+                cr.line_to(arr_x, arr_y + 3.0 / zoom)
+                cr.close_path()
+                cr.fill()
             else:
-                cr.set_source_rgba(0.22, 0.47, 0.88, 0.08)
+                cr.set_source_rgba(0.93, 0.96, 1.0, 0.5)
                 cr.rectangle(x1, y1, w, h)
-                cr.fill()
-                cr.set_source_rgba(0.25, 0.5, 0.85, 0.4)
-                cr.set_line_width(1.0 / zoom)
-                cr.rectangle(x1, y1, w, h)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.40, 0.50, 0.70, 0.85)
+                cr.set_line_width(1.2 / zoom)
                 cr.stroke()
+
+        # Draw current text value for text and dropdown fields
+        if ftype in ("text", "combobox", "choice", "dropdown", "ch", "listbox"):
+            val_str = str(getattr(f, "value", "") or "")
+            if val_str:
+                cr.save()
+                clip_w = max(1.0, w - (min(20.0 / zoom, w * 0.35) if ftype != "text" else (6.0 / zoom)))
+                cr.rectangle(x1 + (3.0 / zoom), y1, clip_w, h)
+                cr.clip()
+                font_size = max(7.0, min(12.0, h * 0.65))
+                cr.set_font_size(font_size)
+                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+                cr.set_source_rgb(0.12, 0.12, 0.12)
+                cr.move_to(x1 + (4.0 / zoom), y1 + (h / 2.0) + (font_size * 0.35))
+                cr.show_text(val_str)
+                cr.restore()
 
         if is_req:
             marker_size = min(6.0 / zoom, w * 0.25, h * 0.25)
@@ -1486,6 +1543,297 @@ def draw_acroform_overlay(cr, fields, zoom_level=1.0, active_field=None):
             cr.fill()
 
         cr.restore()
+
+
+def ensure_form_widgets_have_appearance(doc) -> int:
+    """Ensure all form widgets in the document have visible border and fill colors defined."""
+    if not doc or getattr(doc, "is_closed", False):
+        return 0
+    updated_count = 0
+    try:
+        for p_idx in range(len(doc)):
+            page = doc.load_page(p_idx)
+            page_changed = False
+            for w in list(page.widgets()):
+                needs_update = False
+                if not getattr(w, 'border_color', None):
+                    w.border_color = (0.35, 0.35, 0.35)
+                    w.border_width = 1.0
+                    w.border_style = "S"
+                    needs_update = True
+                if not getattr(w, 'fill_color', None):
+                    w.fill_color = (1.0, 1.0, 1.0)
+                    needs_update = True
+                if needs_update:
+                    try:
+                        w.update()
+                        page_changed = True
+                        updated_count += 1
+                    except Exception:
+                        pass
+            if page_changed:
+                invalidate_page_cache(doc, p_idx)
+    except Exception as e:
+        print(f"Error ensuring form widgets appearance: {e}")
+    return updated_count
+
+
+def add_form_widget(
+    target: Any,
+    *args,
+    **kwargs
+) -> Optional[fitz.Widget]:
+    """Create and insert an interactive PDF form widget annotation on a page.
+    
+    Supports both signatures:
+    - add_form_widget(page, field_type, rect, field_name, default_value=None, choice_values=None, ...)
+    - add_form_widget(doc, page_index, field_type, rect, field_name, default_value=None, choice_values=None, ...)
+    """
+    if target is None:
+        return None
+    try:
+        if hasattr(target, "load_page"):
+            doc = target
+            if args and isinstance(args[0], int):
+                p_idx = args[0]
+                page = doc.load_page(p_idx)
+                remaining = args[1:]
+            elif "page_index" in kwargs:
+                p_idx = kwargs.pop("page_index")
+                page = doc.load_page(p_idx)
+                remaining = args
+            else:
+                p_idx = 0
+                page = doc.load_page(0)
+                remaining = args
+        else:
+            page = target
+            doc = getattr(page, "parent", None)
+            p_idx = getattr(page, "number", 0)
+            remaining = args
+
+        field_type = remaining[0] if len(remaining) > 0 else kwargs.get("field_type", "text")
+        rect = remaining[1] if len(remaining) > 1 else kwargs.get("rect", (100, 100, 250, 130))
+        field_name = remaining[2] if len(remaining) > 2 else kwargs.get("field_name", "")
+        default_value = remaining[3] if len(remaining) > 3 else kwargs.get("default_value", None)
+        choice_values = remaining[4] if len(remaining) > 4 else kwargs.get("choice_values", None)
+        is_multiline = kwargs.get("is_multiline", False)
+        is_required = kwargs.get("is_required", False)
+        is_read_only = kwargs.get("is_read_only", False)
+        text_fontsize = kwargs.get("text_fontsize", 0.0)
+
+        w = fitz.Widget()
+        x0, y0, x1, y1 = rect
+        w.rect = fitz.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+        w.border_color = (0.35, 0.35, 0.35)
+        w.border_width = 1.0
+        w.border_style = "S"
+        w.fill_color = (1.0, 1.0, 1.0)
+        
+        ftype = str(field_type).lower()
+        if ftype in ("text", "tx"):
+            w.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+            if is_multiline:
+                w.field_flags |= fitz.PDF_TX_FIELD_IS_MULTILINE
+            if default_value is not None:
+                w.field_value = str(default_value)
+        elif ftype in ("checkbox", "check", "cb"):
+            w.field_type = fitz.PDF_WIDGET_TYPE_CHECKBOX
+            w.field_value = bool(default_value)
+        elif ftype in ("combobox", "choice", "dropdown", "ch"):
+            w.field_type = fitz.PDF_WIDGET_TYPE_COMBOBOX
+            choices = list(choice_values) if choice_values else ["Option 1", "Option 2", "Option 3"]
+            w.choice_values = choices
+            w.field_value = str(default_value) if default_value is not None else choices[0]
+        elif ftype in ("listbox", "list"):
+            w.field_type = fitz.PDF_WIDGET_TYPE_LISTBOX
+            choices = list(choice_values) if choice_values else ["Option 1", "Option 2", "Option 3"]
+            w.choice_values = choices
+            w.field_value = str(default_value) if default_value is not None else choices[0]
+        elif ftype in ("signature", "sig"):
+            w.field_type = fitz.PDF_WIDGET_TYPE_SIGNATURE
+
+        if is_required:
+            w.field_flags |= fitz.PDF_FIELD_IS_REQUIRED
+        if is_read_only:
+            w.field_flags |= fitz.PDF_FIELD_IS_READ_ONLY
+        if text_fontsize:
+            w.text_fontsize = float(text_fontsize)
+
+        if field_name:
+            w.field_name = str(field_name)
+        else:
+            w.field_name = f"field_{p_idx}_{len(list(page.widgets())) + 1}"
+
+        added = page.add_widget(w)
+        target_w = added if added is not None else w
+        try:
+            target_w.update()
+        except Exception:
+            pass
+        if doc is not None:
+            invalidate_page_cache(doc, p_idx)
+        return added or w
+    except Exception as e:
+        print(f"Error adding form widget: {e}")
+        return None
+
+
+def delete_form_widget(target: Any, field_identifier: Any, page_index: Optional[int] = None) -> bool:
+    """Delete an interactive AcroForm widget annotation from a page or document."""
+    if target is None:
+        return False
+    try:
+        if hasattr(target, "load_page"):
+            doc = target
+            if page_index is not None:
+                pages_to_check = [page_index]
+            else:
+                pages_to_check = list(range(len(doc)))
+        else:
+            page = target
+            doc = getattr(page, "parent", None)
+            pages_to_check = [getattr(page, "number", 0)]
+
+        target_xref = getattr(field_identifier, "xref", None) if hasattr(field_identifier, "xref") else (field_identifier if isinstance(field_identifier, int) else None)
+        target_name = getattr(field_identifier, "field_name", None) if hasattr(field_identifier, "field_name") else (field_identifier if isinstance(field_identifier, str) else None)
+
+        deleted = False
+        for p_idx in pages_to_check:
+            page = doc.load_page(p_idx) if hasattr(target, "load_page") else target
+            for w in list(page.widgets()):
+                match = False
+                if target_xref is not None and getattr(w, "xref", None) == target_xref:
+                    match = True
+                elif target_name is not None and getattr(w, "field_name", None) == target_name:
+                    match = True
+                if match:
+                    page.delete_widget(w)
+                    deleted = True
+                    if doc is not None:
+                        invalidate_page_cache(doc, p_idx)
+                    break
+            if deleted:
+                break
+        return deleted
+    except Exception as e:
+        print(f"Error deleting form widget: {e}")
+        return False
+
+
+def update_form_widget_geometry(
+    target: Any,
+    field_identifier: Any,
+    new_rect: Tuple[float, float, float, float],
+    page_index: Optional[int] = None
+) -> bool:
+    """Update the bounding rectangle of an existing form widget in a PDF page."""
+    if target is None or not new_rect or len(new_rect) != 4:
+        return False
+    try:
+        if hasattr(target, "load_page"):
+            doc = target
+            if page_index is not None:
+                pages_to_check = [page_index]
+            else:
+                pages_to_check = list(range(len(doc)))
+        else:
+            page = target
+            doc = getattr(page, "parent", None)
+            pages_to_check = [getattr(page, "number", 0)]
+
+        target_xref = getattr(field_identifier, "xref", None) if hasattr(field_identifier, "xref") else (field_identifier if isinstance(field_identifier, int) else None)
+        target_name = getattr(field_identifier, "field_name", None) if hasattr(field_identifier, "field_name") else (field_identifier if isinstance(field_identifier, str) else None)
+
+        x0, y0, x1, y1 = new_rect
+        target_fitz_rect = fitz.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+        updated = False
+        for p_idx in pages_to_check:
+            page = doc.load_page(p_idx) if hasattr(target, "load_page") else target
+            for w in list(page.widgets()):
+                match = False
+                if target_xref is not None and getattr(w, "xref", None) == target_xref:
+                    match = True
+                elif target_name is not None and getattr(w, "field_name", None) == target_name:
+                    match = True
+                if match:
+                    w.rect = target_fitz_rect
+                    if not getattr(w, 'border_color', None):
+                        w.border_color = (0.35, 0.35, 0.35)
+                        w.border_width = 1.0
+                        w.border_style = "S"
+                        if not getattr(w, 'fill_color', None):
+                            w.fill_color = (1.0, 1.0, 1.0)
+                    w.update()
+                    updated = True
+                    if doc is not None:
+                        invalidate_page_cache(doc, p_idx)
+                    break
+            if updated:
+                break
+        return updated
+    except Exception as e:
+        print(f"Error updating form widget geometry: {e}")
+        return False
+
+
+def update_form_widget_choices(
+    target: Any,
+    field_identifier: Any,
+    new_choices: List[str],
+    page_index: Optional[int] = None
+) -> bool:
+    """Update choice values (options) of a combobox/listbox form widget."""
+    if target is None:
+        return False
+    try:
+        if hasattr(target, "load_page"):
+            doc = target
+            if page_index is not None:
+                pages_to_check = [page_index]
+            else:
+                pages_to_check = list(range(len(doc)))
+        else:
+            page = target
+            doc = getattr(page, "parent", None)
+            pages_to_check = [getattr(page, "number", 0)]
+
+        target_xref = getattr(field_identifier, "xref", None) if hasattr(field_identifier, "xref") else (field_identifier if isinstance(field_identifier, int) else None)
+        target_name = getattr(field_identifier, "field_name", None) if hasattr(field_identifier, "field_name") else (field_identifier if isinstance(field_identifier, str) else None)
+
+        updated = False
+        for p_idx in pages_to_check:
+            page = doc.load_page(p_idx) if hasattr(target, "load_page") else target
+            for w in list(page.widgets()):
+                match = False
+                if target_xref is not None and getattr(w, "xref", None) == target_xref:
+                    match = True
+                elif target_name is not None and getattr(w, "field_name", None) == target_name:
+                    match = True
+                if match:
+                    w.choice_values = list(new_choices)
+                    if new_choices and w.field_value not in new_choices:
+                        w.field_value = new_choices[0]
+                    if not getattr(w, 'border_color', None):
+                        w.border_color = (0.35, 0.35, 0.35)
+                        w.border_width = 1.0
+                        w.border_style = "S"
+                        if not getattr(w, 'fill_color', None):
+                            w.fill_color = (1.0, 1.0, 1.0)
+                    w.update()
+                    updated = True
+                    if doc is not None:
+                        invalidate_page_cache(doc, p_idx)
+                    break
+            if updated:
+                break
+        return updated
+    except Exception as e:
+        print(f"Error updating form widget choices: {e}")
+        return False
+
+
 
 
 _page_snapshots: dict = {}

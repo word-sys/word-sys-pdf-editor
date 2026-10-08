@@ -34,6 +34,7 @@ class MockWindow:
         self.form_fields = []
         self.selected_form_field = None
         self._form_field_overlay_widgets = {}
+        self._enable_persistent_form_overlays = True
         self._syncing_form_field = False
         self.undo_manager = UndoManager(self)
         self.pdf_overlay = Gtk.Overlay()
@@ -57,6 +58,7 @@ class MockWindow:
     _commit_pending_form_field_edit = PdfEditorWindow._commit_pending_form_field_edit
     _focus_form_field_overlay = PdfEditorWindow._focus_form_field_overlay
     _create_form_field_overlays = PdfEditorWindow._create_form_field_overlays
+    _update_form_field_overlay_interactivity = PdfEditorWindow._update_form_field_overlay_interactivity
     _find_form_field_at_pos = PdfEditorWindow._find_form_field_at_pos
 
 
@@ -420,6 +422,7 @@ class TestInteractiveFormInputs(unittest.TestCase):
         app.register(None)
 
         win = PdfEditorWindow(application=app)
+        win._enable_persistent_form_overlays = True
         doc = fitz.open(self.pdf_path)
         win._active_session.doc = doc
         win._active_session.pdf_path = self.pdf_path

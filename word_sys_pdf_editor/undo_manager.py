@@ -1,9 +1,13 @@
 import copy
 import re
+from typing import Any, Optional, List, Dict, Tuple
 try:
     import pymupdf as fitz
 except ImportError:
     import fitz
+import gi
+gi.require_version('Gtk', '4.0')
+from gi.repository import Gtk
 from . import pdf_handler
 from .models import EditableText, EditableShape, EditableStroke, EditableImage, AcroFormField
 from .i18n import _
@@ -695,6 +699,221 @@ class EditFormFieldCommand(Command):
         self.window.document_modified = True
         if hasattr(self.window, '_refresh_form_field_widget_value'):
             self.window._refresh_form_field_widget_value(self.target_field)
+        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+            self.window.pdf_view.queue_draw()
+        if hasattr(self.window, '_update_ui_state'):
+            self.window._update_ui_state()
+
+
+class AddFormFieldCommand(Command):
+    """Command representing insertion of a new AcroForm interactive field."""
+    def __init__(self, window, page_number: int, field_type: str, rect: tuple,
+                 field_name: str, default_value: Any = None, choice_values: Optional[list] = None,
+                 is_multiline: bool = False):
+        super().__init__(window)
+        self.page_number = page_number
+        self.field_type = field_type
+        self.rect = rect
+        self.field_name = field_name
+        self.default_value = default_value
+        self.choice_values = choice_values
+        self.is_multiline = is_multiline
+        self.created_xref = None
+
+    def execute(self):
+        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+            return
+        w = pdf_handler.add_form_widget(
+            self.window.doc,
+            self.page_number,
+            self.field_type,
+            self.rect,
+            self.field_name,
+            self.default_value,
+            choice_values=self.choice_values,
+            is_multiline=self.is_multiline
+        )
+        if w:
+            self.created_xref = getattr(w, "xref", None)
+        self._refresh()
+
+    def undo(self):
+        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+            return
+        pdf_handler.delete_form_widget(
+            self.window.doc,
+            self.created_xref or self.field_name,
+            page_index=self.page_number
+        )
+        if getattr(self.window, 'selected_form_field', None) and (
+            getattr(self.window.selected_form_field, 'xref', None) == self.created_xref or
+            getattr(self.window.selected_form_field, 'field_name', None) == self.field_name
+        ):
+            self.window.selected_form_field = None
+        self._refresh()
+
+    def _refresh(self):
+        self.window.document_modified = True
+        if hasattr(self.window, '_load_acroform_fields_for_page'):
+            self.window._load_acroform_fields_for_page(self.page_number)
+        else:
+            fields, _ = pdf_handler.extract_acroform_fields(self.window.doc, page_index=self.window.current_page_index)
+            self.window.form_fields = fields
+            if hasattr(self.window, '_create_form_field_overlays'):
+                self.window._create_form_field_overlays()
+        if hasattr(self.window, '_refresh_thumbnail'):
+            self.window._refresh_thumbnail(self.page_number)
+        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+            self.window.pdf_view.queue_draw()
+        if hasattr(self.window, '_update_ui_state'):
+            self.window._update_ui_state()
+
+
+class DeleteFormFieldCommand(Command):
+    """Command representing deletion of an AcroForm interactive field."""
+    def __init__(self, window, target_field: AcroFormField):
+        super().__init__(window)
+        self.page_number = target_field.page_number
+        self.field_type = target_field.field_type
+        self.rect = target_field.rect
+        self.field_name = target_field.field_name
+        self.field_value = target_field.value
+        self.choice_values = target_field.choice_values
+        self.is_multiline = getattr(target_field, 'is_multiline', False)
+        self.xref = getattr(target_field, 'xref', None)
+
+    def execute(self):
+        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+            return
+        pdf_handler.delete_form_widget(
+            self.window.doc,
+            self.xref or self.field_name,
+            page_index=self.page_number
+        )
+        if getattr(self.window, 'selected_form_field', None) and (
+            getattr(self.window.selected_form_field, 'xref', None) == self.xref or
+            getattr(self.window.selected_form_field, 'field_name', None) == self.field_name
+        ):
+            self.window.selected_form_field = None
+        self._refresh()
+
+    def undo(self):
+        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+            return
+        w = pdf_handler.add_form_widget(
+            self.window.doc,
+            self.page_number,
+            self.field_type,
+            self.rect,
+            self.field_name,
+            self.field_value,
+            choice_values=self.choice_values,
+            is_multiline=self.is_multiline
+        )
+        if w:
+            self.xref = getattr(w, "xref", self.xref)
+        self._refresh()
+
+    def _refresh(self):
+        self.window.document_modified = True
+        if hasattr(self.window, '_load_acroform_fields_for_page'):
+            self.window._load_acroform_fields_for_page(self.page_number)
+        else:
+            fields, _ = pdf_handler.extract_acroform_fields(self.window.doc, page_index=self.window.current_page_index)
+            self.window.form_fields = fields
+            if hasattr(self.window, '_create_form_field_overlays'):
+                self.window._create_form_field_overlays()
+        if hasattr(self.window, '_refresh_thumbnail'):
+            self.window._refresh_thumbnail(self.page_number)
+        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+            self.window.pdf_view.queue_draw()
+        if hasattr(self.window, '_update_ui_state'):
+            self.window._update_ui_state()
+
+
+class MoveResizeFormFieldCommand(Command):
+    """Command representing repositioning or resizing of an AcroForm interactive field."""
+    def __init__(self, window, target_field: AcroFormField, old_rect: tuple, new_rect: tuple):
+        super().__init__(window)
+        self.page_number = getattr(target_field, 'page_number', getattr(window, 'current_page_index', 0))
+        self.target_field = target_field
+        self.old_rect = old_rect
+        self.new_rect = new_rect
+        self.xref = getattr(target_field, 'xref', None)
+        self.field_name = getattr(target_field, 'field_name', '')
+
+    def execute(self):
+        self._apply_rect(self.new_rect)
+
+    def undo(self):
+        self._apply_rect(self.old_rect)
+
+    def _apply_rect(self, rect: tuple):
+        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+            return
+        self.target_field.rect = rect
+        pdf_handler.update_form_widget_geometry(
+            self.window.doc,
+            self.xref or self.field_name,
+            rect,
+            page_index=self.page_number
+        )
+        self.window.document_modified = True
+        if hasattr(self.window, '_update_tab_dirty_state'):
+            self.window._update_tab_dirty_state()
+        if hasattr(self.window, '_update_form_field_overlay_positions'):
+            self.window._update_form_field_overlay_positions()
+        if hasattr(self.window, '_refresh_thumbnail'):
+            self.window._refresh_thumbnail(self.page_number)
+        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+            self.window.pdf_view.queue_draw()
+        if hasattr(self.window, '_update_ui_state'):
+            self.window._update_ui_state()
+
+
+class EditFormFieldChoicesCommand(Command):
+    """Command representing modification of choice options for a dropdown/combobox field."""
+    def __init__(self, window, target_field: AcroFormField, old_choices: list, new_choices: list):
+        super().__init__(window)
+        self.page_number = getattr(target_field, 'page_number', getattr(window, 'current_page_index', 0))
+        self.target_field = target_field
+        self.old_choices = list(old_choices)
+        self.new_choices = list(new_choices)
+        self.xref = getattr(target_field, 'xref', None)
+        self.field_name = getattr(target_field, 'field_name', '')
+
+    def execute(self):
+        self._apply_choices(self.new_choices)
+
+    def undo(self):
+        self._apply_choices(self.old_choices)
+
+    def _apply_choices(self, choices: list):
+        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+            return
+        self.target_field.choice_values = list(choices)
+        if getattr(self.target_field, 'value', '') not in choices and choices:
+            self.target_field.value = choices[0]
+        pdf_handler.update_form_widget_choices(
+            self.window.doc,
+            self.xref or self.field_name,
+            choices,
+            page_index=self.page_number
+        )
+        self.window.document_modified = True
+        if hasattr(self.window, '_update_tab_dirty_state'):
+            self.window._update_tab_dirty_state()
+        if hasattr(self.window, '_form_field_overlay_widgets'):
+            ed = self.window._form_field_overlay_widgets.get(getattr(self.target_field, 'field_id', None))
+            if ed and isinstance(ed.get("widget"), Gtk.DropDown):
+                dd = ed["widget"]
+                dd.set_model(Gtk.StringList.new(choices))
+                ed["display_items"] = list(choices)
+                ed["export_items"] = list(choices)
+                if dd.get_selected() >= len(choices):
+                    dd.set_selected(0)
+        if hasattr(self.window, '_update_form_builder_controls_for_selected'):
+            self.window._update_form_builder_controls_for_selected()
         if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
             self.window.pdf_view.queue_draw()
         if hasattr(self.window, '_update_ui_state'):
