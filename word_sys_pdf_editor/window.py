@@ -1,6 +1,6 @@
 import copy
 from typing import Optional, List, Dict, Tuple, Any
-from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand
+from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand, EditFormFieldCommand
 from .i18n import _, get_language, get_setting, set_setting
 
 import gi
@@ -70,6 +70,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_shape = None
         self.selected_stroke = None
         self.selected_form_field = None
+        self._form_field_overlay_widgets = {}
+        self._syncing_form_field = False
         self.text_edit_popover = None
         self.text_edit_view = None
         self.is_saving = False
@@ -195,6 +197,41 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             }
 
             .tool-button.active { background-color: @theme_selected_bg_color; }
+            .acroform-entry {
+                background-color: rgba(255, 255, 255, 0.95);
+                border: 1px solid rgba(53, 132, 228, 0.6);
+                border-radius: 3px;
+                padding: 1px 4px;
+                min-height: 18px;
+                color: #111111;
+                font-size: 13px;
+            }
+            .acroform-entry:focus {
+                border: 2px solid @accent_color;
+                background-color: #ffffff;
+            }
+            .acroform-entry.readonly {
+                background-color: rgba(240, 240, 240, 0.75);
+                border: 1px dashed rgba(130, 130, 130, 0.5);
+                color: #555555;
+            }
+            .acroform-frame {
+                background-color: rgba(255, 255, 255, 0.95);
+                border: 1px solid rgba(53, 132, 228, 0.6);
+                border-radius: 3px;
+            }
+            .acroform-textview {
+                background-color: transparent;
+                padding: 2px;
+                font-family: inherit;
+                font-size: 13px;
+                color: #111111;
+            }
+            .acroform-check {
+                background: transparent;
+                padding: 0;
+                margin: 0;
+            }
         """)
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), css_provider,
@@ -237,6 +274,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.commit_pending_format_change()
                 if self.inline_editor_widget is not None:
                     self._apply_and_hide_editor(force_apply=True)
+                self._clear_form_field_overlays()
                 if hasattr(self, 'pdf_scroll') and self.pdf_scroll:
                     v_adj = self.pdf_scroll.get_vadjustment()
                     h_adj = self.pdf_scroll.get_hadjustment()
@@ -993,6 +1031,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                         hexpand=True, vexpand=True)
         self.pdf_view.set_draw_func(self.draw_pdf_page)
         self.pdf_view.add_css_class('pdf-view')
+        self.pdf_view.connect("notify::allocated-width", lambda *a: self._update_form_field_overlay_positions())
+        self.pdf_view.connect("notify::allocated-height", lambda *a: self._update_form_field_overlay_positions())
 
         self.pdf_overlay = Gtk.Overlay()
         self.pdf_overlay.set_child(self.pdf_view)
@@ -2012,6 +2052,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_stroke = None
         self.selected_form_field = None
         self.hide_text_editor()
+        self._clear_form_field_overlays()
 
         if reload_objects:
             texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
@@ -2065,6 +2106,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self._sync_thumbnail_selection()
         self._update_ui_state()
+        self._create_form_field_overlays()
         
         fallback_font = None
         for text_obj in self.editable_texts:
@@ -2096,6 +2138,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.temp_stroke = None
         self.selected_form_field = None
         self.hide_text_editor()
+        self._clear_form_field_overlays()
         self.pdf_view.set_content_width(1)
         self.pdf_view.set_content_height(1)
         self.pdf_view.queue_draw()
@@ -2180,6 +2223,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.status_label.set_text(_("saving").format(os.path.basename(save_path)))
         if self.inline_editor_widget is not None:
             self._apply_and_hide_editor(force_apply=True)
+        if hasattr(self, '_commit_pending_form_field_edit'):
+            self._commit_pending_form_field_edit()
 
         success, error_msg = pdf_handler.save_document(self.doc, save_path, incremental=False)
         self.is_saving = False
@@ -2984,6 +3029,350 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if x1 <= page_x <= x2 and y1 <= page_y <= y2:
                 return field
         return None
+
+    def _compute_form_field_screen_geometry(self, field):
+        """Compute pixel position and size for an AcroFormField on the overlay."""
+        if not self.doc or not (0 <= self.current_page_index < len(self.doc)):
+            return 0, 0, 0, 0
+        da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
+        da_h = max(self.pdf_view.get_allocated_height(), self.current_pdf_page_height)
+        page_offset_x = max(0.0, (da_w - self.current_pdf_page_width) / 2.0)
+        page_offset_y = max(0.0, (da_h - self.current_pdf_page_height) / 2.0)
+
+        try:
+            page = self.doc[field.page_number]
+            vis_rect = (fitz.Rect(field.rect) * page.rotation_matrix).normalize()
+        except Exception:
+            vis_rect = fitz.Rect(field.rect).normalize()
+
+        wx = int(page_offset_x + vis_rect.x0 * self.zoom_level)
+        wy = int(page_offset_y + vis_rect.y0 * self.zoom_level)
+        ww = max(1, int(vis_rect.width * self.zoom_level))
+        wh = max(1, int(vis_rect.height * self.zoom_level))
+
+        if getattr(field, 'field_type', 'text') in ("checkbox", "radio"):
+            ww = max(18, ww)
+            wh = max(18, wh)
+        else:
+            ww = max(30, ww)
+            wh = max(18, wh)
+
+        return wx, wy, ww, wh
+
+    def _clear_form_field_overlays(self):
+        """Remove all existing interactive form field overlay widgets."""
+        if not hasattr(self, '_form_field_overlay_widgets') or not self._form_field_overlay_widgets:
+            return
+        if hasattr(self, 'pdf_overlay') and self.pdf_overlay:
+            for item in list(self._form_field_overlay_widgets.values()):
+                container = item.get("container")
+                if container:
+                    try:
+                        self.pdf_overlay.remove_overlay(container)
+                    except Exception:
+                        pass
+        self._form_field_overlay_widgets.clear()
+
+    def _update_form_field_overlay_positions(self):
+        """Recalculate and update position and size of all form field overlay widgets."""
+        if not hasattr(self, '_form_field_overlay_widgets') or not self._form_field_overlay_widgets:
+            return
+        if not self.doc or not (0 <= self.current_page_index < len(self.doc)):
+            return
+
+        for entry_data in list(self._form_field_overlay_widgets.values()):
+            field = entry_data.get("field")
+            container = entry_data.get("container")
+            if not field or not container:
+                continue
+            wx, wy, ww, wh = self._compute_form_field_screen_geometry(field)
+            container.set_margin_start(wx)
+            container.set_margin_top(wy)
+            container.set_size_request(ww, wh)
+
+    def _sync_form_field_value(self, field, new_value, record_undo=False, old_val_override=None):
+        """Update field value in memory and in PyMuPDF doc, marking document modified."""
+        if getattr(self, '_syncing_form_field', False):
+            return
+        old_val = old_val_override if old_val_override is not None else field.value
+        if old_val == new_value:
+            return
+
+        self._syncing_form_field = True
+        try:
+            field.set_value(new_value)
+            if self.doc:
+                pdf_handler.update_acroform_field_value(
+                    self.doc,
+                    field.page_number,
+                    field.xref,
+                    new_value
+                )
+            self.document_modified = True
+            if record_undo:
+                cmd = EditFormFieldCommand(self, field, old_val, new_value)
+                self.undo_manager.add_command(cmd)
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
+            self._update_ui_state()
+        finally:
+            self._syncing_form_field = False
+
+    def _refresh_form_field_widget_value(self, field):
+        """Update displayed value in overlay widget to match field.value without feedback loop."""
+        if not hasattr(self, '_form_field_overlay_widgets') or not field:
+            return
+        fid = getattr(field, 'field_id', None)
+        entry_data = self._form_field_overlay_widgets.get(fid)
+        if not entry_data:
+            for data in self._form_field_overlay_widgets.values():
+                if getattr(data.get("field"), 'xref', -1) == getattr(field, 'xref', -2):
+                    entry_data = data
+                    break
+        if not entry_data:
+            return
+
+        widget = entry_data.get("widget")
+        if not widget:
+            return
+
+        self._syncing_form_field = True
+        try:
+            entry_data["current_val"] = field.value
+            entry_data["initial_val"] = field.value
+            if isinstance(widget, Gtk.Entry):
+                val_str = str(field.value if field.value is not None else "")
+                if widget.get_text() != val_str:
+                    widget.set_text(val_str)
+            elif isinstance(widget, Gtk.TextView):
+                val_str = str(field.value if field.value is not None else "")
+                buf = widget.get_buffer()
+                start, end = buf.get_bounds()
+                if buf.get_text(start, end, True) != val_str:
+                    buf.set_text(val_str)
+            elif isinstance(widget, Gtk.CheckButton):
+                active_bool = bool(field.is_checked)
+                if widget.get_active() != active_bool:
+                    widget.set_active(active_bool)
+        finally:
+            self._syncing_form_field = False
+
+    def _commit_pending_form_field_edit(self):
+        """Commit any uncommitted text changes in active form field overlays."""
+        if not hasattr(self, '_form_field_overlay_widgets') or not self._form_field_overlay_widgets:
+            return
+        for entry_data in list(self._form_field_overlay_widgets.values()):
+            field = entry_data.get("field")
+            cur = entry_data.get("current_val")
+            init = entry_data.get("initial_val")
+            if field and cur is not None and cur != init:
+                cmd = EditFormFieldCommand(self, field, init, cur)
+                self.undo_manager.add_command(cmd)
+                entry_data["initial_val"] = cur
+
+    def _focus_form_field_overlay(self, field):
+        """Focus the overlay widget corresponding to field if available."""
+        if not hasattr(self, '_form_field_overlay_widgets') or not field:
+            return
+        fid = getattr(field, 'field_id', None)
+        entry_data = self._form_field_overlay_widgets.get(fid)
+        if not entry_data:
+            for data in self._form_field_overlay_widgets.values():
+                if getattr(data.get("field"), 'xref', -1) == getattr(field, 'xref', -2):
+                    entry_data = data
+                    break
+        if entry_data and entry_data.get("widget"):
+            try:
+                entry_data["widget"].grab_focus()
+            except Exception:
+                pass
+
+    def _create_form_field_overlays(self):
+        """Create and place GTK overlay widgets for form fields on current page."""
+        self._clear_form_field_overlays()
+        if not self.doc or not hasattr(self, 'pdf_overlay') or not self.pdf_overlay:
+            return
+        if not (0 <= self.current_page_index < len(self.doc)):
+            return
+
+        current_fields = [
+            f for f in getattr(self, 'form_fields', [])
+            if getattr(f, 'page_number', self.current_page_index) == self.current_page_index
+        ]
+
+        for field in current_fields:
+            ftype = getattr(field, 'field_type', 'text')
+            wx, wy, ww, wh = self._compute_form_field_screen_geometry(field)
+
+            if ftype == "text":
+                if getattr(field, 'is_multiline', False):
+                    scroll = Gtk.ScrolledWindow()
+                    scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+                    scroll.add_css_class("acroform-frame")
+                    scroll.set_halign(Gtk.Align.START)
+                    scroll.set_valign(Gtk.Align.START)
+                    scroll.set_margin_start(wx)
+                    scroll.set_margin_top(wy)
+                    scroll.set_size_request(ww, wh)
+
+                    tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
+                    tv.add_css_class("acroform-textview")
+                    if getattr(field, 'is_read_only', False):
+                        tv.set_editable(False)
+                    buf = tv.get_buffer()
+                    buf.set_text(str(field.value if field.value is not None else ""))
+                    scroll.set_child(tv)
+
+                    container = scroll
+                    input_widget = tv
+
+                    entry_data = {
+                        "field": field,
+                        "container": container,
+                        "widget": input_widget,
+                        "initial_val": field.value,
+                        "current_val": field.value,
+                    }
+
+                    def _on_tv_changed(b, ed=entry_data):
+                        if getattr(self, '_syncing_form_field', False):
+                            return
+                        start, end = b.get_bounds()
+                        txt = b.get_text(start, end, True)
+                        ed["current_val"] = txt
+                        self._sync_form_field_value(ed["field"], txt, record_undo=False)
+
+                    def _on_tv_focus_leave(ctrl, ed=entry_data):
+                        if getattr(self, '_syncing_form_field', False):
+                            return
+                        cur = ed.get("current_val", "")
+                        init = ed.get("initial_val", "")
+                        if cur != init:
+                            cmd = EditFormFieldCommand(self, ed["field"], init, cur)
+                            self.undo_manager.add_command(cmd)
+                            ed["initial_val"] = cur
+
+                    def _on_tv_focus_enter(ctrl, ed=entry_data):
+                        ed["initial_val"] = ed.get("current_val", ed["field"].value)
+                        self.selected_form_field = ed["field"]
+                        if hasattr(self, 'pdf_view') and self.pdf_view:
+                            self.pdf_view.queue_draw()
+                        self._update_ui_state()
+
+                    buf.connect("changed", _on_tv_changed)
+                    focus_ctrl = Gtk.EventControllerFocus()
+                    focus_ctrl.connect("enter", _on_tv_focus_enter)
+                    focus_ctrl.connect("leave", _on_tv_focus_leave)
+                    tv.add_controller(focus_ctrl)
+
+                else:
+                    entry = Gtk.Entry()
+                    entry.add_css_class("acroform-entry")
+                    if getattr(field, 'is_read_only', False):
+                        entry.set_editable(False)
+                        entry.add_css_class("readonly")
+                    if getattr(field, 'is_password', False):
+                        entry.set_visibility(False)
+                    if getattr(field, 'max_length', 0) > 0:
+                        entry.set_max_length(field.max_length)
+
+                    entry.set_text(str(field.value if field.value is not None else ""))
+                    entry.set_halign(Gtk.Align.START)
+                    entry.set_valign(Gtk.Align.START)
+                    entry.set_margin_start(wx)
+                    entry.set_margin_top(wy)
+                    entry.set_size_request(ww, wh)
+
+                    container = entry
+                    input_widget = entry
+
+                    entry_data = {
+                        "field": field,
+                        "container": container,
+                        "widget": input_widget,
+                        "initial_val": field.value,
+                        "current_val": field.value,
+                    }
+
+                    def _on_entry_changed(w, ed=entry_data):
+                        if getattr(self, '_syncing_form_field', False):
+                            return
+                        txt = w.get_text()
+                        ed["current_val"] = txt
+                        self._sync_form_field_value(ed["field"], txt, record_undo=False)
+
+                    def _on_entry_focus_leave(ctrl, ed=entry_data):
+                        if getattr(self, '_syncing_form_field', False):
+                            return
+                        cur = ed.get("current_val", "")
+                        init = ed.get("initial_val", "")
+                        if cur != init:
+                            cmd = EditFormFieldCommand(self, ed["field"], init, cur)
+                            self.undo_manager.add_command(cmd)
+                            ed["initial_val"] = cur
+
+                    def _on_entry_focus_enter(ctrl, ed=entry_data):
+                        ed["initial_val"] = ed.get("current_val", ed["field"].value)
+                        self.selected_form_field = ed["field"]
+                        if hasattr(self, 'pdf_view') and self.pdf_view:
+                            self.pdf_view.queue_draw()
+                        self._update_ui_state()
+
+                    entry.connect("changed", _on_entry_changed)
+                    entry.connect("activate", lambda w, ed=entry_data: _on_entry_focus_leave(None, ed))
+                    focus_ctrl = Gtk.EventControllerFocus()
+                    focus_ctrl.connect("enter", _on_entry_focus_enter)
+                    focus_ctrl.connect("leave", _on_entry_focus_leave)
+                    entry.add_controller(focus_ctrl)
+
+                self.pdf_overlay.add_overlay(container)
+                self._form_field_overlay_widgets[field.field_id] = entry_data
+
+            elif ftype in ("checkbox", "radio"):
+                chk = Gtk.CheckButton()
+                chk.add_css_class("acroform-check")
+                chk.set_active(bool(field.is_checked))
+                if getattr(field, 'is_read_only', False):
+                    chk.set_sensitive(False)
+                chk.set_halign(Gtk.Align.START)
+                chk.set_valign(Gtk.Align.START)
+                chk.set_margin_start(wx)
+                chk.set_margin_top(wy)
+                chk.set_size_request(ww, wh)
+
+                container = chk
+                input_widget = chk
+
+                entry_data = {
+                    "field": field,
+                    "container": container,
+                    "widget": input_widget,
+                    "initial_val": field.value,
+                    "current_val": field.value,
+                }
+
+                def _on_check_toggled(btn, ed=entry_data):
+                    if getattr(self, '_syncing_form_field', False):
+                        return
+                    new_val = btn.get_active()
+                    old_val = ed["field"].value
+                    ed["current_val"] = new_val
+                    ed["initial_val"] = new_val
+                    self._sync_form_field_value(ed["field"], new_val, record_undo=True, old_val_override=old_val)
+
+                def _on_check_focus_enter(ctrl, ed=entry_data):
+                    self.selected_form_field = ed["field"]
+                    if hasattr(self, 'pdf_view') and self.pdf_view:
+                        self.pdf_view.queue_draw()
+                    self._update_ui_state()
+
+                chk.connect("toggled", _on_check_toggled)
+                focus_ctrl = Gtk.EventControllerFocus()
+                focus_ctrl.connect("enter", _on_check_focus_enter)
+                chk.add_controller(focus_ctrl)
+
+                self.pdf_overlay.add_overlay(container)
+                self._form_field_overlay_widgets[field.field_id] = entry_data
 
     def _find_resize_handle_at_pos(self, drawn_x, drawn_y, selected_obj):
         """Find resize handle or rotation stalk handle at pos."""
@@ -4082,6 +4471,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         # Reposition active inline editor if open
         self._update_inline_editor_position()
+        self._update_form_field_overlay_positions()
 
         # Calculate new offsets for new page size vs viewport
         new_da_w = max(new_page_w, int(vp_w))
@@ -4347,6 +4737,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 clicked_form_field = self._find_form_field_at_pos(page_x_unzoomed, page_y_unzoomed)
                 if clicked_form_field:
                     self.selected_form_field = clicked_form_field
+                    self._focus_form_field_overlay(clicked_form_field)
                     self.view_sel_start = None
                     self.view_sel_rect = None
                     self.view_selected_text = ""
@@ -4451,6 +4842,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_stroke_format_controls(self.selected_stroke)
             elif clicked_form_field:
                 self.selected_form_field = clicked_form_field
+                self._focus_form_field_overlay(clicked_form_field)
                 self.selected_text = None
                 self.selected_image = None
                 self.selected_shape = None
@@ -4929,10 +5321,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._set_zoom(1.0, focal_point=getattr(self, '_last_pointer_pos', None))
             return True
 
-        elif keyval == Gdk.KEY_Delete:
+        is_text_focused = (
+            (self.inline_editor_widget is not None)
+            or isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView))
+        )
+
+        if keyval == Gdk.KEY_Delete:
             self.commit_pending_format_change()
             obj_to_delete = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
-            if obj_to_delete and not (self.inline_editor_widget is not None):
+            if obj_to_delete and not is_text_focused:
                 self._handle_delete_with_confirmation(obj_to_delete, "delete_confirm_title")
                 return True
             elif self.selected_image:
@@ -4949,7 +5346,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.selected_image = None
                     self._update_ui_state()
         # Arrow key nudge movement (1pt normal / 10pt with Shift) for selected objects
-        if self.inline_editor_widget is None and keyval in (Gdk.KEY_Left, Gdk.KEY_Right, Gdk.KEY_Up, Gdk.KEY_Down):
+        if not is_text_focused and keyval in (Gdk.KEY_Left, Gdk.KEY_Right, Gdk.KEY_Up, Gdk.KEY_Down):
             selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
             if selected_obj:
                 step = 10.0 if bool(state & Gdk.ModifierType.SHIFT_MASK) else 1.0
@@ -4996,7 +5393,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 return True
 
         # Single-key tool selection shortcuts (when not editing text)
-        if not ctrl and not (state & Gdk.ModifierType.ALT_MASK) and self.inline_editor_widget is None:
+        if not ctrl and not (state & Gdk.ModifierType.ALT_MASK) and not is_text_focused:
             tool_shortcuts = {
                 Gdk.KEY_v: "add_checkmark",
                 Gdk.KEY_V: "add_checkmark",
@@ -5698,6 +6095,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     
     def commit_pending_format_change(self):
         """Record pending text/shape style modifications into undo history."""
+        if hasattr(self, '_commit_pending_form_field_edit'):
+            self._commit_pending_form_field_edit()
         if self.pending_format_change_obj and self.before_format_change_state:
             current_state = copy.deepcopy(self.pending_format_change_obj.__dict__)
             

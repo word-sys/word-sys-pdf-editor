@@ -211,6 +211,8 @@ class TestBugsVerification(unittest.TestCase):
         from word_sys_pdf_editor.undo_manager import Command
         self.orig_erase = Command._erase_ghost_if_needed
         Command._erase_ghost_if_needed = patched_erase_ghost_if_needed
+        pdf_handler._page_snapshots.clear()
+        pdf_handler._page_original_links.clear()
 
     def tearDown(self):
         from word_sys_pdf_editor.undo_manager import Command

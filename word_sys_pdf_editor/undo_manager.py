@@ -5,7 +5,7 @@ try:
 except ImportError:
     import fitz
 from . import pdf_handler
-from .models import EditableText, EditableShape, EditableStroke, EditableImage
+from .models import EditableText, EditableShape, EditableStroke, EditableImage, AcroFormField
 from .i18n import _
 
 def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=None):
@@ -250,6 +250,8 @@ class UndoManager:
 
     def undo(self):
         """Undo the command."""
+        if hasattr(self.window, 'commit_pending_format_change'):
+            self.window.commit_pending_format_change()
         if not self.undo_stack:
             return
         command = self.undo_stack.pop()
@@ -260,6 +262,8 @@ class UndoManager:
 
     def redo(self):
         """Redo the command."""
+        if hasattr(self.window, 'commit_pending_format_change'):
+            self.window.commit_pending_format_change()
         if not self.redo_stack:
             return
         command = self.redo_stack.pop()
@@ -663,3 +667,35 @@ class RotateObjectCommand(Command):
         self._apply_rotation(self.old_rotation, self.new_rotation)
         if hasattr(self.window, 'status_label') and self.window.status_label:
             self.window.status_label.set_text(_("status_object_rotation", f"{self.old_rotation:.1f}°"))
+
+
+class EditFormFieldCommand(Command):
+    """Command representing an interactive AcroForm field value modification."""
+    def __init__(self, window, target_field, old_value, new_value):
+        super().__init__(window)
+        self.target_field = target_field
+        self.old_value = old_value
+        self.new_value = new_value
+
+    def execute(self):
+        self._apply_val(self.new_value)
+
+    def undo(self):
+        self._apply_val(self.old_value)
+
+    def _apply_val(self, val):
+        self.target_field.set_value(val)
+        if getattr(self.window, 'doc', None):
+            pdf_handler.update_acroform_field_value(
+                self.window.doc,
+                self.target_field.page_number,
+                self.target_field.xref,
+                val
+            )
+        self.window.document_modified = True
+        if hasattr(self.window, '_refresh_form_field_widget_value'):
+            self.window._refresh_form_field_widget_value(self.target_field)
+        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+            self.window.pdf_view.queue_draw()
+        if hasattr(self.window, '_update_ui_state'):
+            self.window._update_ui_state()
