@@ -22,8 +22,8 @@ from gi.repository import Gtk, Gio, GLib, Adw, Gdk, GdkPixbuf, Pango, GObject, P
 from . import constants
 from . import pdf_handler
 from . import print_handler
-from .welcome_view import WelcomeView 
-from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke, DocumentSession
+from .welcome_view import WelcomeView
+from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke, DocumentSession, AcroFormField
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_confirm_dialog,
     show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog,
@@ -64,10 +64,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.editable_images = []
         self.editable_shapes = []
         self.editable_strokes = []
+        self.form_fields = []
         self.selected_text = None
         self.selected_image = None
         self.selected_shape = None
         self.selected_stroke = None
+        self.selected_form_field = None
         self.text_edit_popover = None
         self.text_edit_view = None
         self.is_saving = False
@@ -290,7 +292,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.tab_bar.set_autohide(False)
                 self.tab_bar.set_visible(True)
             if hasattr(self, 'pdf_scroll'):
-                has_objects = bool(session.editable_texts or session.editable_shapes or session.editable_strokes or session.editable_images or session.is_modified)
+                has_objects = bool(session.editable_texts or session.editable_shapes or session.editable_strokes or session.editable_images or session.form_fields or session.is_modified)
                 self._load_page(session.current_page_index, reload_objects=(not has_objects))
             if hasattr(self, 'thumbnail_selection_model') and self.thumbnail_selection_model:
                 try:
@@ -719,6 +721,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._active_session.editable_strokes = val
 
     @property
+    def form_fields(self):
+        """Active document interactive AcroForm fields."""
+        return self._active_session.form_fields if self._active_session else []
+
+    @form_fields.setter
+    def form_fields(self, val):
+        if self._active_session:
+            self._active_session.form_fields = val
+
+    @property
     def selected_text(self):
         """Active document selected text."""
         return self._active_session.selected_text if self._active_session else None
@@ -757,6 +769,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def selected_stroke(self, val):
         if self._active_session:
             self._active_session.selected_stroke = val
+
+    @property
+    def selected_form_field(self):
+        """Active document selected form field."""
+        return self._active_session.selected_form_field if self._active_session else None
+
+    @selected_form_field.setter
+    def selected_form_field(self, val):
+        if self._active_session:
+            self._active_session.selected_form_field = val
 
     @property
     def view_sel_start(self):
@@ -1987,6 +2009,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_text = None
         self.selected_image = None
         self.selected_shape = None
+        self.selected_stroke = None
+        self.selected_form_field = None
         self.hide_text_editor()
 
         if reload_objects:
@@ -2017,6 +2041,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.editable_strokes = []
             else:
                 self.editable_strokes = strokes
+
+            form_fields, form_fields_error = pdf_handler.extract_acroform_fields(self.doc, page_index)
+            if form_fields_error:
+                print(f"Warning: Could not extract form fields from page {page_index + 1}: {form_fields_error}")
+                self.form_fields = []
+            else:
+                self.form_fields = form_fields
 
         page = self.doc.load_page(page_index)
         self.current_pdf_page_width = int(page.rect.width * self.zoom_level)
@@ -2063,6 +2094,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if self._active_session.pages_model:
                 self._active_session.pages_model.remove_all()
         self.temp_stroke = None
+        self.selected_form_field = None
         self.hide_text_editor()
         self.pdf_view.set_content_width(1)
         self.pdf_view.set_content_height(1)
@@ -2681,6 +2713,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.stroke()
             cr.restore()
 
+        # Render AcroForm field overlays
+        current_fields = [f for f in getattr(self, 'form_fields', []) if getattr(f, 'page_number', self.current_page_index) == self.current_page_index]
+        if current_fields:
+            pdf_handler.draw_acroform_overlay(cr, current_fields, self.zoom_level, active_field=self.selected_form_field)
+
         selected_obj = self.selected_text or self.selected_image or self.selected_shape or self.selected_stroke
         if selected_obj and not self.dragged_object:
             is_image = isinstance(selected_obj, EditableImage)
@@ -2930,6 +2967,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if (x1 - tolerance) <= px <= (x2 + tolerance) and \
                (y1 - tolerance) <= py <= (y2 + tolerance):
                 return stroke
+        return None
+
+    def _find_form_field_at_pos(self, page_x, page_y):
+        """Find interactive form field at page position."""
+        try:
+            coords = self._visual_to_unrotated_page_coords(page_x, page_y)
+            if isinstance(coords, (tuple, list)) and len(coords) == 2:
+                page_x, page_y = coords
+        except Exception:
+            pass
+        for field in reversed(getattr(self, 'form_fields', [])):
+            if getattr(field, 'page_number', self.current_page_index) != self.current_page_index:
+                continue
+            x1, y1, x2, y2 = field.rect
+            if x1 <= page_x <= x2 and y1 <= page_y <= y2:
+                return field
         return None
 
     def _find_resize_handle_at_pos(self, drawn_x, drawn_y, selected_obj):
@@ -4291,12 +4344,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if self.view_mode:
             if n_press == 1:
+                clicked_form_field = self._find_form_field_at_pos(page_x_unzoomed, page_y_unzoomed)
+                if clicked_form_field:
+                    self.selected_form_field = clicked_form_field
+                    self.view_sel_start = None
+                    self.view_sel_rect = None
+                    self.view_selected_text = ""
+                    self.word_selection_mode = False
+                    self.pdf_view.queue_draw()
+                    self._update_ui_state()
+                    return
+
                 clicked_block = pdf_handler.get_block_at_pos(self.doc, self.current_page_index, (page_x_unzoomed, page_y_unzoomed))
                 if clicked_block:
+                    self.selected_form_field = None
                     self.view_sel_rect = clicked_block['bbox']
                     self.view_selected_text = clicked_block['text']
                     self.word_selection_mode = False
                 else:
+                    self.selected_form_field = None
                     self.view_sel_start = None
                     self.view_sel_rect = None
                     self.view_selected_text = ""
@@ -4347,16 +4413,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             clicked_text = self._find_text_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_shape = self._find_shape_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_stroke = self._find_stroke_at_pos(page_x_unzoomed, page_y_unzoomed)
+            clicked_form_field = self._find_form_field_at_pos(page_x_unzoomed, page_y_unzoomed)
 
             if clicked_image:
                 self.selected_image = clicked_image
                 self.selected_text = None
                 self.selected_shape = None
                 self.selected_stroke = None
+                self.selected_form_field = None
             elif clicked_text:
                 self.selected_image = None
                 self.selected_shape = None
                 self.selected_stroke = None
+                self.selected_form_field = None
                 if clicked_text == self.selected_text and n_press > 1:
                     self._show_inline_editor(clicked_text, click_x=x, click_y=y)
                 else:
@@ -4372,17 +4441,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_text = None
                 self.selected_image = None
                 self.selected_stroke = None
+                self.selected_form_field = None
             elif clicked_stroke:
                 self.selected_stroke = clicked_stroke
                 self.selected_shape = None
                 self.selected_text = None
                 self.selected_image = None
+                self.selected_form_field = None
                 self._update_stroke_format_controls(self.selected_stroke)
+            elif clicked_form_field:
+                self.selected_form_field = clicked_form_field
+                self.selected_text = None
+                self.selected_image = None
+                self.selected_shape = None
+                self.selected_stroke = None
             else:
                 self.selected_text = None
                 self.selected_image = None
                 self.selected_shape = None
                 self.selected_stroke = None
+                self.selected_form_field = None
 
             self.pdf_view.queue_draw()
             self._update_ui_state()

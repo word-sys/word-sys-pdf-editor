@@ -13,6 +13,8 @@ import shutil
 import tempfile
 import traceback
 import re
+import uuid
+from typing import Optional, List, Dict, Any, Tuple, Union
 try:
     import anyconvert
     from anyconvert import ConversionMode
@@ -26,7 +28,7 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Gdk', '4.0')
 gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf, Gdk, Pango, PangoCairo
-from .models import EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape, EditableStroke
+from .models import EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape, EditableStroke, AcroFormField
 from .utils import find_specific_font_variant, get_default_unicode_font_path
 from .i18n import _
 
@@ -1169,6 +1171,322 @@ def extract_editable_strokes(doc, page_index):
         error_msg = f"Error extracting strokes from page {page_index}: {e}"
         print(error_msg)
         return [], error_msg
+
+
+_WIDGET_TYPE_MAP = {
+    getattr(fitz, "PDF_WIDGET_TYPE_TEXT", 7): "text",
+    getattr(fitz, "PDF_WIDGET_TYPE_CHECKBOX", 2): "checkbox",
+    getattr(fitz, "PDF_WIDGET_TYPE_COMBOBOX", 3): "combobox",
+    getattr(fitz, "PDF_WIDGET_TYPE_LISTBOX", 4): "listbox",
+    getattr(fitz, "PDF_WIDGET_TYPE_RADIOBUTTON", 5): "radio",
+    getattr(fitz, "PDF_WIDGET_TYPE_BUTTON", 1): "button",
+    getattr(fitz, "PDF_WIDGET_TYPE_SIGNATURE", 6): "signature",
+    getattr(fitz, "PDF_WIDGET_TYPE_UNKNOWN", 0): "unknown",
+}
+
+def _normalize_widget_type(w) -> str:
+    ftype_id = getattr(w, "field_type", None)
+    flags = int(getattr(w, "field_flags", 0) or 0)
+    btn_radio_flag = getattr(fitz, "PDF_BTN_FIELD_IS_RADIO", 98304)
+    if ftype_id == getattr(fitz, "PDF_WIDGET_TYPE_BUTTON", 1) and (flags & btn_radio_flag):
+        return "radio"
+    if ftype_id in _WIDGET_TYPE_MAP:
+        return _WIDGET_TYPE_MAP[ftype_id]
+    type_str = str(getattr(w, "field_type_string", "")).lower()
+    if "text" in type_str:
+        return "text"
+    if "check" in type_str:
+        return "checkbox"
+    if "combo" in type_str:
+        return "combobox"
+    if "list" in type_str:
+        return "listbox"
+    if "radio" in type_str:
+        return "radio"
+    if "button" in type_str:
+        return "button"
+    if "sign" in type_str:
+        return "signature"
+    return "unknown"
+
+def _normalize_widget_color(col):
+    if col is None:
+        return None
+    try:
+        if isinstance(col, (int, float)):
+            g = float(col)
+            return (g, g, g)
+        if isinstance(col, (list, tuple)):
+            if len(col) == 1:
+                g = float(col[0])
+                return (g, g, g)
+            elif len(col) == 3:
+                return (float(col[0]), float(col[1]), float(col[2]))
+            elif len(col) == 4:
+                c, m, y, k = [float(v) for v in col]
+                r = (1.0 - c) * (1.0 - k)
+                g = (1.0 - m) * (1.0 - k)
+                b = (1.0 - y) * (1.0 - k)
+                return (max(0.0, min(1.0, r)), max(0.0, min(1.0, g)), max(0.0, min(1.0, b)))
+    except Exception:
+        pass
+    return None
+
+def has_acroforms(doc) -> bool:
+    """Check if the document contains any interactive AcroForm widgets."""
+    if not doc or getattr(doc, "is_closed", False):
+        return False
+    try:
+        if bool(getattr(doc, "is_form_pdf", False)):
+            return True
+        for p_idx in range(len(doc)):
+            page = doc.load_page(p_idx)
+            for _ in page.widgets():
+                return True
+    except Exception:
+        pass
+    return False
+
+def extract_acroform_fields(doc, page_index=None):
+    """Detect and extract interactive AcroForm fields from a PDF page or entire document."""
+    if doc is None or getattr(doc, "is_closed", False):
+        return [], "No document loaded."
+
+    fields = []
+    try:
+        if page_index is not None:
+            if not (0 <= page_index < len(doc)):
+                return [], f"Invalid page index {page_index}."
+            pages_to_scan = [(page_index, doc.load_page(page_index))]
+        else:
+            pages_to_scan = [(idx, doc.load_page(idx)) for idx in range(len(doc))]
+
+        for p_idx, page in pages_to_scan:
+            for w in page.widgets():
+                try:
+                    rect = (float(w.rect.x0), float(w.rect.y0), float(w.rect.x1), float(w.rect.y1))
+                    field_name = str(w.field_name or "")
+                    field_label = str(getattr(w, "field_label", "") or "")
+                    ftype_id = getattr(w, "field_type", getattr(fitz, "PDF_WIDGET_TYPE_UNKNOWN", 0))
+                    flags = int(getattr(w, "field_flags", 0) or 0)
+                    ftype = _normalize_widget_type(w)
+
+                    val = w.field_value
+                    choices = list(w.choice_values) if getattr(w, "choice_values", None) else []
+                    btn_states = None
+                    if callable(getattr(w, "button_states", None)):
+                        try:
+                            btn_states = w.button_states()
+                        except Exception:
+                            btn_states = None
+
+                    is_ro = bool(flags & getattr(fitz, "PDF_FIELD_IS_READ_ONLY", 1))
+                    is_req = bool(flags & getattr(fitz, "PDF_FIELD_IS_REQUIRED", 2))
+                    is_no_export = bool(flags & getattr(fitz, "PDF_FIELD_IS_NO_EXPORT", 4))
+                    is_multi = bool(flags & getattr(fitz, "PDF_TX_FIELD_IS_MULTILINE", 4096))
+                    is_pwd = bool(flags & getattr(fitz, "PDF_TX_FIELD_IS_PASSWORD", 8192))
+                    is_comb = bool(flags & getattr(fitz, "PDF_TX_FIELD_IS_COMB", 16777216))
+
+                    fontsize = float(getattr(w, "text_fontsize", 0.0) or 0.0)
+                    t_col = _normalize_widget_color(getattr(w, "text_color", None))
+                    f_col = _normalize_widget_color(getattr(w, "fill_color", None))
+                    b_col = _normalize_widget_color(getattr(w, "border_color", None))
+                    b_width = float(getattr(w, "border_width", 1.0) or 1.0)
+                    max_len = int(getattr(w, "text_maxlen", 0) or 0)
+                    xref = int(getattr(w, "xref", 0) or 0)
+
+                    field_id = f"acro_{p_idx}_{xref}_{field_name}" if xref else str(uuid.uuid4())
+
+                    field_obj = AcroFormField(
+                        field_id=field_id,
+                        xref=xref,
+                        page_number=p_idx,
+                        rect=rect,
+                        field_name=field_name,
+                        field_label=field_label,
+                        field_type=ftype,
+                        field_type_id=ftype_id,
+                        value=val,
+                        default_value=val,
+                        choice_values=choices,
+                        button_states=btn_states,
+                        field_flags=flags,
+                        is_read_only=is_ro,
+                        is_required=is_req,
+                        is_no_export=is_no_export,
+                        is_multiline=is_multi,
+                        is_password=is_pwd,
+                        is_comb=is_comb,
+                        max_length=max_len,
+                        text_fontsize=fontsize,
+                        text_color=t_col,
+                        fill_color=f_col,
+                        border_color=b_col,
+                        border_width=b_width,
+                        is_modified=False,
+                    )
+                    fields.append(field_obj)
+                except Exception as w_err:
+                    print(f"Warning: Failed to extract widget on page {p_idx}: {w_err}")
+                    continue
+
+        return fields, None
+    except Exception as e:
+        return [], f"Failed to extract AcroForm fields: {e}"
+
+def update_acroform_field_value(doc, page_index: int, field_identifier: Any, new_value: Any) -> bool:
+    """Update value of an AcroForm field in the document and refresh cache."""
+    if not doc or getattr(doc, "is_closed", False) or not (0 <= page_index < len(doc)):
+        return False
+    try:
+        page = doc.load_page(page_index)
+        target_xref = getattr(field_identifier, "xref", None) if hasattr(field_identifier, "xref") else (field_identifier if isinstance(field_identifier, int) else None)
+        target_name = getattr(field_identifier, "field_name", None) if hasattr(field_identifier, "field_name") else (field_identifier if isinstance(field_identifier, str) else None)
+
+        updated = False
+        for w in page.widgets():
+            match = False
+            if target_xref is not None and getattr(w, "xref", None) == target_xref:
+                match = True
+            elif target_name is not None and getattr(w, "field_name", None) == target_name:
+                match = True
+
+            if match:
+                w.field_value = new_value
+                w.update()
+                updated = True
+                break
+
+        if updated:
+            invalidate_page_cache(doc, page_index)
+            return True
+        return False
+    except Exception as e:
+        print(f"Error updating AcroForm field {field_identifier} on page {page_index}: {e}")
+        return False
+
+def get_acroform_field(doc, page_index: int, field_identifier: Any) -> Optional[AcroFormField]:
+    """Retrieve an extracted AcroFormField matching the identifier on page_index."""
+    fields, _ = extract_acroform_fields(doc, page_index=page_index)
+    target_xref = getattr(field_identifier, "xref", None) if hasattr(field_identifier, "xref") else (field_identifier if isinstance(field_identifier, int) else None)
+    target_name = getattr(field_identifier, "field_name", None) if hasattr(field_identifier, "field_name") else (field_identifier if isinstance(field_identifier, str) else None)
+    target_id = getattr(field_identifier, "field_id", None) if hasattr(field_identifier, "field_id") else (field_identifier if isinstance(field_identifier, str) else None)
+
+    for f in fields:
+        if target_xref is not None and f.xref == target_xref:
+            return f
+        if target_id is not None and f.field_id == target_id:
+            return f
+        if target_name is not None and f.field_name == target_name:
+            return f
+    return None
+
+def export_form_data(doc) -> Dict[str, Any]:
+    """Export all AcroForm field values as a dictionary."""
+    if not doc or getattr(doc, "is_closed", False):
+        return {}
+    data = {}
+    fields, _ = extract_acroform_fields(doc, page_index=None)
+    for f in fields:
+        if f.field_name:
+            data[f.field_name] = f.value
+    return data
+
+def import_form_data(doc, data: Dict[str, Any]) -> int:
+    """Import values from dictionary into document AcroForm fields."""
+    if not doc or not data or getattr(doc, "is_closed", False):
+        return 0
+    count = 0
+    pages_to_invalidate = set()
+    try:
+        for p_idx in range(len(doc)):
+            page = doc.load_page(p_idx)
+            for w in page.widgets():
+                fname = getattr(w, "field_name", None)
+                if fname and fname in data:
+                    w.field_value = data[fname]
+                    w.update()
+                    count += 1
+                    pages_to_invalidate.add(p_idx)
+        for p_idx in pages_to_invalidate:
+            invalidate_page_cache(doc, p_idx)
+    except Exception as e:
+        print(f"Error importing form data: {e}")
+    return count
+
+def draw_acroform_overlay(cr, fields, zoom_level=1.0, active_field=None):
+    """Render interactive AcroForm field overlays with visual cues onto Cairo context."""
+    if not fields:
+        return
+
+    zoom = float(zoom_level) if zoom_level > 0 else 1.0
+    for f in fields:
+        rect = getattr(f, "rect", None)
+        if not rect or len(rect) != 4:
+            continue
+        x1, y1, x2, y2 = rect
+        w = x2 - x1
+        h = y2 - y1
+        if w <= 0 or h <= 0:
+            continue
+
+        cr.save()
+        is_active = (active_field is not None and (
+            f is active_field or
+            getattr(f, "xref", None) == getattr(active_field, "xref", -1) or
+            getattr(f, "field_id", "") == getattr(active_field, "field_id", "")
+        ))
+
+        ftype = getattr(f, "field_type", "text")
+        is_req = getattr(f, "is_required", False)
+        is_ro = getattr(f, "is_read_only", False)
+
+        if is_active:
+            cr.set_source_rgba(0.2, 0.45, 0.9, 0.18)
+            cr.rectangle(x1, y1, w, h)
+            cr.fill()
+            cr.set_source_rgba(0.15, 0.45, 0.9, 0.9)
+            cr.set_line_width(2.0 / zoom)
+            cr.rectangle(x1, y1, w, h)
+            cr.stroke()
+        else:
+            if is_ro:
+                cr.set_source_rgba(0.7, 0.7, 0.7, 0.08)
+                cr.rectangle(x1, y1, w, h)
+                cr.fill()
+                cr.set_source_rgba(0.6, 0.6, 0.6, 0.4)
+                cr.set_line_width(1.0 / zoom)
+                cr.set_dash([3.0 / zoom, 3.0 / zoom])
+                cr.rectangle(x1, y1, w, h)
+                cr.stroke()
+            elif ftype in ("checkbox", "radio"):
+                cr.set_source_rgba(0.3, 0.55, 0.9, 0.08)
+                cr.rectangle(x1, y1, w, h)
+                cr.fill()
+                cr.set_source_rgba(0.3, 0.55, 0.9, 0.5)
+                cr.set_line_width(1.0 / zoom)
+                cr.rectangle(x1, y1, w, h)
+                cr.stroke()
+            else:
+                cr.set_source_rgba(0.22, 0.47, 0.88, 0.08)
+                cr.rectangle(x1, y1, w, h)
+                cr.fill()
+                cr.set_source_rgba(0.25, 0.5, 0.85, 0.4)
+                cr.set_line_width(1.0 / zoom)
+                cr.rectangle(x1, y1, w, h)
+                cr.stroke()
+
+        if is_req:
+            marker_size = min(6.0 / zoom, w * 0.25, h * 0.25)
+            cr.set_source_rgba(0.9, 0.2, 0.2, 0.85)
+            cr.move_to(x1 + w, y1)
+            cr.line_to(x1 + w - marker_size, y1)
+            cr.line_to(x1 + w, y1 + marker_size)
+            cr.close_path()
+            cr.fill()
+
+        cr.restore()
+
 
 _page_snapshots: dict = {}
 _page_original_links: dict = {}
