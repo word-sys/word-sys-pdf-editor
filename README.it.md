@@ -6,6 +6,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPLv3+-blue.svg)](LICENSE)
 [![GitHub All Releases](https://img.shields.io/github/downloads/word-sys/word-sys-pdf-editor/total)](https://github.com/word-sys/word-sys-pdf-editor/releases)
+[![Flathub](https://img.shields.io/flathub/v/io.github.word_sys.word-sys-pdf-editor?logo=flathub)](https://flathub.org/apps/io.github.word_sys.word-sys-pdf-editor)
 
 **word-sys's PDF Editor** è uno strumento semplice e intuitivo sviluppato per Pardus, Debian e altre distribuzioni Linux, focalizzato sulla modifica di testo, immagini e oggetti nei documenti PDF. Sviluppato da zero nello spirito di #MilliTeknolojiHamlesi e TEKNOFEST 2025 per colmare la necessità di un editor PDF libero, semplice e open source nell'ecosistema Linux, word-sys's PDF Editor si rivolge sia a utenti aziendali sia a privati. Svolge la maggior parte delle operazioni essenziali offerte dagli editor a pagamento, include numerose funzioni di facile impiego ed è stato vincitore del **PRIMO POSTO** al concorso di sviluppo Pardus TEKNOFEST 2025.
 
@@ -84,9 +85,27 @@ anyconvert input.pdf -f docx -m canvas -o output.docx
 
 Sono disponibili diverse modalità di installazione per word-sys's PDF Editor:
 
-### 1. Installazione automatica (Metodo consigliato)
+### 1. Flatpak / Flathub (Metodo consigliato)
 
-Il metodo più immediato per le distribuzioni basate su Debian, Ubuntu e Pardus.
+word-sys's PDF Editor è disponibile ufficialmente su [Flathub](https://flathub.org/apps/io.github.word_sys.word-sys-pdf-editor).
+
+<a href="https://flathub.org/apps/io.github.word_sys.word-sys-pdf-editor"><img src="https://dl.flathub.org/assets/badges/flathub-badge-en.svg" alt="Download on Flathub" width="190"/></a>
+
+Installazione tramite Flatpak:
+```bash
+flatpak install flathub io.github.word_sys.word-sys-pdf-editor
+```
+
+Avviare l'applicazione:
+```bash
+flatpak run io.github.word_sys.word-sys-pdf-editor
+```
+
+---
+
+### 2. Pacchetto Debian / Ubuntu / Pardus (.deb)
+
+Il metodo di installazione pacchetti più immediato per le distribuzioni basate su Debian, Ubuntu e Pardus.
 
 1.  Scaricare il pacchetto `.deb` più recente dalla pagina [**Versioni GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). Il nome del file è `word-sys-pdf-editor_1.11.2_amd64.deb` (oppure `_arm64.deb` per ARM64).
 
@@ -108,7 +127,7 @@ Il metodo più immediato per le distribuzioni basate su Debian, Ubuntu e Pardus.
 
 ---
 
-### 2. Pacchetto AppImage e Archivio binario (Secondo metodo consigliato)
+### 3. Pacchetto AppImage e Archivio binario
 
 Questo formato è utilizzabile universalmente su qualsiasi distribuzione Linux.
 
@@ -156,7 +175,7 @@ Questo formato è utilizzabile universalmente su qualsiasi distribuzione Linux.
 
 ---
 
-### 3. Installazione manuale (Per sviluppatori o compilazione da codice sorgente)
+### 4. Installazione manuale (Per sviluppatori o compilazione da codice sorgente)
 
 Adatto agli utenti che preferiscono eseguire l'applicazione dal codice sorgente o contribuire al progetto.
 
