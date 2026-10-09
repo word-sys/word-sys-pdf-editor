@@ -136,6 +136,16 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
             # Only redact text, NEVER redact graphics or images
             page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
 
+            # Clean up existing links overlapping target_object
+            if hasattr(page, 'get_links'):
+                for lk in page.get_links():
+                    l_rect = lk.get('from')
+                    if l_rect and (redact_rect.intersects(l_rect) or redact_rect.contains(l_rect) or l_rect.contains(redact_rect)):
+                        try:
+                            page.delete_link(lk)
+                        except Exception:
+                            pass
+
             # If underline strip exists, redact only vector graphics for the strip, NEVER text
             if strip_rects:
                 for s_rect in strip_rects:

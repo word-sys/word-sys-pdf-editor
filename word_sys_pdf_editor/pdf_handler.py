@@ -555,6 +555,20 @@ def extract_editable_text(doc, page_index):
                         editable_texts.append(editable)
                         print(f"DEBUG: Extracted text segment: '{combined_text}' font='{editable.font_family_base}' color={editable.color} bbox={editable.bbox}")
         
+        # Attach existing PDF link annotations to corresponding text objects
+        page_links = page.get_links() if hasattr(page, 'get_links') else []
+        for editable in editable_texts:
+            if not getattr(editable, 'bbox', None):
+                continue
+            e_rect = fitz.Rect(editable.bbox)
+            for link in page_links:
+                if link.get('kind') == fitz.LINK_URI and link.get('uri'):
+                    l_rect = link.get('from')
+                    if l_rect and (e_rect.intersects(l_rect) or l_rect.contains(e_rect) or e_rect.contains(l_rect)):
+                        editable.link_url = link.get('uri')
+                        editable.original_link_url = editable.link_url
+                        break
+
         print(f"DEBUG: Total text objects extracted from page {page_index}: {len(editable_texts)}")
         return editable_texts, None
     except Exception as e:
@@ -2441,7 +2455,8 @@ def _apply_single_object_to_page(doc, page, obj):
                 else:
                     line_start_x = obj.x
 
-                if not links:
+                has_obj_link = bool(getattr(obj, 'link_url', None))
+                if not links and not has_obj_link:
                     is_justified = (align == 'justify' and box_w and box_w > text_len and i < len(lines) - 1)
                     words = line.split(' ') if is_justified else None
                     if is_justified and words and len(words) > 1:
@@ -2489,23 +2504,29 @@ def _apply_single_object_to_page(doc, page, obj):
                             sp2 = sp2 * mat
                         page.draw_line(sp1, sp2, color=obj.color, width=0.8)
                 else:
-                    segments = []
-                    last_idx = 0
-                    for match in links:
-                        start, end = match.start(), match.end()
-                        if start > last_idx:
-                            segments.append((line[last_idx:start], False))
-                        segments.append((line[start:end], True))
-                        last_idx = end
-                    if last_idx < len(line):
-                        segments.append((line[last_idx:], False))
+                    if not links and has_obj_link:
+                        segments = [(line, True, obj.link_url)]
+                    else:
+                        segments = []
+                        last_idx = 0
+                        for match in links:
+                            start, end = match.start(), match.end()
+                            if start > last_idx:
+                                segments.append((line[last_idx:start], False, None))
+                            segments.append((line[start:end], True, match.group(0)))
+                            last_idx = end
+                        if last_idx < len(line):
+                            segments.append((line[last_idx:], False, None))
                         
                     current_x = line_start_x
-                    for seg_text, is_seg_link in segments:
+                    for seg_item in segments:
+                        seg_text = seg_item[0]
+                        is_seg_link = seg_item[1]
+                        seg_uri = seg_item[2] if len(seg_item) > 2 else (seg_text if is_seg_link else None)
                         if not seg_text:
                             continue
                         
-                        seg_color = (0.0, 0.33, 0.8) if is_seg_link else obj.color
+                        seg_color = obj.color if getattr(obj, 'link_url', None) else ((0.0, 0.33, 0.8) if is_seg_link else obj.color)
                         pos = fitz.Point(current_x, obj.baseline + (i * line_height))
                         page.insert_text(pos, seg_text, fontsize=obj.font_size,
                                          color=seg_color, overlay=True, morph=morph, **font_arg)
@@ -2539,8 +2560,8 @@ def _apply_single_object_to_page(doc, page, obj):
                             y1 = obj.baseline + (i * line_height) + (obj.font_size * 0.2)
                             link_rect = fitz.Rect(current_x, y0, current_x + seg_len, y1)
                             
-                            uri = seg_text
-                            if not uri.startswith(("http://", "https://")):
+                            uri = seg_uri or seg_text
+                            if not uri.startswith(("http://", "https://", "mailto:")):
                                 uri = "https://" + uri
                                 
                             link_from = link_rect.quad * mat if mat else link_rect.quad

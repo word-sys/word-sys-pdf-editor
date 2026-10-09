@@ -191,7 +191,7 @@ def extract_font_properties(font_name: str, flags: int = 0) -> Dict[str, Any]:
 class EditableText:
     """Data model representing extracted or newly added editable text on a PDF page."""
     def __init__(self, x, y, text, font_size=11, font_family="Liberation Sans",
-                 color=(0, 0, 0), span_data=None, is_new=False, baseline=None, rotation=0.0, page_number=None, alignment="left"):
+                 color=(0, 0, 0), span_data=None, is_new=False, baseline=None, rotation=0.0, page_number=None, alignment="left", link_url=None):
         self.x = x
         self.y = y
         self.text = text
@@ -200,6 +200,8 @@ class EditableText:
         self.is_new = is_new
         self.rotation = float(rotation) % 360.0
         self.original_rotation = self.rotation
+        self.link_url = link_url
+        self.original_link_url = link_url
 
         self.original_bbox = span_data.get("bbox") if span_data else None
 
@@ -336,8 +338,18 @@ class EditableText:
 
     @property
     def is_link(self):
-        """Return True if text contains a web URL."""
-        return bool(self.text and re.search(r'https?://', self.text))
+        """Return True if text has a link URL or contains a web URL."""
+        return bool(self.link_url or (self.text and re.search(r'https?://', self.text)))
+
+    def get_link_url(self) -> Optional[str]:
+        """Return effective link URL (explicit link_url or URL matched in text)."""
+        if self.link_url:
+            return self.link_url
+        if self.text:
+            match = re.search(r'https?://[^\s]+', self.text)
+            if match:
+                return match.group(0)
+        return None
 
     def split_at_range(self, start_char, end_char):
         """Split text into segments before, inside, and after a character selection range."""

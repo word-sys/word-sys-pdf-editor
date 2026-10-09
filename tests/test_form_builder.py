@@ -127,6 +127,8 @@ class MockBuilderWindow:
     _find_image_at_pos = PdfEditorWindow._find_image_at_pos
     _find_shape_at_pos = PdfEditorWindow._find_shape_at_pos
     _find_stroke_at_pos = PdfEditorWindow._find_stroke_at_pos
+    _get_link_url_at_pos = PdfEditorWindow._get_link_url_at_pos
+    _open_url = PdfEditorWindow._open_url
     on_drag_begin = PdfEditorWindow.on_drag_begin
     on_drag_update = PdfEditorWindow.on_drag_update
     on_drag_end = PdfEditorWindow.on_drag_end

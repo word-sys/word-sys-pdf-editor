@@ -1360,6 +1360,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.color_button.set_tooltip_text(_("color_tip"))
         self.color_button.connect("color-set", self.on_text_format_changed)
         self.text_format_box.append(self.color_button)
+
+        self.link_button = Gtk.Button.new_from_icon_name("insert-link-symbolic")
+        self.link_button.set_tooltip_text(_("insert_link_tip"))
+        self.link_button.connect("clicked", self.on_insert_edit_link_clicked)
+        self.text_format_box.append(self.link_button)
+
         self.toolbar_row2.append(self.text_format_box)
 
         self.shape_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
@@ -2676,6 +2682,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.set_source_rgba(r, g, b, 1.0)
             
             attr_list = Pango.AttrList()
+
+            if getattr(text_obj, 'link_url', None):
+                color_attr = Pango.attr_foreground_new(0, 0, int((238.0 / 255.0) * 65535))
+                color_attr.start_index = 0
+                color_attr.end_index = 65535
+                attr_list.change(color_attr)
+                u_attr = Pango.attr_underline_new(Pango.Underline.SINGLE)
+                u_attr.start_index = 0
+                u_attr.end_index = 65535
+                attr_list.change(u_attr)
             
             for match in re.finditer(r'(https?://[^\s]+|www\.[^\s]+)', text_obj.text):
                 start_byte = len(text_obj.text[:match.start()].encode('utf-8'))
@@ -4634,6 +4650,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.strikethrough_button.handler_block_by_func(self.on_text_format_changed)
                 self.strikethrough_button.set_active(False)
                 self.strikethrough_button.handler_unblock_by_func(self.on_text_format_changed)
+            if hasattr(self, 'link_button') and self.link_button:
+                self.link_button.set_sensitive(False)
+                self.link_button.set_tooltip_text(_("insert_link_tip"))
             align_btns = [getattr(self, 'align_left_button', None), getattr(self, 'align_center_button', None),
                           getattr(self, 'align_right_button', None), getattr(self, 'align_justify_button', None)]
             for b in align_btns:
@@ -4717,6 +4736,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.underline_button.set_active(getattr(text_obj, 'is_underline', False))
             if hasattr(self, 'strikethrough_button') and self.strikethrough_button:
                 self.strikethrough_button.set_active(getattr(text_obj, 'is_strikethrough', False))
+            if hasattr(self, 'link_button') and self.link_button:
+                self.link_button.set_sensitive(True)
+                eff_url = getattr(text_obj, 'link_url', None) or (text_obj.get_link_url() if hasattr(text_obj, 'get_link_url') else None)
+                if eff_url:
+                    self.link_button.set_tooltip_text(_("edit_link_tip", eff_url))
+                else:
+                    self.link_button.set_tooltip_text(_("insert_link_tip"))
 
             cur_align = getattr(text_obj, 'alignment', 'left')
             target_btn = getattr(self, 'align_left_button', None)
@@ -5711,7 +5737,38 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def _on_pointer_motion(self, controller, x, y):
         """Track last pointer position on pdf_view for focal zoom and update handle cursor."""
         self._last_pointer_pos = (x, y)
-        if not getattr(self, 'view_mode', False) and not getattr(self, 'dragged_object', None):
+        if getattr(self, 'view_mode', False):
+            page_offset_x = max(0, (self.pdf_view.get_allocated_width() - self.current_pdf_page_width) / 2)
+            page_offset_y = max(0, (self.pdf_view.get_allocated_height() - self.current_pdf_page_height) / 2)
+            vis_x = (x - page_offset_x) / self.zoom_level
+            vis_y = (y - page_offset_y) / self.zoom_level
+            unrot_x, unrot_y = self._visual_to_unrotated_page_coords(vis_x, vis_y)
+            url = self._get_link_url_at_pos(unrot_x, unrot_y)
+            if url:
+                self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("pointer"))
+                self.pdf_view.set_tooltip_text(url)
+            else:
+                self.pdf_view.set_tooltip_text(None)
+                self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
+            return
+
+        modifiers = controller.get_current_event_state() if controller else 0
+        ctrl_pressed = bool(modifiers & Gdk.ModifierType.CONTROL_MASK)
+        if ctrl_pressed:
+            page_offset_x = max(0, (self.pdf_view.get_allocated_width() - self.current_pdf_page_width) / 2)
+            page_offset_y = max(0, (self.pdf_view.get_allocated_height() - self.current_pdf_page_height) / 2)
+            vis_x = (x - page_offset_x) / self.zoom_level
+            vis_y = (y - page_offset_y) / self.zoom_level
+            unrot_x, unrot_y = self._visual_to_unrotated_page_coords(vis_x, vis_y)
+            url = self._get_link_url_at_pos(unrot_x, unrot_y)
+            if url:
+                self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("pointer"))
+                self.pdf_view.set_tooltip_text(url)
+                return
+
+        self.pdf_view.set_tooltip_text(None)
+
+        if not getattr(self, 'dragged_object', None):
             selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
                             getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None))
             if selected_obj:
@@ -6086,15 +6143,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         clicked_text = self._find_text_at_pos(page_x_unzoomed, page_y_unzoomed)
         
-        if ctrl_pressed and clicked_text and clicked_text.is_link:
-            import webbrowser
-            match = re.search(r'https?://[^\s]+', clicked_text.text)
-            if match:
-                webbrowser.open(match.group(0))
-            return
+        if ctrl_pressed:
+            url = self._get_link_url_at_pos(page_x_unzoomed, page_y_unzoomed) if hasattr(self, '_get_link_url_at_pos') else None
+            if url:
+                self._open_url(url)
+                return
 
         if self.view_mode:
             if n_press == 1:
+                url = self._get_link_url_at_pos(page_x_unzoomed, page_y_unzoomed) if hasattr(self, '_get_link_url_at_pos') else None
+                if url:
+                    self._open_url(url)
+                    return
                 clicked_form_field = self._find_form_field_at_pos(page_x_unzoomed, page_y_unzoomed)
                 if clicked_form_field:
                     self.selected_form_field = clicked_form_field
@@ -8115,6 +8175,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_edit = Gtk.Button(label=_("menu_edit_text"))
             btn_edit.connect("clicked", lambda b: self._handle_context_action("edit_text", clicked_text, x, y))
             popover_box.append(btn_edit)
+
+            btn_link = Gtk.Button(label=_("menu_insert_edit_link"))
+            def on_link_ctx(b):
+                if hasattr(self, 'context_popover') and self.context_popover:
+                    self.context_popover.popdown()
+                pt_rect = Gdk.Rectangle()
+                pt_rect.x = int(x); pt_rect.y = int(y); pt_rect.width = 1; pt_rect.height = 1
+                self.show_link_popover(clicked_text, parent_widget=self.pdf_view, point_rect=pt_rect)
+            btn_link.connect("clicked", on_link_ctx)
+            popover_box.append(btn_link)
             
             btn_del = Gtk.Button(label=_("delete_confirm"))
             btn_del.add_css_class("destructive-action")
@@ -8435,6 +8505,201 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self._update_text_format_controls(text_obj)
             if hasattr(self, 'context_popover') and self.context_popover:
                 self.context_popover.popdown()
+
+    def on_insert_edit_link_clicked(self, button=None):
+        """Handle toolbar Insert/Edit link button click."""
+        target = self.selected_text
+        if not target:
+            return
+        anchor = getattr(self, 'link_button', self.pdf_view)
+        self.show_link_popover(target, parent_widget=anchor)
+
+    def show_link_popover(self, text_obj, parent_widget=None, point_rect=None):
+        """Display popover dialog allowing user to insert, edit, or remove hyperlink for text_obj."""
+        if not text_obj:
+            return
+
+        if hasattr(self, '_link_popover') and self._link_popover:
+            try:
+                self._link_popover.popdown()
+                self._link_popover.unparent()
+            except Exception:
+                pass
+            self._link_popover = None
+
+        popover = Gtk.Popover(autohide=True, has_arrow=True)
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        content_box.set_margin_start(12)
+        content_box.set_margin_end(12)
+        content_box.set_margin_top(12)
+        content_box.set_margin_bottom(12)
+
+        title_lbl = Gtk.Label(label=_("dialog_link_title"))
+        title_lbl.add_css_class("heading")
+        title_lbl.set_halign(Gtk.Align.START)
+        content_box.append(title_lbl)
+
+        url_lbl = Gtk.Label(label=_("link_url_label"))
+        url_lbl.set_halign(Gtk.Align.START)
+        url_lbl.add_css_class("dim-label")
+        content_box.append(url_lbl)
+
+        url_entry = Gtk.Entry()
+        url_entry.set_placeholder_text("https://example.com")
+        url_entry.set_width_chars(32)
+
+        initial_url = getattr(text_obj, 'link_url', None) or ""
+        if not initial_url and hasattr(text_obj, 'get_link_url'):
+            initial_url = text_obj.get_link_url() or ""
+        url_entry.set_text(initial_url)
+        content_box.append(url_entry)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_box.set_halign(Gtk.Align.END)
+
+        def apply_link(b=None):
+            target_url = url_entry.get_text().strip()
+            popover.popdown()
+            if target_url:
+                self._apply_text_link(text_obj, target_url)
+            else:
+                self._remove_text_link(text_obj)
+
+        def remove_link(b=None):
+            popover.popdown()
+            self._remove_text_link(text_obj)
+
+        def cancel_link(b=None):
+            popover.popdown()
+
+        btn_cancel = Gtk.Button(label=_("btn_cancel"))
+        btn_cancel.connect("clicked", cancel_link)
+        btn_box.append(btn_cancel)
+
+        if getattr(text_obj, 'link_url', None) or getattr(text_obj, 'is_link', False):
+            btn_remove = Gtk.Button(label=_("btn_remove_link"))
+            btn_remove.add_css_class("destructive-action")
+            btn_remove.connect("clicked", remove_link)
+            btn_box.append(btn_remove)
+
+        btn_apply = Gtk.Button(label=_("btn_apply"))
+        btn_apply.add_css_class("suggested-action")
+        btn_apply.connect("clicked", apply_link)
+        url_entry.connect("activate", apply_link)
+        btn_box.append(btn_apply)
+
+        content_box.append(btn_box)
+        popover.set_child(content_box)
+
+        anchor = parent_widget or getattr(self, 'link_button', self.pdf_view)
+        popover.set_parent(anchor)
+        if point_rect:
+            popover.set_pointing_to(point_rect)
+        self._link_popover = popover
+        popover.popup()
+
+    def _apply_text_link(self, text_obj, url: str):
+        """Apply hyperlink URL and blue underlined styling to text_obj."""
+        if not text_obj or not url:
+            return
+        if not url.startswith(("http://", "https://", "mailto:")):
+            url = "https://" + url
+        self.selected_text = text_obj
+        old_props = {
+            'link_url': getattr(text_obj, 'link_url', None),
+            'color': getattr(text_obj, 'color', (0.0, 0.0, 0.0)),
+            'is_underline': getattr(text_obj, 'is_underline', False),
+            'bbox': text_obj.bbox
+        }
+        # Hyperlink styling: blue #0000ee and underline
+        new_props = {
+            'link_url': url,
+            'color': (0.0, 0.0, 238.0 / 255.0),
+            'is_underline': True,
+            'bbox': text_obj.bbox
+        }
+        cmd = EditObjectCommand(self, text_obj, old_props, new_props)
+        cmd.execute()
+        self.undo_manager.add_command(cmd)
+        self._update_text_format_controls(text_obj)
+        if hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(_("link_applied_success"))
+        self.document_modified = True
+        self.pdf_view.queue_draw()
+
+    def _remove_text_link(self, text_obj):
+        """Remove hyperlink URL from text_obj and restore original properties."""
+        if not text_obj:
+            return
+        self.selected_text = text_obj
+        old_props = {
+            'link_url': getattr(text_obj, 'link_url', None),
+            'color': getattr(text_obj, 'color', (0.0, 0.0, 0.0)),
+            'is_underline': getattr(text_obj, 'is_underline', False),
+            'bbox': text_obj.bbox
+        }
+        orig_color = getattr(text_obj, 'original_color', (0.0, 0.0, 0.0))
+        if orig_color == (0.0, 0.0, 238.0 / 255.0):
+            orig_color = (0.0, 0.0, 0.0)
+        new_props = {
+            'link_url': None,
+            'color': orig_color,
+            'is_underline': False,
+            'bbox': text_obj.bbox
+        }
+        cmd = EditObjectCommand(self, text_obj, old_props, new_props)
+        cmd.execute()
+        self.undo_manager.add_command(cmd)
+        self._update_text_format_controls(text_obj)
+        if hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(_("link_removed_success"))
+        self.document_modified = True
+        self.pdf_view.queue_draw()
+
+    def _get_link_url_at_pos(self, page_x, page_y):
+        """Find destination URL at page coordinates from editable texts or PDF link annotations."""
+        for t in getattr(self, 'editable_texts', []):
+            if getattr(t, 'page_number', None) != self.current_page_index:
+                continue
+            if getattr(t, 'bbox', None):
+                bx1, by1, bx2, by2 = t.bbox
+                if min(bx1, bx2) <= page_x <= max(bx1, bx2) and min(by1, by2) <= page_y <= max(by1, by2):
+                    if getattr(t, 'is_link', False):
+                        url = t.get_link_url() if hasattr(t, 'get_link_url') else getattr(t, 'link_url', None)
+                        if url:
+                            return url
+        if getattr(self, 'doc', None) and 0 <= self.current_page_index < len(self.doc):
+            try:
+                page = self.doc[self.current_page_index]
+                pt = fitz.Point(page_x, page_y)
+                for link in page.get_links():
+                    if link.get('kind') == fitz.LINK_URI and link.get('uri'):
+                        rect = link.get('from')
+                        if rect and rect.contains(pt):
+                            return link.get('uri')
+            except Exception:
+                pass
+        return None
+
+    def _open_url(self, url: str):
+        """Open web link in the system default browser."""
+        if not url:
+            return
+        if not url.startswith(("http://", "https://", "mailto:")):
+            url = "https://" + url
+        try:
+            from gi.repository import Gtk, Gdk
+            Gtk.show_uri(self, url, Gdk.CURRENT_TIME)
+        except Exception:
+            try:
+                from gi.repository import Gio
+                Gio.AppInfo.launch_default_for_uri(url, None)
+            except Exception:
+                try:
+                    import webbrowser
+                    webbrowser.open(url)
+                except Exception as e:
+                    print(f"Warning: could not open URL {url}: {e}")
 
     def _update_confirm_delete_menu_state(self, val: bool):
         """Update the confirm delete menu action state."""
