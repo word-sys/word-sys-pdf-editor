@@ -252,6 +252,14 @@ class UndoManager:
         self.redo_stack.clear()
         self._update_ui_callback()
 
+    def can_undo(self) -> bool:
+        """Check if an undo action is available."""
+        return bool(self.undo_stack)
+
+    def can_redo(self) -> bool:
+        """Check if a redo action is available."""
+        return bool(self.redo_stack)
+
     def undo(self):
         """Undo the command."""
         if hasattr(self.window, 'commit_pending_format_change'):

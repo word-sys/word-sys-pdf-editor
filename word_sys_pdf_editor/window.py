@@ -211,6 +211,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 background-color: @popover_bg_color;
             }
 
+            .inline-editor-frame {
+                background-color: @card_bg_color;
+                border: 1.5px solid @accent_color;
+                border-radius: 4px;
+                box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+                padding: 0;
+                margin: 0;
+            }
+
+            .inline-editor-tv {
+                min-height: 0px;
+                min-width: 0px;
+                margin: 0;
+                padding: 2px 3px;
+                border: none;
+                border-radius: 3px;
+                background-color: transparent;
+            }
+
             .tool-button.active { background-color: @theme_selected_bg_color; }
             .acroform-entry {
                 background-color: rgba(255, 255, 255, 0.95);
@@ -2956,7 +2975,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self.selected_stroke or getattr(self, 'selected_form_field', None))
         if selected_obj and not self.dragged_object and not (
             isinstance(selected_obj, AcroFormField) and getattr(self, '_active_editing_form_field', None) == selected_obj
-        ):
+        ) and not (self.inline_editor_widget is not None and selected_obj == getattr(self, 'inline_editor_text_obj', None)):
             is_image = isinstance(selected_obj, EditableImage)
             style_context = area.get_style_context()
             color_name = "accent_color"
@@ -4873,33 +4892,159 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.before_format_change_state = copy.deepcopy(selected_obj.__dict__)
             self._update_text_format_controls(selected_obj)
 
-    def _show_inline_editor(self, text_obj, click_x=None, click_y=None):
-        """Show inline editor."""
-        self._hide_inline_editor()
+    def _apply_inline_editor_style(self):
+        """Apply dynamic typography styling and Adwaita theme colors to the inline text editor."""
+        if not getattr(self, 'inline_editor_widget', None) or not getattr(self, 'inline_editor_tv', None):
+            return
+        text_obj = getattr(self, 'inline_editor_text_obj', None)
         if not text_obj:
             return
 
-        self.inline_editor_text_obj = text_obj
+        if hasattr(self, '_inline_editor_css_provider') and self._inline_editor_css_provider:
+            try:
+                self.inline_editor_tv.get_style_context().remove_provider(self._inline_editor_css_provider)
+                self.inline_editor_widget.get_style_context().remove_provider(self._inline_editor_css_provider)
+            except Exception:
+                pass
+            self._inline_editor_css_provider = None
 
-        da_w = self.pdf_view.get_allocated_width()
-        da_h = self.pdf_view.get_allocated_height()
+        family = getattr(text_obj, 'font_family_base', 'Liberation Sans') or 'Liberation Sans'
+        scaled_font_size = max(9, int(round(text_obj.font_size * self.zoom_level)))
+        weight_css = "bold" if getattr(text_obj, 'is_bold', False) else "normal"
+        style_css = "italic" if getattr(text_obj, 'is_italic', False) else "normal"
+
+        col = getattr(text_obj, 'color', (0, 0, 0))
+        if isinstance(col, (tuple, list)) and len(col) >= 3:
+            r = max(0, min(255, int(round(col[0] * 255))))
+            g = max(0, min(255, int(round(col[1] * 255))))
+            b = max(0, min(255, int(round(col[2] * 255))))
+        else:
+            r, g, b = 0, 0, 0
+        color_css = f"rgb({r}, {g}, {b})"
+
+        css_str = f"""
+            .inline-editor-tv {{
+                min-height: 0px;
+                min-width: 0px;
+                margin: 0px;
+                padding: 1px 2px;
+                background-color: transparent;
+                border: none;
+                box-shadow: none;
+                font-family: '{family}', 'Liberation Sans', 'DejaVu Sans', sans-serif;
+                font-size: {scaled_font_size}px;
+                font-weight: {weight_css};
+                font-style: {style_css};
+                color: {color_css};
+            }}
+            .inline-editor-frame {{
+                min-height: 0px;
+                min-width: 0px;
+                padding: 0px;
+                margin: 0px;
+                border: 1.5px solid @accent_color;
+                border-radius: 4px;
+                background-color: @card_bg_color;
+                box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+            }}
+        """
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css_str.encode('utf-8'))
+        self._inline_editor_css_provider = provider
+
+        self.inline_editor_tv.get_style_context().add_provider(
+            provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
+        )
+        self.inline_editor_widget.get_style_context().add_provider(
+            provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
+        )
+
+    def _on_inline_editor_text_changed(self, buffer):
+        """Dynamically expand inline editor width and height as text is typed."""
+        if not getattr(self, 'inline_editor_widget', None) or not getattr(self, 'inline_editor_tv', None):
+            return
+        text_obj = getattr(self, 'inline_editor_text_obj', None)
+        if not text_obj:
+            return
+
+        buf = self.inline_editor_tv.get_buffer()
+        current_text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
+
+        try:
+            pango_ctx = self.inline_editor_tv.get_pango_context()
+            layout = Pango.Layout(pango_ctx)
+            family = getattr(text_obj, 'font_family_base', 'Liberation Sans') or 'Liberation Sans'
+            font_desc = Pango.FontDescription.from_string(family)
+            if getattr(text_obj, 'is_bold', False):
+                font_desc.set_weight(Pango.Weight.BOLD)
+            if getattr(text_obj, 'is_italic', False):
+                font_desc.set_style(Pango.Style.ITALIC)
+            scaled_font_size = max(9.0, text_obj.font_size * self.zoom_level)
+            font_desc.set_absolute_size(int(scaled_font_size * Pango.SCALE))
+            layout.set_font_description(font_desc)
+            layout.set_text(current_text or " ", -1)
+            pw, ph = layout.get_size()
+            calc_w = int(pw / Pango.SCALE) + 14
+            calc_h = int(ph / Pango.SCALE) + 6
+        except Exception:
+            calc_w = getattr(self, '_inline_editor_base_w', 60)
+            calc_h = getattr(self, '_inline_editor_base_h', 24)
+
+        base_w = getattr(self, '_inline_editor_base_w', 60)
+        base_h = getattr(self, '_inline_editor_base_h', 24)
+
+        new_w = max(base_w, calc_w)
+        new_h = max(base_h, calc_h)
+
+        da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
+        max_w = max(base_w, int(da_w - getattr(self, '_inline_editor_base_x', 0) - 20))
+        clamped_w = min(new_w, max_w)
+
+        self.inline_editor_widget.set_size_request(clamped_w, new_h)
+
+    def _show_inline_editor(self, text_obj, click_x=None, click_y=None, target_rect=None):
+        """Show inline editor overlay exactly positioned over target text."""
+        self._hide_inline_editor()
+        if not text_obj or not self.doc or not (0 <= self.current_page_index < pdf_handler.get_page_count(self.doc)):
+            return
+
+        self.inline_editor_text_obj = text_obj
+        self._inline_editor_target_rect = target_rect
+        self._inline_editor_initial_text = text_obj.text
+
+        da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
+        da_h = max(self.pdf_view.get_allocated_height(), self.current_pdf_page_height)
         page_w = self.current_pdf_page_width
         page_h = self.current_pdf_page_height
-        page_offset_x = max(0, (da_w - page_w) / 2)
-        page_offset_y = max(0, (da_h - page_h) / 2)
+        page_offset_x = max(0.0, (da_w - page_w) / 2.0)
+        page_offset_y = max(0.0, (da_h - page_h) / 2.0)
 
-        if text_obj.bbox:
+        target_box = target_rect or getattr(text_obj, 'bbox', None)
+        if target_box:
             page = self.doc[self.current_page_index]
-            vis_rect = (fitz.Rect(text_obj.bbox) * page.rotation_matrix).normalize()
-            ed_x = int(page_offset_x + vis_rect.x0 * self.zoom_level)
-            ed_y = int(page_offset_y + vis_rect.y0 * self.zoom_level)
-            ed_w = max(180, int(vis_rect.width * self.zoom_level) + 60)
-            ed_h = max(40, int(vis_rect.height * self.zoom_level) + 16)
-        elif click_x is not None:
-            ed_x = int(click_x)
-            ed_y = int(click_y) - 20
-            ed_w = 200
-            ed_h = 44
+            vis_rect = (fitz.Rect(target_box) * page.rotation_matrix).normalize()
+            ed_x = int(page_offset_x + vis_rect.x0 * self.zoom_level) - 2
+            ed_y = int(page_offset_y + vis_rect.y0 * self.zoom_level) - 2
+            scaled_font = max(9.0, text_obj.font_size * self.zoom_level)
+            ed_w = max(60, int(vis_rect.width * self.zoom_level) + 14)
+            ed_h = max(int(scaled_font * 1.3) + 6, int(vis_rect.height * self.zoom_level) + 6)
+        elif click_x is not None and click_y is not None:
+            ed_x = int(click_x) - 2
+            ed_y = int(click_y) - 2
+            scaled_font = max(9.0, text_obj.font_size * self.zoom_level)
+            ed_w = 140
+            ed_h = max(int(scaled_font * 1.3) + 6, 28)
+        else:
+            ed_x = int(page_offset_x + 10)
+            ed_y = int(page_offset_y + 10)
+            scaled_font = max(9.0, text_obj.font_size * self.zoom_level)
+            ed_w = 140
+            ed_h = 28
+
+        self._inline_editor_base_x = ed_x
+        self._inline_editor_base_y = ed_y
+        self._inline_editor_base_w = ed_w
+        self._inline_editor_base_h = ed_h
 
         frame = Gtk.Frame()
         frame.add_css_class("inline-editor-frame")
@@ -4910,10 +5055,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         frame.set_size_request(ed_w, ed_h)
 
         tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
-        tv.set_left_margin(4)
-        tv.set_right_margin(4)
-        tv.set_top_margin(4)
-        tv.set_bottom_margin(4)
+        tv.set_left_margin(3)
+        tv.set_right_margin(3)
+        tv.set_top_margin(1)
+        tv.set_bottom_margin(1)
         align_val = getattr(text_obj, 'alignment', 'left')
         if align_val == 'center':
             tv.set_justification(Gtk.Justification.CENTER)
@@ -4923,7 +5068,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             tv.set_justification(Gtk.Justification.FILL)
         else:
             tv.set_justification(Gtk.Justification.LEFT)
-        tv.get_buffer().set_text(text_obj.text)
+
+        buf = tv.get_buffer()
+        buf.set_text(text_obj.text or "")
+        buf.select_range(buf.get_start_iter(), buf.get_end_iter())
+        buf.connect("changed", self._on_inline_editor_text_changed)
+
         tv.add_css_class("inline-editor-tv")
         frame.set_child(tv)
 
@@ -4938,20 +5088,57 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_overlay.add_overlay(frame)
         self.inline_editor_widget = frame
         self.inline_editor_tv = tv
+        self._apply_inline_editor_style()
+        self._on_inline_editor_text_changed(buf)
+
         GLib.idle_add(tv.grab_focus)
+        self.pdf_view.queue_draw()
+
+    def _cancel_inline_editor(self):
+        """Cancel inline editing and revert text changes."""
+        if not getattr(self, 'inline_editor_widget', None):
+            return
+        text_obj = getattr(self, 'inline_editor_text_obj', None)
+        if text_obj:
+            if getattr(text_obj, 'is_new', False):
+                if text_obj in getattr(self, 'editable_texts', []):
+                    self.editable_texts.remove(text_obj)
+                self.selected_text = None
+            else:
+                init_text = getattr(self, '_inline_editor_initial_text', None)
+                if init_text is not None:
+                    text_obj.text = init_text
+        self._hide_inline_editor()
+        self._update_ui_state()
+        self.pdf_view.queue_draw()
 
     def _hide_inline_editor(self):
-        """Hide inline editor."""
+        """Hide inline editor and clean up references."""
+        if hasattr(self, '_inline_editor_css_provider') and self._inline_editor_css_provider:
+            try:
+                if self.inline_editor_tv:
+                    self.inline_editor_tv.get_style_context().remove_provider(self._inline_editor_css_provider)
+                if self.inline_editor_widget:
+                    self.inline_editor_widget.get_style_context().remove_provider(self._inline_editor_css_provider)
+            except Exception:
+                pass
+            self._inline_editor_css_provider = None
+
         if self.inline_editor_widget:
             if hasattr(self, 'pdf_overlay') and self.pdf_overlay:
-                self.pdf_overlay.remove_overlay(self.inline_editor_widget)
+                try:
+                    self.pdf_overlay.remove_overlay(self.inline_editor_widget)
+                except Exception:
+                    pass
             self.inline_editor_widget = None
             self.inline_editor_tv = None
             self.inline_editor_text_obj = None
+            self._inline_editor_target_rect = None
+            self._inline_editor_initial_text = None
 
     def _commit_inline_edit(self):
         """Commit inline edit."""
-        if not hasattr(self, 'inline_editor_tv') or not self.inline_editor_tv or not self.inline_editor_text_obj:
+        if not getattr(self, 'inline_editor_tv', None) or not getattr(self, 'inline_editor_text_obj', None) or not getattr(self, 'inline_editor_widget', None):
             self._hide_inline_editor()
             return
 
@@ -4964,14 +5151,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._hide_inline_editor()
 
         def _calc_bbox(obj, text):
-            """Calc bbox."""
+            """Calculate updated bounding box after text modification."""
             x1, y1 = obj.x, obj.y
             _surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
             _cr = cairo.Context(_surf)
             layout = PangoCairo.create_layout(_cr)
-            desc = Pango.FontDescription.from_string(obj.font_family_base)
-            if obj.is_bold: desc.set_weight(Pango.Weight.BOLD)
-            if obj.is_italic: desc.set_style(Pango.Style.ITALIC)
+            family = getattr(obj, 'font_family_base', 'Liberation Sans') or 'Liberation Sans'
+            desc = Pango.FontDescription.from_string(family)
+            if getattr(obj, 'is_bold', False): desc.set_weight(Pango.Weight.BOLD)
+            if getattr(obj, 'is_italic', False): desc.set_style(Pango.Style.ITALIC)
             desc.set_absolute_size(int(obj.font_size * Pango.SCALE))
             layout.set_font_description(desc)
             layout.set_text(text or "A", -1)
@@ -4985,6 +5173,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return (x1, y1, x1 + final_w, y1 + ph / Pango.SCALE)
 
         if text_obj_to_apply.is_new:
+            if not new_text.strip():
+                if text_obj_to_apply in getattr(self, 'editable_texts', []):
+                    self.editable_texts.remove(text_obj_to_apply)
+                self.selected_text = None
+                self._update_ui_state()
+                self.pdf_view.queue_draw()
+                return
+
             text_obj_to_apply.text = new_text
             text_obj_to_apply.is_baked = True
             text_obj_to_apply.bbox = _calc_bbox(text_obj_to_apply, new_text)
@@ -5000,7 +5196,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 _surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
                 _cr = cairo.Context(_surf)
                 layout = PangoCairo.create_layout(_cr)
-                desc = Pango.FontDescription.from_string(new_properties['font_family_base'])
+                family = new_properties.get('font_family_base', 'Liberation Sans') or 'Liberation Sans'
+                desc = Pango.FontDescription.from_string(family)
                 if new_properties.get('is_bold'): desc.set_weight(Pango.Weight.BOLD)
                 if new_properties.get('is_italic'): desc.set_style(Pango.Style.ITALIC)
                 desc.set_absolute_size(int(new_properties['font_size'] * Pango.SCALE))
@@ -5030,6 +5227,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _on_inline_editor_focus_leave(self, controller):
         """Commit active inline text edit when editor widget loses focus."""
+        if not getattr(self, 'inline_editor_widget', None):
+            return
         focus_widget = self.get_focus()
         if focus_widget:
             curr = focus_widget
@@ -5037,16 +5236,37 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if curr == getattr(self, 'main_toolbar', None):
                     return
                 curr = curr.get_parent()
-                
+
         GLib.idle_add(self._commit_inline_edit)
 
     def _on_inline_editor_key(self, controller, keyval, keycode, state):
-        """Cancel inline editing and revert changes when Escape is pressed."""
+        """Handle keyboard shortcuts inside inline editor: Escape, Enter, Ctrl+Enter, Shift+Enter."""
+        ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+        shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+
         if keyval == Gdk.KEY_Escape:
-            self._hide_inline_editor()
-            self._update_ui_state()
-            self.pdf_view.queue_draw()
+            self._cancel_inline_editor()
             return True
+
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            if shift:
+                if hasattr(self, 'inline_editor_tv') and self.inline_editor_tv:
+                    buf = self.inline_editor_tv.get_buffer()
+                    buf.insert_at_cursor("\n")
+                return True
+            elif ctrl:
+                self._commit_inline_edit()
+                return True
+            else:
+                if hasattr(self, 'inline_editor_tv') and self.inline_editor_tv:
+                    buf = self.inline_editor_tv.get_buffer()
+                    current_text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
+                    if "\n" not in current_text:
+                        self._commit_inline_edit()
+                        return True
+                    else:
+                        return False
+
         return False
 
     def hide_text_editor(self):
@@ -5458,7 +5678,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._update_cursor_for_tool()
 
     def _update_inline_editor_position(self):
-        """Update inline editor position and size after zoom changes."""
+        """Update inline editor position, size, and font scaling after zoom changes."""
         if not getattr(self, 'inline_editor_widget', None) or not getattr(self, 'inline_editor_text_obj', None):
             return
         text_obj = self.inline_editor_text_obj
@@ -5466,17 +5686,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
         da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
         da_h = max(self.pdf_view.get_allocated_height(), self.current_pdf_page_height)
-        page_offset_x = max(0, (da_w - self.current_pdf_page_width) / 2)
-        page_offset_y = max(0, (da_h - self.current_pdf_page_height) / 2)
+        page_offset_x = max(0.0, (da_w - self.current_pdf_page_width) / 2.0)
+        page_offset_y = max(0.0, (da_h - self.current_pdf_page_height) / 2.0)
         page = self.doc[self.current_page_index]
-        vis_rect = (fitz.Rect(text_obj.bbox) * page.rotation_matrix).normalize()
-        ed_x = int(page_offset_x + vis_rect.x0 * self.zoom_level)
-        ed_y = int(page_offset_y + vis_rect.y0 * self.zoom_level)
-        ed_w = max(180, int(vis_rect.width * self.zoom_level) + 60)
-        ed_h = max(40, int(vis_rect.height * self.zoom_level) + 16)
+        target_box = getattr(self, '_inline_editor_target_rect', None) or text_obj.bbox
+        vis_rect = (fitz.Rect(target_box) * page.rotation_matrix).normalize()
+        ed_x = int(page_offset_x + vis_rect.x0 * self.zoom_level) - 2
+        ed_y = int(page_offset_y + vis_rect.y0 * self.zoom_level) - 2
+        scaled_font = max(9.0, text_obj.font_size * self.zoom_level)
+        ed_w = max(60, int(vis_rect.width * self.zoom_level) + 14)
+        ed_h = max(int(scaled_font * 1.3) + 6, int(vis_rect.height * self.zoom_level) + 6)
+
+        self._inline_editor_base_x = ed_x
+        self._inline_editor_base_y = ed_y
+        self._inline_editor_base_w = ed_w
+        self._inline_editor_base_h = ed_h
+
         self.inline_editor_widget.set_margin_start(ed_x)
         self.inline_editor_widget.set_margin_top(ed_y)
-        self.inline_editor_widget.set_size_request(ed_w, ed_h)
+        self._apply_inline_editor_style()
+        if hasattr(self, 'inline_editor_tv') and self.inline_editor_tv:
+            self._on_inline_editor_text_changed(self.inline_editor_tv.get_buffer())
+        else:
+            self.inline_editor_widget.set_size_request(ed_w, ed_h)
 
     def _set_zoom(self, new_zoom, focal_point=None):
         """Set zoom level smoothly with focal point anchoring, without reloading page."""
@@ -5783,7 +6015,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         page_x_unzoomed = (x - page_offset_x) / self.zoom_level
         page_y_unzoomed = (y - page_offset_y) / self.zoom_level
 
-        modifiers = Gtk.EventController.get_current_event_state(gesture)
+        modifiers = Gtk.EventController.get_current_event_state(gesture) if gesture is not None else 0
         ctrl_pressed = bool(modifiers & Gdk.ModifierType.CONTROL_MASK)
 
         clicked_text = self._find_text_at_pos(page_x_unzoomed, page_y_unzoomed)
@@ -5887,16 +6119,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_shape = None
                 self.selected_stroke = None
                 self.selected_form_field = None
-                if clicked_text == self.selected_text and n_press > 1:
+                self.selected_text = clicked_text
+                self.word_selection_mode = False
+                self.pending_format_change_obj = self.selected_text
+                self.before_format_change_state = copy.deepcopy(self.selected_text.__dict__)
+                self._update_text_format_controls(self.selected_text)
+                if n_press >= 2 and not self.view_mode:
                     self._show_inline_editor(clicked_text, click_x=x, click_y=y)
-                else:
-                    self.selected_text = clicked_text
-                    self.word_selection_mode = False
-                    self.pending_format_change_obj = self.selected_text
-                if self.selected_text:
-                    self.pending_format_change_obj = self.selected_text
-                    self.before_format_change_state = copy.deepcopy(self.selected_text.__dict__)
-                    self._update_text_format_controls(self.selected_text)
             elif clicked_shape:
                 self._close_active_form_field_editor()
                 self.selected_shape = clicked_shape
@@ -5922,6 +6151,51 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_form_builder_controls_for_selected()
             else:
                 self._close_active_form_field_editor()
+                if n_press >= 2 and not self.view_mode and self.doc and 0 <= self.current_page_index < pdf_handler.get_page_count(self.doc):
+                    hit_word = pdf_handler.hit_test_text_word_at_pos(
+                        self.doc, (page_x_unzoomed, page_y_unzoomed), page_index=self.current_page_index, visual_coords=True
+                    )
+                    if hit_word:
+                        found_text = None
+                        wb = hit_word["bbox"]
+                        for et in self.editable_texts:
+                            if getattr(et, 'page_number', self.current_page_index) == self.current_page_index and getattr(et, 'bbox', None):
+                                eb = et.bbox
+                                if not (wb[2] < eb[0] or wb[0] > eb[2] or wb[3] < eb[1] or wb[1] > eb[3]):
+                                    found_text = et
+                                    break
+                        if not found_text:
+                            span_hit = hit_word.get("span", {})
+                            found_text = EditableText(
+                                x=hit_word["bbox"][0],
+                                y=hit_word["bbox"][1],
+                                text=hit_word["word"],
+                                font_size=span_hit.get("size", 11),
+                                font_family=span_hit.get("font", "Liberation Sans"),
+                                color=span_hit.get("color", (0, 0, 0)),
+                                span_data=span_hit,
+                                baseline=span_hit.get("origin", (0, hit_word["bbox"][3]))[1],
+                                rotation=span_hit.get("rotation", 0.0),
+                                page_number=self.current_page_index
+                            )
+                            found_text.bbox = tuple(hit_word["bbox"])
+                            found_text.char_boxes = hit_word.get("char_boxes", [])
+                            self.editable_texts.append(found_text)
+
+                        self.selected_text = found_text
+                        self.selected_image = None
+                        self.selected_shape = None
+                        self.selected_stroke = None
+                        self.selected_form_field = None
+                        self.word_selection_mode = False
+                        self.pending_format_change_obj = found_text
+                        self.before_format_change_state = copy.deepcopy(found_text.__dict__)
+                        self._update_text_format_controls(found_text)
+                        self._show_inline_editor(found_text, click_x=x, click_y=y)
+                        self.pdf_view.queue_draw()
+                        self._update_ui_state()
+                        return
+
                 self.selected_text = None
                 self.selected_image = None
                 self.selected_shape = None
@@ -6435,6 +6709,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             or (focus_w is not None and focus_w is getattr(self, 'form_builder_options_entry', None))
         )
         is_input_focused = is_editing_entry or isinstance(focus_w, (Gtk.Editable, Gtk.TextView, Gtk.DropDown))
+
+        if getattr(self, 'selected_text', None) and not is_input_focused and not getattr(self, 'view_mode', False):
+            if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_F2):
+                self._show_inline_editor(self.selected_text)
+                return True
 
         if getattr(self, 'selected_form_field', None) and not is_input_focused:
             if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_F2):

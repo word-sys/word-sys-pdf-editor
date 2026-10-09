@@ -720,6 +720,9 @@ def get_text_hit_info_at_pos(target, pos: Tuple[float, float], page_index=None,
     Returns:
         Dict with keys: 'char', 'word', 'span', 'line', 'page_index', 'block_index', or None if no hit.
     """
+    if isinstance(pos, (int, float)) and isinstance(page_index, (tuple, list)):
+        pos, page_index = page_index, int(pos)
+
     page = _resolve_page(target, page_index)
     if page is None:
         return None
