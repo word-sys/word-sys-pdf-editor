@@ -1092,6 +1092,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                         hexpand=True, vexpand=True)
         self.pdf_view.set_draw_func(self.draw_pdf_page)
         self.pdf_view.add_css_class('pdf-view')
+        self.pdf_view.set_focusable(True)
         self.pdf_view.connect("notify::allocated-width", lambda *a: self._update_form_field_overlay_positions())
         self.pdf_view.connect("notify::allocated-height", lambda *a: self._update_form_field_overlay_positions())
 
@@ -2447,6 +2448,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if page_rot != 0:
             mat = page.rotation_matrix
             cr.transform(cairo.Matrix(mat.a, mat.b, mat.c, mat.d, mat.e, mat.f))
+
+        # Mask original underlying text on canvas while inline editor is actively editing
+        if getattr(self, 'inline_editor_widget', None) is not None and getattr(self, 'inline_editor_text_obj', None) is not None:
+            active_ed_obj = self.inline_editor_text_obj
+            target_mask_box = getattr(self, '_inline_editor_target_rect', None) or getattr(active_ed_obj, 'bbox', None)
+            if target_mask_box:
+                mx1, my1, mx2, my2 = target_mask_box
+                cr.save()
+                cr.set_source_rgb(1.0, 1.0, 1.0)
+                cr.rectangle(mx1 - 1.5, my1 - 1.5, (mx2 - mx1) + 3.0, (my2 - my1) + 3.0)
+                cr.fill()
+                cr.restore()
 
         if self.dragged_object:
             if self.dragged_object.original_bbox:
@@ -4632,8 +4645,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             active_font_index = i
                             break
                 
-                if active_font_index == -1:
-                    print(f"Warning: Normalized font '{normalized_target_family_base}' from selected text not directly in combo. Trying partial on original names.")
+                if active_font_index == -1 and model:
                     for i, row in enumerate(model):
                         combo_family_key = row[1]
                         if target_family_base and combo_family_key and target_family_base.lower() in combo_family_key.lower():
@@ -4642,9 +4654,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         elif target_family_base and combo_family_key and combo_family_key.lower() in target_family_base.lower():
                             active_font_index = i
                             break
-                    if active_font_index == -1 and len(model) > 0:
-                         active_font_index = 0 
-                         print(f"Warning: No good match for '{target_family_base}' even with normalization/partial, defaulting combo to index 0.")
+                    if active_font_index == -1 and target_family_base:
+                        # Register embedded/document font into combo store
+                        self.font_store.append([target_family_base, target_family_base])
+                        active_font_index = len(self.font_store) - 1
+                    elif active_font_index == -1 and len(model) > 0:
+                        active_font_index = 0
 
 
             if active_font_index != -1 and active_font_index < len(self.font_store):
@@ -4927,8 +4942,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 min-height: 0px;
                 min-width: 0px;
                 margin: 0px;
-                padding: 1px 2px;
-                background-color: transparent;
+                padding: 1px 3px;
+                background-color: #ffffff;
                 border: none;
                 box-shadow: none;
                 font-family: '{family}', 'Liberation Sans', 'DejaVu Sans', sans-serif;
@@ -4944,8 +4959,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 margin: 0px;
                 border: 1.5px solid @accent_color;
                 border-radius: 4px;
-                background-color: @card_bg_color;
-                box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+                background-color: #ffffff;
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
             }}
         """
         provider = Gtk.CssProvider()
@@ -5189,8 +5204,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.undo_manager.add_command(command)
             self._refresh_thumbnail(self.current_page_index)
         else:
+            if not new_text.strip():
+                command = DeleteObjectCommand(self, text_obj_to_apply)
+                command.execute()
+                self.undo_manager.add_command(command)
+                self.selected_text = None
+                self._update_ui_state()
+                self.pdf_view.queue_draw()
+                return
+
             new_properties = copy.deepcopy(text_obj_to_apply.__dict__)
             new_properties['text'] = new_text
+            if not getattr(text_obj_to_apply, 'original_bbox', None):
+                text_obj_to_apply.original_bbox = old_properties.get('original_bbox', old_properties.get('bbox'))
+            new_properties['original_bbox'] = text_obj_to_apply.original_bbox
             if old_properties['text'] != new_text:
                 x1, y1 = new_properties['bbox'][0], new_properties['bbox'][1]
                 _surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
@@ -6079,6 +6106,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     0 <= click_y_on_page_zoomed < page_h_zoomed)
         
         self.commit_pending_format_change()
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.grab_focus()
 
         if not is_on_page:
             if self.inline_editor_widget is not None:
@@ -6151,7 +6180,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_form_builder_controls_for_selected()
             else:
                 self._close_active_form_field_editor()
-                if n_press >= 2 and not self.view_mode and self.doc and 0 <= self.current_page_index < pdf_handler.get_page_count(self.doc):
+                if not self.view_mode and self.doc and 0 <= self.current_page_index < pdf_handler.get_page_count(self.doc):
                     hit_word = pdf_handler.hit_test_text_word_at_pos(
                         self.doc, (page_x_unzoomed, page_y_unzoomed), page_index=self.current_page_index, visual_coords=True
                     )
@@ -6166,19 +6195,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                     break
                         if not found_text:
                             span_hit = hit_word.get("span", {})
+                            span_text = span_hit.get("text", hit_word["word"])
+                            span_bbox = span_hit.get("bbox", hit_word["bbox"])
+                            span_origin = span_hit.get("origin", (span_bbox[0], span_bbox[3]))
                             found_text = EditableText(
-                                x=hit_word["bbox"][0],
-                                y=hit_word["bbox"][1],
-                                text=hit_word["word"],
+                                x=span_bbox[0],
+                                y=span_bbox[1],
+                                text=span_text,
                                 font_size=span_hit.get("size", 11),
                                 font_family=span_hit.get("font", "Liberation Sans"),
                                 color=span_hit.get("color", (0, 0, 0)),
                                 span_data=span_hit,
-                                baseline=span_hit.get("origin", (0, hit_word["bbox"][3]))[1],
+                                baseline=span_origin[1],
                                 rotation=span_hit.get("rotation", 0.0),
                                 page_number=self.current_page_index
                             )
-                            found_text.bbox = tuple(hit_word["bbox"])
+                            found_text.bbox = tuple(span_bbox)
+                            found_text.original_bbox = tuple(span_bbox)
                             found_text.char_boxes = hit_word.get("char_boxes", [])
                             self.editable_texts.append(found_text)
 
@@ -6191,7 +6224,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self.pending_format_change_obj = found_text
                         self.before_format_change_state = copy.deepcopy(found_text.__dict__)
                         self._update_text_format_controls(found_text)
-                        self._show_inline_editor(found_text, click_x=x, click_y=y)
+                        if n_press >= 2:
+                            self._show_inline_editor(found_text, click_x=x, click_y=y)
                         self.pdf_view.queue_draw()
                         self._update_ui_state()
                         return

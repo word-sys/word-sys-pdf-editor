@@ -4,6 +4,7 @@ except ImportError:
     import fitz
 import numpy as np
 import cairo
+import copy
 import io
 import os
 from pathlib import Path
@@ -967,47 +968,40 @@ def hit_test_text_span_at_pos(target, pos: Tuple[float, float], page_index=None,
     return res
 
 def apply_text_edit(doc, text_obj: EditableText, new_text: str):
-    """Burn edited text modifications into the underlying PDF page stream."""
+    """Replace original text span in the underlying PDF content stream using redaction and text insertion."""
     if not doc or text_obj.page_number is None:
         return False, "Invalid document or page number."
-
-    font_arg, error_msg = _get_font_args_for_pymupdf(text_obj)
-    if error_msg:
-        return False, error_msg
 
     try:
         page = doc.load_page(text_obj.page_number)
         
-        print(f"DEBUG apply_text_edit: is_new={text_obj.is_new}, new_text='{new_text}'")
-        print(f"DEBUG: text_obj bbox: {text_obj.bbox}")
-        
-        if new_text.strip():
-            text_color = (0, 0, 0)
-            if text_obj.color:
-                if isinstance(text_obj.color, (tuple, list)) and len(text_obj.color) >= 3:
-                    text_color = tuple(float(c) for c in text_obj.color[:3])
-                elif isinstance(text_obj.color, int):
-                    blue = (text_obj.color & 255) / 255.0
-                    green = ((text_obj.color >> 8) & 255) / 255.0
-                    red = ((text_obj.color >> 16) & 255) / 255.0
-                    text_color = (red, green, blue)
-            
-            print(f"DEBUG: Inserting updated text '{new_text}' at point ({text_obj.x}, {text_obj.baseline})")
-            
-            line_point = fitz.Point(text_obj.x, text_obj.baseline)
-            rc = page.insert_text(
-                line_point,
-                new_text,
-                fontsize=text_obj.font_size,
-                color=text_color,
-                overlay=True,
-                **font_arg
-            )
-            print(f"DEBUG: insert_text returned: {rc}")
-            if rc < 0:
-                print(f"ERROR: insert_text failed with rc={rc}")
-                return False, f"PyMuPDF insert_text error: {rc}"
+        # 1. Redact original text if this was an existing text span from the PDF
+        if not getattr(text_obj, 'is_new', False):
+            orig_box = getattr(text_obj, 'original_bbox', None) or getattr(text_obj, 'bbox', None)
+            if orig_box:
+                rot = getattr(text_obj, 'rotation', 0.0) % 360.0
+                cx = (orig_box[0] + orig_box[2]) / 2.0
+                cy = (orig_box[1] + orig_box[3]) / 2.0
+                mat = get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
+                redact_rect = fitz.Rect(orig_box)
+                if mat:
+                    page.add_redact_annot(redact_rect.quad * mat)
+                else:
+                    page.add_redact_annot(redact_rect)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
 
+        # 2. Insert replacement text if non-empty
+        if new_text.strip():
+            temp_obj = copy.deepcopy(text_obj)
+            temp_obj.text = new_text
+            res, err = _apply_single_object_to_page(doc, page, temp_obj)
+            if not res:
+                return False, err
+
+        text_obj.text = new_text
+        text_obj.is_baked = True
+        text_obj._ghost_redacted = True
+        invalidate_page_cache(doc, text_obj.page_number)
         return True, None
     except Exception as e:
         print(f"ERROR applying text edit: {e}")

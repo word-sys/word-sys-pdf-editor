@@ -19,7 +19,7 @@ FLAG_BOLD = 1 << 4         # bit 4
 BASE14_FALLBACK_MAP = {
     'helvetica': 'helv', 'arial': 'helv', 'sans': 'helv', 'verdana': 'helv', 'tahoma': 'helv',
     'liberation sans': 'helv', 'liberationsans': 'helv', 'dejavusans': 'helv', 'notosans': 'helv',
-    'carlito': 'helv', 'cantarell': 'helv', 'ubuntu': 'helv',
+    'carlito': 'helv', 'cantarell': 'helv', 'ubuntu': 'helv', 'aptos': 'helv', 'aptosdisplay': 'helv',
     'times': 'timr', 'timesnewroman': 'timr', 'serif': 'timr', 'georgia': 'timr',
     'liberation serif': 'timr', 'liberationserif': 'timr', 'dejavuserif': 'timr', 'notoserif': 'timr',
     'caladea': 'timr', 'roman': 'timr',
@@ -125,7 +125,7 @@ def decompose_font_name(font_name: str, flags: int = 0) -> Dict[str, Any]:
         is_serif = True
         
     lower_base = base_name.lower().replace(" ", "")
-    sans_aliases = ("arial", "helvetica", "calibri")
+    sans_aliases = ("arial", "helvetica", "calibri", "aptos", "aptosdisplay")
     serif_aliases = ("times", "timesnew", "timesnewroman")
     mono_aliases = ("courier", "couriernew")
     
