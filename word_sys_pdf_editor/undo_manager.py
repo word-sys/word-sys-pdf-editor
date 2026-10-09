@@ -30,7 +30,17 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
         redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
     elif isinstance(target_object, EditableImage):
         x0, y0, x1, y1 = orig_bbox
-        redact_rect = fitz.Rect(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0)
+        cx = (x0 + x1) / 2.0
+        cy = (y0 + y1) / 2.0
+        w = x1 - x0
+        h = y1 - y0
+        if rot != 0.0:
+            rad = math.radians(rot)
+            nw = abs(w * math.cos(rad)) + abs(h * math.sin(rad))
+            nh = abs(w * math.sin(rad)) + abs(h * math.cos(rad))
+            redact_rect = fitz.Rect(cx - nw / 2.0 - 2.0, cy - nh / 2.0 - 2.0, cx + nw / 2.0 + 2.0, cy + nh / 2.0 + 2.0)
+        else:
+            redact_rect = fitz.Rect(x0 - 2.0, y0 - 2.0, x1 + 2.0, y1 + 2.0)
     else:
         redact_rect = fitz.Rect(orig_bbox)
 
@@ -39,7 +49,7 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
     mat = pdf_handler.get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
 
     applied_rects = []
-    if mat:
+    if mat and not isinstance(target_object, EditableImage):
         applied_rects.append((redact_rect.quad * mat).rect)
     else:
         applied_rects.append(redact_rect)
@@ -116,7 +126,7 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                         applied_rects.append(st_rect)
 
         # Apply redaction ONLY for target_object
-        if mat:
+        if mat and not isinstance(target_object, EditableImage):
             page.add_redact_annot(redact_rect.quad * mat)
         else:
             page.add_redact_annot(redact_rect)
@@ -190,7 +200,10 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
 
         elif isinstance(target_object, EditableImage):
             # Only redact image, NEVER redact text or graphics
-            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
+            try:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
+            except TypeError:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
 
             for other in getattr(window, 'editable_images', []):
                 if other is not target_object and getattr(other, 'page_number', None) == page_num:
@@ -620,7 +633,7 @@ class RotateObjectCommand(Command):
         """Bake the rotation into the PDF page and update live object and UI."""
         page_num = getattr(self.target_object, 'page_number', None)
         if page_num is not None and getattr(self.window, 'doc', None):
-            orig_rot = getattr(self.target_object, 'original_rotation', from_angle)
+            orig_rot = from_angle
             orig_bbox = getattr(self.target_object, 'original_bbox', getattr(self.target_object, 'bbox', None))
             props_to_clear = {'rotation': orig_rot, 'bbox': orig_bbox}
             self._erase_ghost_if_needed(self.target_object, page_num, properties_to_clear=props_to_clear)

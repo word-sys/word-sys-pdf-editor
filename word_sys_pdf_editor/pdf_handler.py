@@ -2552,29 +2552,49 @@ def _apply_single_object_to_page(doc, page, obj):
                         
     elif isinstance(obj, EditableImage):
         rect = fitz.Rect(obj.bbox)
+        cx = (rect.x0 + rect.x1) / 2.0
+        cy = (rect.y0 + rect.y1) / 2.0
+        w = rect.x1 - rect.x0
+        h = rect.y1 - rect.y0
+
+        img_bytes = getattr(obj, 'image_bytes', None)
+        if not img_bytes and getattr(obj, 'xref', None):
+            try:
+                img_bytes = get_image_rgba_bytes(doc, obj.xref)
+                obj.image_bytes = img_bytes
+            except Exception:
+                pass
+
+        if not img_bytes:
+            return False, "Image bytes missing"
+
         if rot == 0.0:
-            page.insert_image(rect, stream=obj.image_bytes, keep_proportion=False)
+            page.insert_image(rect, stream=img_bytes, keep_proportion=False)
         elif rot % 90 == 0:
-            page.insert_image(rect, stream=obj.image_bytes, rotate=int(rot), keep_proportion=False)
+            if int(rot) % 180 == 90:
+                target_rect = fitz.Rect(cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0)
+            else:
+                target_rect = rect
+            pdf_rot = (360 - int(rot)) % 360
+            page.insert_image(target_rect, stream=img_bytes, rotate=pdf_rot, keep_proportion=False)
         else:
             try:
                 from PIL import Image
-                im = Image.open(io.BytesIO(obj.image_bytes))
+                im = Image.open(io.BytesIO(img_bytes))
+                if im.mode != "RGBA":
+                    im = im.convert("RGBA")
                 rotated_im = im.rotate(-rot, expand=True, resample=Image.BICUBIC)
                 buf = io.BytesIO()
                 rotated_im.save(buf, format="PNG")
                 stream = buf.getvalue()
-                cx = (rect.x0 + rect.x1) / 2.0
-                cy = (rect.y0 + rect.y1) / 2.0
-                w = rect.x1 - rect.x0
-                h = rect.y1 - rect.y0
                 rad = math.radians(rot)
                 nw = abs(w * math.cos(rad)) + abs(h * math.sin(rad))
                 nh = abs(w * math.sin(rad)) + abs(h * math.cos(rad))
                 rot_rect = fitz.Rect(cx - nw / 2.0, cy - nh / 2.0, cx + nw / 2.0, cy + nh / 2.0)
                 page.insert_image(rot_rect, stream=stream, keep_proportion=False)
-            except Exception:
-                page.insert_image(rect, stream=obj.image_bytes, keep_proportion=False)
+            except Exception as e:
+                print(f"Warning: PIL image rotation failed: {e}")
+                page.insert_image(rect, stream=img_bytes, keep_proportion=False)
     elif isinstance(obj, EditableShape):
         rect = fitz.Rect(obj.bbox)
         shape = page.new_shape()

@@ -2722,6 +2722,44 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             PangoCairo.show_layout(cr, layout)
             cr.restore()
 
+        for img_obj in getattr(self, 'editable_images', []):
+            if getattr(img_obj, 'page_number', None) != self.current_page_index:
+                continue
+            if getattr(img_obj, 'is_baked', False):
+                continue
+            if img_obj is self.dragged_object:
+                continue
+            if not getattr(img_obj, 'bbox', None) or not getattr(img_obj, 'image_bytes', None):
+                continue
+            x1, y1, x2, y2 = img_obj.bbox
+            draw_w = x2 - x1
+            draw_h = y2 - y1
+            if draw_w <= 0 or draw_h <= 0:
+                continue
+            cr.save()
+            rot = getattr(img_obj, 'rotation', 0.0) % 360.0
+            if rot != 0.0:
+                cx = x1 + draw_w / 2.0
+                cy = y1 + draw_h / 2.0
+                cr.translate(cx, cy)
+                cr.rotate(math.radians(rot))
+                cr.translate(-cx, -cy)
+            try:
+                loader = GdkPixbuf.PixbufLoader.new()
+                loader.write(img_obj.image_bytes)
+                loader.close()
+                pixbuf = loader.get_pixbuf()
+                if pixbuf:
+                    cr.save()
+                    cr.translate(x1, y1)
+                    cr.scale(draw_w / pixbuf.get_width(), draw_h / pixbuf.get_height())
+                    Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0)
+                    cr.paint()
+                    cr.restore()
+            except Exception:
+                pass
+            cr.restore()
+
         for shape in self.editable_shapes:
             if shape.page_number != self.current_page_index:
                 continue
@@ -4548,7 +4586,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         bbox=rect,
                         page_number=self.current_page_index,
                         xref=None,
-                        image_bytes=image_bytes
+                        image_bytes=image_bytes,
+                        is_new=True
                     )
 
                     command = AddObjectCommand(self, new_image_obj)
