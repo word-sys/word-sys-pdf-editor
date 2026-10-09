@@ -1,6 +1,6 @@
 import copy
 from typing import Optional, List, Dict, Tuple, Any
-from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand, EditFormFieldCommand, AddFormFieldCommand, DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand
+from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand, EditFormFieldCommand, AddFormFieldCommand, DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand, ReplaceImageCommand
 from .i18n import _, get_language, get_setting, set_setting
 
 import gi
@@ -8101,6 +8101,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_text = None
             self.selected_shape = None
             
+            btn_extract = Gtk.Button(label=_("menu_extract_image"))
+            btn_extract.connect("clicked", lambda b: self._handle_context_action("extract_image", clicked_image, x, y))
+            popover_box.append(btn_extract)
+
+            btn_replace = Gtk.Button(label=_("menu_replace_image"))
+            btn_replace.connect("clicked", lambda b: self._handle_context_action("replace_image", clicked_image, x, y))
+            popover_box.append(btn_replace)
+
+            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
             btn_del = Gtk.Button(label=_("menu_delete_image"))
             btn_del.add_css_class("destructive-action")
             def on_delete_image(b):
@@ -8208,6 +8218,78 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._convert_view_selection_to_editable()
             if self.selected_text:
                 self._toggle_text_strikethrough(self.selected_text)
+        elif action == "extract_image":
+            self._extract_image(obj)
+        elif action == "replace_image":
+            self._replace_image(obj)
+
+    def _extract_image(self, image_obj):
+        """Export an embedded or active image to disk."""
+        if not image_obj:
+            return
+
+        img_bytes, ext = pdf_handler.extract_image_data(self.doc, image_obj)
+        if not img_bytes:
+            show_error_dialog(self, _("err_extract_image"), _("err_title"))
+            return
+
+        page_num = getattr(image_obj, 'page_number', self.current_page_index) or 0
+        xref_part = getattr(image_obj, 'xref', None) or 'extracted'
+        default_name = f"image_p{page_num + 1}_{xref_part}.{ext}"
+
+        filter_img = Gtk.FileFilter(name=_("image_filter_label"))
+        filter_img.add_pattern(f"*.{ext}")
+        filter_all = Gtk.FileFilter(name=_("filter_all_files"))
+        filter_all.add_pattern("*")
+
+        def on_save_finish(file):
+            if file:
+                save_path = file.get_path()
+                try:
+                    with open(save_path, "wb") as f:
+                        f.write(img_bytes)
+                    self.status_label.set_text(_("image_extracted_success", os.path.basename(save_path)))
+                except Exception as err:
+                    show_error_dialog(self, str(err), _("err_title"))
+
+        show_save_file_dialog(
+            self,
+            _("menu_extract_image"),
+            initial_name=default_name,
+            filters=[filter_img, filter_all],
+            callback=on_save_finish
+        )
+
+    def _replace_image(self, image_obj):
+        """Prompt user for a replacement image file and replace using page.replace_image()."""
+        if not image_obj:
+            return
+
+        filter_img = Gtk.FileFilter(name=_("image_filter_label"))
+        for mime in ["image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"]:
+            filter_img.add_mime_type(mime)
+
+        def on_open_finish(file):
+            if file:
+                image_path = file.get_path()
+                try:
+                    with open(image_path, "rb") as f:
+                        new_raw_bytes = f.read()
+                    if not new_raw_bytes:
+                        return
+
+                    command = ReplaceImageCommand(self, image_obj, new_raw_bytes)
+                    if command.execute():
+                        self.undo_manager.add_command(command)
+                except Exception as err:
+                    show_error_dialog(self, _("image_add_error", err), _("image_error_title"))
+
+        show_open_file_dialog(
+            self,
+            _("menu_replace_image"),
+            filters=[filter_img],
+            callback=on_open_finish
+        )
 
     def _convert_view_selection_to_editable(self):
         """Convert view selection to editable."""

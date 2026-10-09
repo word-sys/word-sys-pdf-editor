@@ -1329,6 +1329,151 @@ def delete_image_from_page(doc, image_obj: EditableImage):
         traceback.print_exc()
         return False, _("err_deleting_image", e)
 
+def _detect_image_extension(data: bytes) -> str:
+    """Detect image file extension based on magic header bytes."""
+    if not data or len(data) < 2:
+        return "png"
+    if data.startswith(b"BM"):
+        return "bmp"
+    if data.startswith(b"\x89PNG"):
+        return "png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "gif"
+    if data.startswith(b"RIFF") and b"WEBP" in data[:16]:
+        return "webp"
+    return "png"
+
+def extract_image_data(doc, image_obj: EditableImage) -> Tuple[Optional[bytes], str]:
+    """Extract raw image bytes and file extension from an EditableImage or PDF xref."""
+    if not image_obj:
+        return None, "png"
+
+    if getattr(image_obj, 'raw_image_bytes', None):
+        raw_b = image_obj.raw_image_bytes
+        ext = _detect_image_extension(raw_b)
+        return raw_b, ext
+
+    if doc and getattr(image_obj, 'xref', None):
+        try:
+            img_dict = doc.extract_image(image_obj.xref)
+            if img_dict and img_dict.get("image"):
+                ext = img_dict.get("ext", "png")
+                return img_dict["image"], ext
+        except Exception as e:
+            print(f"Warning: doc.extract_image failed for xref {image_obj.xref}: {e}")
+
+    if getattr(image_obj, 'image_bytes', None):
+        raw_b = image_obj.image_bytes
+        ext = _detect_image_extension(raw_b)
+        return raw_b, ext
+
+    return None, "png"
+
+def fit_image_to_aspect_ratio(image_bytes: bytes, target_bbox: Tuple[float, float, float, float]) -> bytes:
+    """Fit image bytes into target bounding box aspect ratio using transparent padding.
+    
+    Ensures that when placed inside target_bbox via PyMuPDF page.replace_image(),
+    the image maintains its original aspect ratio centered without stretching.
+    """
+    try:
+        from PIL import Image, PngImagePlugin
+
+        im = Image.open(io.BytesIO(image_bytes))
+        img_w, img_h = im.size
+        if img_w <= 0 or img_h <= 0:
+            return image_bytes
+
+        box_w = abs(target_bbox[2] - target_bbox[0])
+        box_h = abs(target_bbox[3] - target_bbox[1])
+        if box_w <= 0 or box_h <= 0:
+            return image_bytes
+
+        img_aspect = img_w / img_h
+        box_aspect = box_w / box_h
+
+        png_meta = PngImagePlugin.PngInfo()
+        png_meta.add_text("stream_id", str(uuid.uuid4()))
+
+        if abs(img_aspect - box_aspect) / box_aspect < 0.005:
+            out_buf = io.BytesIO()
+            im.save(out_buf, format="PNG", pnginfo=png_meta)
+            return out_buf.getvalue()
+
+        if img_aspect > box_aspect:
+            canvas_w = img_w
+            canvas_h = max(1, int(round(img_w / box_aspect)))
+            x_offset = 0
+            y_offset = (canvas_h - img_h) // 2
+        else:
+            canvas_h = img_h
+            canvas_w = max(1, int(round(img_h * box_aspect)))
+            x_offset = (canvas_w - img_w) // 2
+            y_offset = 0
+
+        canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+        im_rgba = im.convert("RGBA") if im.mode != "RGBA" else im
+        canvas.paste(im_rgba, (x_offset, y_offset))
+
+        out_buf = io.BytesIO()
+        canvas.save(out_buf, format="PNG", pnginfo=png_meta)
+        return out_buf.getvalue()
+    except Exception as e:
+        print(f"Warning: could not fit image to aspect ratio: {e}")
+        return image_bytes
+
+def replace_image_on_page(doc, image_obj: EditableImage, new_image_bytes: bytes) -> Tuple[bool, Optional[str], Optional[int]]:
+    """Replace an existing embedded PDF image using PyMuPDF page.replace_image().
+    
+    Maintains the aspect ratio and bounding box of the image on the page.
+    Returns (success, error_message, new_xref).
+    """
+    if not doc or image_obj.page_number is None:
+        return False, _("err_invalid_doc_page_replace_image"), None
+
+    try:
+        page_num = image_obj.page_number
+        page = doc.load_page(page_num)
+
+        fitted_bytes = fit_image_to_aspect_ratio(new_image_bytes, image_obj.bbox)
+
+        new_xref = None
+        if getattr(image_obj, 'xref', None):
+            page_images = page.get_images()
+            xref_exists = any(img[0] == image_obj.xref for img in page_images)
+            if xref_exists:
+                page.replace_image(image_obj.xref, stream=fitted_bytes)
+                new_xref = image_obj.xref
+            else:
+                rect = fitz.Rect(image_obj.bbox)
+                page.add_redact_annot(rect)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=0)
+                page.insert_image(rect, stream=fitted_bytes, keep_proportion=False)
+                if page.get_images():
+                    new_xref = page.get_images()[-1][0]
+        else:
+            rect = fitz.Rect(image_obj.bbox)
+            page.add_redact_annot(rect)
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=0)
+            page.insert_image(rect, stream=fitted_bytes, keep_proportion=False)
+            if page.get_images():
+                new_xref = page.get_images()[-1][0]
+
+        image_obj.image_bytes = fitted_bytes
+        if not getattr(image_obj, 'xref', None) and new_xref:
+            image_obj.xref = new_xref
+        image_obj.modified = True
+
+        save_page_snapshot(doc, page_num, force=True)
+        invalidate_page_cache(doc, page_num)
+        return True, None, new_xref
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error replacing image on page {image_obj.page_number}: {error_msg}")
+        traceback.print_exc()
+        return False, error_msg, None
+
 def delete_shape_from_page(doc, shape_obj: EditableShape):
     """Remove vector shape from page snapshot via targeted redaction."""
     if not doc or shape_obj.page_number is None:

@@ -681,6 +681,73 @@ class RotateObjectCommand(Command):
             self.window.status_label.set_text(_("status_object_rotation", f"{self.old_rotation:.1f}°"))
 
 
+class ReplaceImageCommand(Command):
+    """Command for replacing an embedded image with full undo/redo support."""
+    def __init__(self, window, target_image: EditableImage, new_raw_bytes: bytes):
+        super().__init__(window)
+        self.target_image = target_image
+        self.old_image_bytes = target_image.image_bytes
+        self.old_raw_bytes = getattr(target_image, 'raw_image_bytes', target_image.image_bytes)
+        self.old_xref = getattr(target_image, 'xref', None)
+        self.new_raw_bytes = new_raw_bytes
+        self.new_image_bytes = None
+        self.new_xref = None
+
+    def execute(self):
+        """Execute the image replacement on the PDF page."""
+        self.target_image.raw_image_bytes = self.new_raw_bytes
+        success, err, new_xref = pdf_handler.replace_image_on_page(
+            self.window.doc,
+            self.target_image,
+            self.new_raw_bytes
+        )
+        if success:
+            self.new_image_bytes = self.target_image.image_bytes
+            self.new_xref = new_xref
+            self.window.document_modified = True
+            page_num = getattr(self.target_image, 'page_number', None)
+            if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(page_num)
+            if hasattr(self.window, 'status_label') and self.window.status_label:
+                self.window.status_label.set_text(_("change_applied"))
+            if hasattr(self.window, 'pdf_view'):
+                self.window.pdf_view.queue_draw()
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+            return True
+        else:
+            from .ui_components import show_error_dialog
+            show_error_dialog(self.window, _("err_during_op", err))
+            return False
+
+    def undo(self):
+        """Revert the image replacement to the original image bytes."""
+        self.target_image.raw_image_bytes = self.old_raw_bytes
+        success, err, reverted_xref = pdf_handler.replace_image_on_page(
+            self.window.doc,
+            self.target_image,
+            self.old_image_bytes
+        )
+        if success:
+            if self.old_xref:
+                self.target_image.xref = self.old_xref
+            self.window.document_modified = True
+            page_num = getattr(self.target_image, 'page_number', None)
+            if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(page_num)
+            if hasattr(self.window, 'status_label') and self.window.status_label:
+                self.window.status_label.set_text(_("reverted"))
+            if hasattr(self.window, 'pdf_view'):
+                self.window.pdf_view.queue_draw()
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+            return True
+        else:
+            from .ui_components import show_error_dialog
+            show_error_dialog(self.window, _("err_during_op", err))
+            return False
+
+
 class EditFormFieldCommand(Command):
     """Command representing an interactive AcroForm field value modification."""
     def __init__(self, window, target_field, old_value, new_value):
