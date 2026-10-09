@@ -2943,7 +2943,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         # Render AcroForm field overlays
         current_fields = [f for f in getattr(self, 'form_fields', []) if getattr(f, 'page_number', self.current_page_index) == self.current_page_index]
         if current_fields:
-            pdf_handler.draw_acroform_overlay(cr, current_fields, self.zoom_level, active_field=self.selected_form_field)
+            is_design = (not self.view_mode and getattr(self, 'tool_mode', '') == "form_builder")
+            pdf_handler.draw_acroform_overlay(
+                cr,
+                current_fields,
+                self.zoom_level,
+                active_field=(self.selected_form_field if self.view_mode else None),
+                is_design_mode=is_design
+            )
 
         selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
                         self.selected_stroke or getattr(self, 'selected_form_field', None))
@@ -3609,67 +3616,108 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         initial_lines = [s.strip() for s in current_text.split(",") if s.strip()] if current_text else ["Option 1", "Option 2", "Option 3"]
 
-        dialog = Gtk.Dialog(
-            title=_("form_field_edit_options_title"),
-            transient_for=self,
-            modal=True
-        )
-        dialog.set_default_size(360, 320)
-        content_area = dialog.get_content_area()
-        content_area.set_spacing(10)
-        content_area.set_margin_start(16)
-        content_area.set_margin_end(16)
-        content_area.set_margin_top(16)
-        content_area.set_margin_bottom(16)
+        dialog = Adw.Window()
+        dialog.set_transient_for(self)
+        dialog.set_modal(True)
+        dialog.set_destroy_with_parent(True)
 
-        lbl = Gtk.Label(label=_("form_field_options_tip"))
-        lbl.set_halign(Gtk.Align.START)
-        lbl.set_wrap(True)
-        content_area.append(lbl)
+        clean_title = _("form_field_edit_options_title").replace(":", "").strip()
+        dialog.set_title(clean_title)
+        dialog.set_default_size(440, 420)
+        dialog.set_resizable(False)
 
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_vexpand(True)
-        scroll.set_hexpand(True)
-        scroll.add_css_class("card")
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        dialog.set_content(main_box)
+
+        header = Adw.HeaderBar()
+        cancel_btn = Gtk.Button(label=_("btn_cancel"))
+        cancel_btn.connect("clicked", lambda b: dialog.close())
+        header.pack_start(cancel_btn)
+
+        apply_btn = Gtk.Button(label=_("btn_apply"))
+        apply_btn.add_css_class("suggested-action")
+        header.pack_end(apply_btn)
+        main_box.append(header)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        main_box.append(scrolled)
+
+        clamp = Adw.Clamp(maximum_size=400)
+        clamp.set_margin_top(16)
+        clamp.set_margin_bottom(16)
+        clamp.set_margin_start(16)
+        clamp.set_margin_end(16)
+        scrolled.set_child(clamp)
+
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        clamp.set_child(content_box)
+
+        pref_group = Adw.PreferencesGroup()
+        pref_group.set_title(_("form_field_options_label").replace(":", "").strip())
+        pref_group.set_description(clean_title)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        card.add_css_class("card")
+
+        inner_scroll = Gtk.ScrolledWindow()
+        inner_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        inner_scroll.set_min_content_height(200)
+        inner_scroll.set_vexpand(True)
 
         tv = Gtk.TextView()
-        tv.set_top_margin(8)
-        tv.set_bottom_margin(8)
-        tv.set_left_margin(8)
-        tv.set_right_margin(8)
+        tv.set_top_margin(12)
+        tv.set_bottom_margin(12)
+        tv.set_left_margin(14)
+        tv.set_right_margin(14)
+        tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         tv_buf = tv.get_buffer()
         tv_buf.set_text("\n".join(initial_lines))
-        scroll.set_child(tv)
-        content_area.append(scroll)
+        inner_scroll.set_child(tv)
+        card.append(inner_scroll)
+        pref_group.add(card)
+        content_box.append(pref_group)
 
-        dialog.add_buttons(
-            _("btn_cancel"), Gtk.ResponseType.CANCEL,
-            _("btn_apply"), Gtk.ResponseType.ACCEPT
-        )
-        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+        tip_lbl = Gtk.Label(label=_("form_field_options_tip"))
+        tip_lbl.add_css_class("dim-label")
+        tip_lbl.add_css_class("caption")
+        tip_lbl.set_halign(Gtk.Align.START)
+        content_box.append(tip_lbl)
 
-        def on_response(d, resp_id):
-            if resp_id == Gtk.ResponseType.ACCEPT:
-                start, end = tv_buf.get_bounds()
-                text_val = tv_buf.get_text(start, end, True)
-                new_opts = [line.strip() for line in text_val.splitlines() if line.strip()]
-                if not new_opts:
-                    new_opts = ["Option 1"]
-                joined = ", ".join(new_opts)
-                if hasattr(self, 'form_builder_options_entry') and self.form_builder_options_entry:
-                    self.form_builder_options_entry.set_text(joined)
-                if getattr(self, 'selected_form_field', None):
-                    old_opts = getattr(self.selected_form_field, 'choice_values', []) or []
-                    if new_opts != old_opts:
-                        cmd = EditFormFieldChoicesCommand(self, self.selected_form_field, old_opts, new_opts)
-                        cmd.execute()
-                        self.undo_manager.add_command(cmd)
-                        self.document_modified = True
-                        self._update_tab_dirty_state()
-            d.destroy()
+        def _on_apply(b):
+            start, end = tv_buf.get_bounds()
+            text_val = tv_buf.get_text(start, end, True)
+            new_opts = [line.strip() for line in text_val.splitlines() if line.strip()]
+            if not new_opts:
+                new_opts = ["Option 1"]
+            joined = ", ".join(new_opts)
+            if hasattr(self, 'form_builder_options_entry') and self.form_builder_options_entry:
+                self.form_builder_options_entry.set_text(joined)
+            if getattr(self, 'selected_form_field', None):
+                old_opts = getattr(self.selected_form_field, 'choice_values', []) or []
+                if new_opts != old_opts:
+                    cmd = EditFormFieldChoicesCommand(self, self.selected_form_field, old_opts, new_opts)
+                    cmd.execute()
+                    self.undo_manager.add_command(cmd)
+                    self.document_modified = True
+                    self._update_tab_dirty_state()
+            dialog.close()
 
-        dialog.connect("response", on_response)
+        apply_btn.connect("clicked", _on_apply)
+
+        key_ctrl = Gtk.EventControllerKey()
+        def _on_key(ctrl, keyval, keycode, state):
+            if keyval == Gdk.KEY_Escape:
+                dialog.close()
+                return True
+            elif keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and (state & Gdk.ModifierType.CONTROL_MASK):
+                _on_apply(None)
+                return True
+            return False
+        key_ctrl.connect("key-pressed", _on_key)
+        dialog.add_controller(key_ctrl)
+
         dialog.present()
 
     def _on_form_builder_name_changed(self, entry):
@@ -3749,10 +3797,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return ed
 
     def _open_form_field_editor(self, field):
-        """Open in-place editor or toggle field upon double-click or view-mode activation."""
+        """Open in-place editor or toggle field upon view-mode activation."""
         if not field:
             return
         self.selected_form_field = field
+
+        # Form filling is only enabled in View Mode!
+        if not getattr(self, 'view_mode', False) and not getattr(self, '_enable_persistent_form_overlays', False):
+            self._update_form_builder_controls_for_selected()
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
+            return
 
         ftype = getattr(field, 'field_type', 'text').lower()
         if ftype in ("checkbox", "check", "cb"):
@@ -5745,7 +5800,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 clicked_form_field = self._find_form_field_at_pos(page_x_unzoomed, page_y_unzoomed)
                 if clicked_form_field:
                     self.selected_form_field = clicked_form_field
-                    self._focus_form_field_overlay(clicked_form_field)
+                    self._open_form_field_editor(clicked_form_field)
                     self.view_sel_start = None
                     self.view_sel_rect = None
                     self.view_selected_text = ""
@@ -5753,6 +5808,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.pdf_view.queue_draw()
                     self._update_ui_state()
                     return
+                else:
+                    self._close_active_form_field_editor()
 
                 clicked_block = pdf_handler.get_block_at_pos(self.doc, self.current_page_index, (page_x_unzoomed, page_y_unzoomed))
                 if clicked_block:
@@ -5856,16 +5913,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_form_field = None
                 self._update_stroke_format_controls(self.selected_stroke)
             elif clicked_form_field:
+                self._close_active_form_field_editor()
                 self.selected_text = None
                 self.selected_image = None
                 self.selected_shape = None
                 self.selected_stroke = None
-                if clicked_form_field == self.selected_form_field and n_press >= 2:
-                    self._open_form_field_editor(clicked_form_field)
-                else:
-                    self._close_active_form_field_editor()
-                    self.selected_form_field = clicked_form_field
-                    self._update_form_builder_controls_for_selected()
+                self.selected_form_field = clicked_form_field
+                self._update_form_builder_controls_for_selected()
             else:
                 self._close_active_form_field_editor()
                 self.selected_text = None
@@ -5946,16 +6000,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif self.tool_mode == "form_builder":
             clicked_form_field = self._find_form_field_at_pos(page_x_unzoomed, page_y_unzoomed)
             if clicked_form_field:
+                self._close_active_form_field_editor()
                 self.selected_text = None
                 self.selected_image = None
                 self.selected_shape = None
                 self.selected_stroke = None
-                if clicked_form_field == self.selected_form_field and n_press >= 2:
-                    self._open_form_field_editor(clicked_form_field)
-                else:
-                    self._close_active_form_field_editor()
-                    self.selected_form_field = clicked_form_field
-                    self._update_form_builder_controls_for_selected()
+                self.selected_form_field = clicked_form_field
+                self._update_form_builder_controls_for_selected()
+                if n_press >= 2 and hasattr(self, 'form_builder_name_entry') and self.form_builder_name_entry and self.form_builder_name_entry.get_visible():
+                    self.form_builder_name_entry.grab_focus()
+                    self.form_builder_name_entry.select_region(0, -1)
             else:
                 self._close_active_form_field_editor()
                 self.selected_form_field = None
@@ -6384,8 +6438,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if getattr(self, 'selected_form_field', None) and not is_input_focused:
             if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_F2):
-                self._open_form_field_editor(self.selected_form_field)
-                return True
+                if getattr(self, 'view_mode', False):
+                    self._open_form_field_editor(self.selected_form_field)
+                    return True
+                elif getattr(self, 'tool_mode', '') == "form_builder" and hasattr(self, 'form_builder_name_entry') and self.form_builder_name_entry and self.form_builder_name_entry.get_visible():
+                    self.form_builder_name_entry.grab_focus()
+                    self.form_builder_name_entry.select_region(0, -1)
+                    return True
 
         if keyval in (Gdk.KEY_Delete, Gdk.KEY_BackSpace):
             if getattr(self, 'selected_form_field', None) and not is_editing_entry:
@@ -7398,16 +7457,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if self._active_session and self._active_session.doc is not None:
                     self.set_title(f"{constants.APP_NAME} - {self._active_session.display_title}")
         self.view_mode = not self.view_mode
+        self._close_active_form_field_editor()
         if self.view_mode:
             self._apply_and_hide_editor()
             self.selected_text = None
             self.selected_image = None
             self.selected_shape = None
+            self.selected_form_field = None
             self.tool_mode = "select"
         else:
             self.view_sel_start = None
             self.view_sel_rect = None
             self.view_selected_text = ""
+            self.selected_form_field = None
         self._update_ui_state()
         self.pdf_view.queue_draw()
 

@@ -1420,7 +1420,7 @@ def import_form_data(doc, data: Dict[str, Any]) -> int:
         print(f"Error importing form data: {e}")
     return count
 
-def draw_acroform_overlay(cr, fields, zoom_level=1.0, active_field=None):
+def draw_acroform_overlay(cr, fields, zoom_level=1.0, active_field=None, is_design_mode=False):
     """Render interactive AcroForm field overlays with visual cues onto Cairo context."""
     if not fields:
         return
@@ -1443,95 +1443,29 @@ def draw_acroform_overlay(cr, fields, zoom_level=1.0, active_field=None):
             getattr(f, "field_id", "") == getattr(active_field, "field_id", "")
         ))
 
-        ftype = getattr(f, "field_type", "text").lower()
         is_req = getattr(f, "is_required", False)
         is_ro = getattr(f, "is_read_only", False)
-        is_checked = bool(getattr(f, "is_checked", False))
 
         if is_active:
-            cr.set_source_rgba(0.2, 0.45, 0.9, 0.18)
+            cr.set_source_rgba(0.2, 0.45, 0.9, 0.12)
             cr.rectangle(x1, y1, w, h)
             cr.fill()
-            cr.set_source_rgba(0.15, 0.45, 0.9, 0.95)
-            cr.set_line_width(2.0 / zoom)
+            cr.set_source_rgba(0.15, 0.45, 0.9, 0.85)
+            cr.set_line_width(1.5 / zoom)
             cr.rectangle(x1, y1, w, h)
             cr.stroke()
-        else:
-            if is_ro:
-                cr.set_source_rgba(0.85, 0.85, 0.85, 0.25)
-                cr.rectangle(x1, y1, w, h)
-                cr.fill()
-                cr.set_source_rgba(0.5, 0.5, 0.5, 0.6)
-                cr.set_line_width(1.0 / zoom)
-                cr.set_dash([3.0 / zoom, 3.0 / zoom])
-                cr.rectangle(x1, y1, w, h)
-                cr.stroke()
-            elif ftype == "radio":
-                cx = x1 + w / 2.0
-                cy = y1 + h / 2.0
-                r = max(2.0, min(w, h) / 2.0 - (1.0 / zoom))
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.92)
-                cr.arc(cx, cy, r, 0, 2 * math.pi)
-                cr.fill_preserve()
-                cr.set_source_rgba(0.25, 0.25, 0.25, 0.9)
-                cr.set_line_width(1.5 / zoom)
-                cr.stroke()
-                if is_checked:
-                    cr.set_source_rgba(0.15, 0.15, 0.15, 0.95)
-                    cr.arc(cx, cy, max(1.5, r * 0.5), 0, 2 * math.pi)
-                    cr.fill()
-            elif ftype in ("checkbox", "check", "cb"):
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.92)
-                cr.rectangle(x1, y1, w, h)
-                cr.fill_preserve()
-                cr.set_source_rgba(0.25, 0.25, 0.25, 0.9)
-                cr.set_line_width(1.5 / zoom)
-                cr.stroke()
-                if is_checked:
-                    cr.set_source_rgba(0.1, 0.5, 0.15, 0.95)
-                    cr.set_line_width(2.0 / zoom)
-                    cr.move_to(x1 + w * 0.22, y1 + h * 0.52)
-                    cr.line_to(x1 + w * 0.44, y1 + h * 0.76)
-                    cr.line_to(x1 + w * 0.80, y1 + h * 0.26)
-                    cr.stroke()
-            elif ftype in ("combobox", "choice", "dropdown", "ch", "listbox"):
-                cr.set_source_rgba(0.93, 0.96, 1.0, 0.5)
-                cr.rectangle(x1, y1, w, h)
-                cr.fill_preserve()
-                cr.set_source_rgba(0.40, 0.50, 0.70, 0.85)
-                cr.set_line_width(1.2 / zoom)
-                cr.stroke()
-                arr_x = x1 + w - min(14.0 / zoom, w * 0.25)
-                arr_y = y1 + h / 2.0
-                cr.set_source_rgba(0.35, 0.45, 0.6, 0.85)
-                cr.move_to(arr_x - 3.5 / zoom, arr_y - 2.0 / zoom)
-                cr.line_to(arr_x + 3.5 / zoom, arr_y - 2.0 / zoom)
-                cr.line_to(arr_x, arr_y + 3.0 / zoom)
-                cr.close_path()
-                cr.fill()
-            else:
-                cr.set_source_rgba(0.93, 0.96, 1.0, 0.5)
-                cr.rectangle(x1, y1, w, h)
-                cr.fill_preserve()
-                cr.set_source_rgba(0.40, 0.50, 0.70, 0.85)
-                cr.set_line_width(1.2 / zoom)
-                cr.stroke()
-
-        # Draw current text value for text and dropdown fields
-        if ftype in ("text", "combobox", "choice", "dropdown", "ch", "listbox"):
-            val_str = str(getattr(f, "value", "") or "")
-            if val_str:
-                cr.save()
-                clip_w = max(1.0, w - (min(20.0 / zoom, w * 0.35) if ftype != "text" else (6.0 / zoom)))
-                cr.rectangle(x1 + (3.0 / zoom), y1, clip_w, h)
-                cr.clip()
-                font_size = max(7.0, min(12.0, h * 0.65))
-                cr.set_font_size(font_size)
-                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-                cr.set_source_rgb(0.12, 0.12, 0.12)
-                cr.move_to(x1 + (4.0 / zoom), y1 + (h / 2.0) + (font_size * 0.35))
-                cr.show_text(val_str)
-                cr.restore()
+        elif is_design_mode:
+            cr.set_source_rgba(0.3, 0.5, 0.8, 0.4)
+            cr.set_line_width(1.0 / zoom)
+            cr.set_dash([3.0 / zoom, 3.0 / zoom])
+            cr.rectangle(x1, y1, w, h)
+            cr.stroke()
+        elif is_ro:
+            cr.set_source_rgba(0.5, 0.5, 0.5, 0.3)
+            cr.set_line_width(1.0 / zoom)
+            cr.set_dash([2.0 / zoom, 2.0 / zoom])
+            cr.rectangle(x1, y1, w, h)
+            cr.stroke()
 
         if is_req:
             marker_size = min(6.0 / zoom, w * 0.25, h * 0.25)
@@ -1543,6 +1477,7 @@ def draw_acroform_overlay(cr, fields, zoom_level=1.0, active_field=None):
             cr.fill()
 
         cr.restore()
+
 
 
 def ensure_form_widgets_have_appearance(doc) -> int:

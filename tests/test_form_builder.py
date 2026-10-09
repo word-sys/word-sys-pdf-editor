@@ -530,8 +530,9 @@ class TestFormBuilder(unittest.TestCase):
             self.assertTrue(ed["container"].get_can_target())
 
     def test_ephemeral_form_field_editor_lifecycle(self):
-        """Test ephemeral overlay lifecycle where 0 persistent widgets exist, 1 opens on demand, and 0 remain when closed."""
+        """Test ephemeral overlay lifecycle: 0 in editing mode, opens on demand in view mode, 0 when closed."""
         self.window._enable_persistent_form_overlays = False
+        self.window.view_mode = False
         self.window._create_new_form_field((50, 50, 200, 80))
         self.window._load_acroform_fields_for_page(0)
         field = self.window.form_fields[0]
@@ -539,7 +540,12 @@ class TestFormBuilder(unittest.TestCase):
         # No persistent widgets created
         self.assertEqual(len(self.window._form_field_overlay_widgets), 0)
 
-        # Opening editor creates exactly 1 ephemeral widget
+        # In edit mode, opening editor does NOT activate form filling
+        self.window._open_form_field_editor(field)
+        self.assertEqual(len(self.window._form_field_overlay_widgets), 0)
+
+        # In view mode, form filling opens exactly 1 ephemeral widget
+        self.window.view_mode = True
         self.window._open_form_field_editor(field)
         self.assertEqual(len(self.window._form_field_overlay_widgets), 1)
         self.assertEqual(self.window._active_editing_form_field, field)
@@ -629,13 +635,17 @@ class TestFormBuilder(unittest.TestCase):
         handle = self.window._find_resize_handle_at_pos(50, 50, field)
         self.assertIsNotNone(handle)
 
-        # Double click at (100, 65)
+        # Double click at (100, 65) in editing mode must NOT open form filling editor
         self.window.on_pdf_view_pressed(gesture, 2, 100, 65)
-        # In-place editor MUST now be open
+        self.assertIsNone(self.window._active_editing_form_field)
+        self.assertEqual(self.window.selected_form_field, field)
+        handle_after_double = self.window._find_resize_handle_at_pos(50, 50, field)
+        self.assertIsNotNone(handle_after_double)
+
+        # In View mode, clicking opens form filling editor
+        self.window.view_mode = True
+        self.window.on_pdf_view_pressed(gesture, 1, 100, 65)
         self.assertEqual(self.window._active_editing_form_field, field)
-        # Resize handles should be omitted during active editing
-        handle_while_editing = self.window._find_resize_handle_at_pos(50, 50, field)
-        self.assertIsNone(handle_while_editing)
 
         # Escape closes editor
         self.window._close_active_form_field_editor()
