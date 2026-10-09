@@ -14,6 +14,7 @@ import tempfile
 import traceback
 import re
 import uuid
+import json
 from typing import Optional, List, Dict, Any, Tuple, Union
 try:
     import anyconvert
@@ -28,8 +29,11 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Gdk', '4.0')
 gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf, Gdk, Pango, PangoCairo
-from .models import EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape, EditableStroke, AcroFormField
-from .utils import find_specific_font_variant, get_default_unicode_font_path
+from .models import (
+    EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape, EditableStroke,
+    AcroFormField, decompose_font_name, extract_font_properties, get_base14_font_variant
+)
+from .utils import find_specific_font_variant, get_default_unicode_font_path, normalize_color
 from .i18n import _
 
 _cairo_page_cache = {}
@@ -424,7 +428,11 @@ def extract_editable_text(doc, page_index):
         return [], "Invalid document or page index for text extraction."
     try:
         page = doc.load_page(page_index)
-        text_dict = page.get_text("rawdict", flags=0)
+        try:
+            raw_json = page.get_text("rawjson", flags=0)
+            text_dict = json.loads(raw_json)
+        except Exception:
+            text_dict = page.get_text("rawdict", flags=0)
 
         page_drawings = None
         try:
@@ -521,6 +529,19 @@ def extract_editable_text(doc, page_index):
                         editable.original_baseline = editable.baseline
                         editable.original_rotation = editable.rotation
                         editable.page_number = page_index
+                        editable.char_boxes = [
+                            {
+                                "char": c.get("c", ""),
+                                "bbox": tuple(c.get("bbox", [0, 0, 0, 0])),
+                                "origin": tuple(c.get("origin", (c.get("bbox", [0, 0])[0], orig_origin[1]))),
+                                "synthetic": bool(c.get("synthetic", False)),
+                            }
+                            for c in all_chars
+                        ]
+                        editable.font_properties = decompose_font_name(
+                            editable.font_family_original,
+                            flags=first_span.get("flags", 0) if first_span else 0
+                        )
                         if page_drawings:
                             for d in page_drawings:
                                 if _is_underline_drawing(d, [(bbox[0], bbox[2], orig_origin[1])]):
@@ -542,26 +563,405 @@ def extract_editable_text(doc, page_index):
         return [], error_msg
 
 def _get_base14_font_variant(base_name, is_bold, is_italic):
-    """Get the base14 font variant."""
-    mapping = {'helv': 'Helvetica', 'timr': 'Times', 'cour': 'Courier'}
-    pdf_base = mapping.get(base_name, 'Helvetica')
-    if is_bold and is_italic:
-        if pdf_base == 'Helvetica': return 'Helvetica-BoldOblique'
-        if pdf_base == 'Times': return 'Times-BoldItalic'
-        if pdf_base == 'Courier': return 'Courier-BoldOblique'
-    elif is_bold:
-        if pdf_base == 'Helvetica': return 'Helvetica-Bold'
-        if pdf_base == 'Times': return 'Times-Bold'
-        if pdf_base == 'Courier': return 'Courier-Bold'
-    elif is_italic:
-        if pdf_base == 'Helvetica': return 'Helvetica-Oblique'
-        if pdf_base == 'Times': return 'Times-Italic'
-        if pdf_base == 'Courier': return 'Courier-Oblique'
+    """Get the base14 font variant name."""
+    return get_base14_font_variant(base_name, is_bold, is_italic)
+
+
+def _resolve_page(target, page_index=None):
+    """Resolve a fitz.Page instance from either a Page or a Document with page_index."""
+    if target is None:
+        return None
+    if hasattr(target, "get_text"):
+        return target
+    if hasattr(target, "load_page") or hasattr(target, "__getitem__"):
+        idx = 0 if page_index is None else page_index
+        try:
+            doc_len = len(target)
+            if not (0 <= idx < doc_len):
+                return None
+            return target.load_page(idx) if hasattr(target, "load_page") else target[idx]
+        except Exception:
+            return None
+    return None
+
+
+def extract_page_text_raw(target, page_index=None, use_rawjson=True) -> Dict[str, Any]:
+    """Extract raw text layout data (blocks, lines, spans, chars) from a page.
+    
+    Args:
+        target: fitz.Page, or fitz.Document.
+        page_index: 0-based page index if target is a fitz.Document.
+        use_rawjson: If True, uses PyMuPDF's page.get_text("rawjson") parsed via json.loads.
+                     If False, uses page.get_text("rawdict").
+                     
+    Returns:
+        Dict with keys 'width', 'height', and 'blocks'.
+    """
+    page = _resolve_page(target, page_index)
+    if page is None:
+        return {"width": 0.0, "height": 0.0, "blocks": []}
+        
+    try:
+        if use_rawjson:
+            raw_str = page.get_text("rawjson", flags=0)
+            return json.loads(raw_str)
+        else:
+            return page.get_text("rawdict", flags=0)
+    except Exception:
+        try:
+            return page.get_text("rawdict", flags=0)
+        except Exception:
+            return {"width": 0.0, "height": 0.0, "blocks": []}
+
+
+def extract_text_spans_with_char_boxes(target, page_index=None, use_rawjson=True) -> List[Dict[str, Any]]:
+    """Extract text spans from a PDF page including exact character bounding boxes, origins,
+    font properties, line direction/rotation, and baseline coordinates.
+    
+    Args:
+        target: fitz.Page, or fitz.Document.
+        page_index: 0-based page index if target is a fitz.Document.
+        use_rawjson: If True, uses page.get_text("rawjson"); otherwise page.get_text("rawdict").
+        
+    Returns:
+        List of span dictionaries.
+    """
+    page = _resolve_page(target, page_index)
+    if page is None:
+        return []
+        
+    raw_data = extract_page_text_raw(page, use_rawjson=use_rawjson)
+    spans_out = []
+    
+    page_rot = page.rotation % 360
+    rot_mat = page.rotation_matrix if page_rot != 0 else None
+    
+    for block_idx, block in enumerate(raw_data.get("blocks", [])):
+        if block.get("type") != 0:
+            continue
+        for line_idx, line in enumerate(block.get("lines", [])):
+            line_bbox = tuple(line.get("bbox", [0, 0, 0, 0]))
+            vis_line_bbox = tuple((fitz.Rect(line_bbox) * rot_mat).normalize()) if rot_mat else line_bbox
+            line_dir = tuple(line.get("dir", [1.0, 0.0]))
+            line_rot = 0.0
+            if line_dir and (abs(line_dir[0] - 1.0) > 1e-3 or abs(line_dir[1]) > 1e-3):
+                line_rot = round(math.degrees(math.atan2(line_dir[1], line_dir[0])), 1) % 360.0
+                
+            for span_idx, span in enumerate(line.get("spans", [])):
+                font_name = span.get("font", "Helvetica")
+                flags = span.get("flags", 0)
+                font_props = decompose_font_name(font_name, flags)
+                norm_color = normalize_color(span.get("color", 0))
+                
+                span_origin = tuple(span.get("origin", [0, 0]))
+                span_baseline = span_origin[1]
+                span_bbox = tuple(span.get("bbox", [0, 0, 0, 0]))
+                vis_span_bbox = tuple((fitz.Rect(span_bbox) * rot_mat).normalize()) if rot_mat else span_bbox
+                
+                raw_chars = span.get("chars", [])
+                char_boxes = []
+                for c_idx, c in enumerate(raw_chars):
+                    c_bbox = tuple(c.get("bbox", [0, 0, 0, 0]))
+                    c_vis_bbox = tuple((fitz.Rect(c_bbox) * rot_mat).normalize()) if rot_mat else c_bbox
+                    c_origin = tuple(c.get("origin", [c_bbox[0], span_baseline]))
+                    char_boxes.append({
+                        "char": c.get("c", ""),
+                        "bbox": c_bbox,
+                        "visual_bbox": c_vis_bbox,
+                        "origin": c_origin,
+                        "baseline": c_origin[1],
+                        "synthetic": bool(c.get("synthetic", False)),
+                        "index": c_idx,
+                    })
+                    
+                span_text = "".join(cb["char"] for cb in char_boxes) if char_boxes else span.get("text", "")
+                
+                spans_out.append({
+                    "text": span_text,
+                    "bbox": span_bbox,
+                    "visual_bbox": vis_span_bbox,
+                    "origin": span_origin,
+                    "baseline": span_baseline,
+                    "font": font_name,
+                    "font_properties": font_props,
+                    "size": float(span.get("size", 11.0)),
+                    "color": norm_color,
+                    "flags": flags,
+                    "alpha": float(span.get("alpha", 1.0)),
+                    "ascender": float(span.get("ascender", 0.0)),
+                    "descender": float(span.get("descender", 0.0)),
+                    "block_index": block_idx,
+                    "line_index": line_idx,
+                    "span_index": span_idx,
+                    "line_bbox": line_bbox,
+                    "visual_line_bbox": vis_line_bbox,
+                    "line_dir": line_dir,
+                    "line_rotation": line_rot,
+                    "char_boxes": char_boxes,
+                })
+                
+    return spans_out
+
+
+def get_text_hit_info_at_pos(target, pos: Tuple[float, float], page_index=None,
+                             tolerance: float = 2.0, visual_coords: bool = False,
+                             use_rawjson: bool = True) -> Optional[Dict[str, Any]]:
+    """Perform comprehensive hit-testing at pos (x, y) on a PDF page, returning structured
+    character, word, span, and line layout details with exact font metrics and bounding boxes.
+    
+    Args:
+        target: fitz.Page, or fitz.Document.
+        pos: (x, y) coordinates.
+        page_index: 0-based page index if target is a fitz.Document.
+        tolerance: Maximum distance in points to consider a hit. Default is 2.0.
+        visual_coords: If True, pos is interpreted in visual coordinates on rotated pages.
+        use_rawjson: If True, uses page.get_text("rawjson") for extraction.
+        
+    Returns:
+        Dict with keys: 'char', 'word', 'span', 'line', 'page_index', 'block_index', or None if no hit.
+    """
+    page = _resolve_page(target, page_index)
+    if page is None:
+        return None
+        
+    page_idx = getattr(page, 'number', page_index if page_index is not None else 0)
+    page_rot = page.rotation % 360
+    rot_mat = page.rotation_matrix if page_rot != 0 else None
+    inv_rot_mat = (~page.rotation_matrix) if page_rot != 0 else None
+    
+    if visual_coords and inv_rot_mat:
+        p_unrot = fitz.Point(pos[0], pos[1]) * inv_rot_mat
+        px, py = p_unrot.x, p_unrot.y
     else:
-        if pdf_base == 'Helvetica': return 'Helvetica'
-        if pdf_base == 'Times': return 'Times-Roman'
-        if pdf_base == 'Courier': return 'Courier'
-    return pdf_base
+        px, py = pos[0], pos[1]
+        
+    spans = extract_text_spans_with_char_boxes(page, use_rawjson=use_rawjson)
+    if not spans:
+        return None
+        
+    # Phase 1: Search character bounding boxes within tolerance
+    char_candidates = []
+    for span in spans:
+        for cb in span["char_boxes"]:
+            cx0, cy0, cx1, cy1 = cb["bbox"]
+            if (cx0 - tolerance) <= px <= (cx1 + tolerance) and (cy0 - tolerance) <= py <= (cy1 + tolerance):
+                mid_x = (cx0 + cx1) / 2.0
+                mid_y = (cy0 + cy1) / 2.0
+                dist_sq = (px - mid_x) ** 2 + (py - mid_y) ** 2
+                char_candidates.append((dist_sq, span, cb))
+                
+    best_span = None
+    best_char = None
+    
+    if char_candidates:
+        char_candidates.sort(key=lambda item: item[0])
+        best_span = char_candidates[0][1]
+        best_char = char_candidates[0][2]
+    else:
+        # Phase 2: If no individual character matched, check span bounding boxes
+        span_candidates = []
+        for span in spans:
+            sx0, sy0, sx1, sy1 = span["bbox"]
+            if (sx0 - tolerance) <= px <= (sx1 + tolerance) and (sy0 - tolerance) <= py <= (sy1 + tolerance):
+                mid_x = (sx0 + sx1) / 2.0
+                mid_y = (sy0 + sy1) / 2.0
+                dist_sq = (px - mid_x) ** 2 + (py - mid_y) ** 2
+                span_candidates.append((dist_sq, span))
+                
+        if span_candidates:
+            span_candidates.sort(key=lambda item: item[0])
+            best_span = span_candidates[0][1]
+            if best_span["char_boxes"]:
+                # Pick the closest character inside this span to (px, py)
+                c_dists = []
+                for cb in best_span["char_boxes"]:
+                    cx0, cy0, cx1, cy1 = cb["bbox"]
+                    mid_x = (cx0 + cx1) / 2.0
+                    mid_y = (cy0 + cy1) / 2.0
+                    dist_sq = (px - mid_x) ** 2 + (py - mid_y) ** 2
+                    c_dists.append((dist_sq, cb))
+                c_dists.sort(key=lambda item: item[0])
+                best_char = c_dists[0][1]
+                
+    if not best_span or not best_char:
+        return None
+        
+    # Reconstruct word containing best_char
+    hit_idx = best_char["index"]
+    span_chars = best_span["char_boxes"]
+    
+    if best_char["char"].strip() != "":
+        start_idx = hit_idx
+        while start_idx > 0 and span_chars[start_idx - 1]["char"].strip() != "":
+            start_idx -= 1
+        end_idx = hit_idx
+        while end_idx < len(span_chars) - 1 and span_chars[end_idx + 1]["char"].strip() != "":
+            end_idx += 1
+    else:
+        # Hit on whitespace: check adjacent tokens
+        if hit_idx + 1 < len(span_chars) and span_chars[hit_idx + 1]["char"].strip() != "":
+            start_idx = hit_idx + 1
+            end_idx = start_idx
+            while end_idx < len(span_chars) - 1 and span_chars[end_idx + 1]["char"].strip() != "":
+                end_idx += 1
+        elif hit_idx > 0 and span_chars[hit_idx - 1]["char"].strip() != "":
+            end_idx = hit_idx - 1
+            start_idx = end_idx
+            while start_idx > 0 and span_chars[start_idx - 1]["char"].strip() != "":
+                start_idx -= 1
+        else:
+            start_idx = hit_idx
+            end_idx = hit_idx
+            
+    word_char_boxes = span_chars[start_idx:end_idx + 1]
+    word_text = "".join(cb["char"] for cb in word_char_boxes)
+    word_x0 = min(cb["bbox"][0] for cb in word_char_boxes)
+    word_y0 = min(cb["bbox"][1] for cb in word_char_boxes)
+    word_x1 = max(cb["bbox"][2] for cb in word_char_boxes)
+    word_y1 = max(cb["bbox"][3] for cb in word_char_boxes)
+    word_bbox = (word_x0, word_y0, word_x1, word_y1)
+    vis_word_bbox = tuple((fitz.Rect(word_bbox) * rot_mat).normalize()) if rot_mat else word_bbox
+    
+    # Reconstruct line text and spans
+    line_spans = [s for s in spans if s["block_index"] == best_span["block_index"] and s["line_index"] == best_span["line_index"]]
+    line_text = "".join(s["text"] for s in line_spans)
+    line_char_boxes = []
+    for s in line_spans:
+        line_char_boxes.extend(s["char_boxes"])
+        
+    return {
+        "char": {
+            "char": best_char["char"],
+            "index": best_char["index"],
+            "bbox": best_char["bbox"],
+            "visual_bbox": best_char["visual_bbox"],
+            "origin": best_char["origin"],
+            "baseline": best_char["baseline"],
+            "synthetic": best_char["synthetic"],
+        },
+        "word": {
+            "text": word_text,
+            "bbox": word_bbox,
+            "visual_bbox": vis_word_bbox,
+            "start_char_index": start_idx,
+            "end_char_index": end_idx,
+            "char_boxes": word_char_boxes,
+        },
+        "span": {
+            "text": best_span["text"],
+            "index": best_span["span_index"],
+            "bbox": best_span["bbox"],
+            "visual_bbox": best_span["visual_bbox"],
+            "origin": best_span["origin"],
+            "baseline": best_span["baseline"],
+            "font": best_span["font"],
+            "font_size": best_span["size"],
+            "font_properties": best_span["font_properties"],
+            "color": best_span["color"],
+            "flags": best_span["flags"],
+            "alpha": best_span["alpha"],
+            "ascender": best_span["ascender"],
+            "descender": best_span["descender"],
+            "char_boxes": best_span["char_boxes"],
+        },
+        "line": {
+            "text": line_text,
+            "index": best_span["line_index"],
+            "bbox": best_span["line_bbox"],
+            "visual_bbox": best_span["visual_line_bbox"],
+            "baseline": best_span["baseline"],
+            "dir": best_span["line_dir"],
+            "rotation": best_span["line_rotation"],
+            "spans": line_spans,
+            "char_boxes": line_char_boxes,
+            "primary_font": best_span["font"],
+            "primary_font_size": best_span["size"],
+            "primary_font_properties": best_span["font_properties"],
+        },
+        "block_index": best_span["block_index"],
+        "page_index": page_idx,
+    }
+
+
+def hit_test_text_char_at_pos(target, pos: Tuple[float, float], page_index=None,
+                              tolerance: float = 2.0, visual_coords: bool = False,
+                              use_rawjson: bool = True) -> Optional[Dict[str, Any]]:
+    """Hit-test a single character at pos (x, y). Returns char details or None."""
+    hit = get_text_hit_info_at_pos(target, pos, page_index, tolerance, visual_coords, use_rawjson)
+    if not hit:
+        return None
+    res = dict(hit["char"])
+    res["font"] = hit["span"]["font"]
+    res["font_size"] = hit["span"]["font_size"]
+    res["font_properties"] = hit["span"]["font_properties"]
+    res["color"] = hit["span"]["color"]
+    res["span_text"] = hit["span"]["text"]
+    res["span_bbox"] = hit["span"]["bbox"]
+    res["visual_span_bbox"] = hit["span"]["visual_bbox"]
+    res["line_text"] = hit["line"]["text"]
+    res["line_bbox"] = hit["line"]["bbox"]
+    res["visual_line_bbox"] = hit["line"]["visual_bbox"]
+    res["line_dir"] = hit["line"]["dir"]
+    res["line_rotation"] = hit["line"]["rotation"]
+    res["block_index"] = hit["block_index"]
+    res["page_index"] = hit["page_index"]
+    return res
+
+
+def hit_test_text_word_at_pos(target, pos: Tuple[float, float], page_index=None,
+                              tolerance: float = 2.0, visual_coords: bool = False,
+                              use_rawjson: bool = True) -> Optional[Dict[str, Any]]:
+    """Hit-test a contiguous word at pos (x, y). Returns word details or None."""
+    hit = get_text_hit_info_at_pos(target, pos, page_index, tolerance, visual_coords, use_rawjson)
+    if not hit:
+        return None
+    res = dict(hit["word"])
+    res["word"] = hit["word"]["text"]
+    res["font"] = hit["span"]["font"]
+    res["font_size"] = hit["span"]["font_size"]
+    res["font_properties"] = hit["span"]["font_properties"]
+    res["baseline"] = hit["span"]["baseline"]
+    res["color"] = hit["span"]["color"]
+    res["span_text"] = hit["span"]["text"]
+    res["span_bbox"] = hit["span"]["bbox"]
+    res["visual_span_bbox"] = hit["span"]["visual_bbox"]
+    res["line_text"] = hit["line"]["text"]
+    res["line_bbox"] = hit["line"]["bbox"]
+    res["visual_line_bbox"] = hit["line"]["visual_bbox"]
+    res["block_index"] = hit["block_index"]
+    res["page_index"] = hit["page_index"]
+    return res
+
+
+def hit_test_text_line_at_pos(target, pos: Tuple[float, float], page_index=None,
+                              tolerance: float = 2.0, visual_coords: bool = False,
+                              use_rawjson: bool = True) -> Optional[Dict[str, Any]]:
+    """Hit-test an entire text line at pos (x, y). Returns line details or None."""
+    hit = get_text_hit_info_at_pos(target, pos, page_index, tolerance, visual_coords, use_rawjson)
+    if not hit:
+        return None
+    res = dict(hit["line"])
+    res["block_index"] = hit["block_index"]
+    res["page_index"] = hit["page_index"]
+    return res
+
+
+def hit_test_text_span_at_pos(target, pos: Tuple[float, float], page_index=None,
+                              tolerance: float = 2.0, visual_coords: bool = False,
+                              use_rawjson: bool = True) -> Optional[Dict[str, Any]]:
+    """Hit-test a text span at pos (x, y). Returns span details or None."""
+    hit = get_text_hit_info_at_pos(target, pos, page_index, tolerance, visual_coords, use_rawjson)
+    if not hit:
+        return None
+    res = dict(hit["span"])
+    res["line_text"] = hit["line"]["text"]
+    res["line_bbox"] = hit["line"]["bbox"]
+    res["visual_line_bbox"] = hit["line"]["visual_bbox"]
+    res["line_dir"] = hit["line"]["dir"]
+    res["line_rotation"] = hit["line"]["rotation"]
+    res["block_index"] = hit["block_index"]
+    res["page_index"] = hit["page_index"]
+    return res
 
 def apply_text_edit(doc, text_obj: EditableText, new_text: str):
     """Burn edited text modifications into the underlying PDF page stream."""
@@ -2468,6 +2868,17 @@ def get_word_at_pos(doc, page_index, pos_unzoomed):
             if r.contains(p):
                 vis_r = (r * rot_mat).normalize() if rot_mat else r
                 return {'bbox': (vis_r.x0, vis_r.y0, vis_r.x1, vis_r.y1), 'text': w[4]}
+        # Fallback to tolerance-based hit-testing
+        hit = hit_test_text_word_at_pos(page, pos_unzoomed, tolerance=2.5, visual_coords=True)
+        if hit:
+            return {
+                'bbox': hit['visual_bbox'],
+                'text': hit['word'],
+                'font': hit.get('font'),
+                'size': hit.get('font_size'),
+                'baseline': hit.get('baseline'),
+                'font_properties': hit.get('font_properties'),
+            }
         return None
     except Exception as e:
         print(f"get_word_at_pos error: {e}")

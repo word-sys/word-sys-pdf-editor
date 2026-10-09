@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple
 import os
 import uuid
+import math
 from .utils import normalize_color
 import re
 import copy
@@ -26,6 +27,166 @@ BASE14_FALLBACK_MAP = {
     'consolas': 'cour', 'liberation mono': 'cour', 'liberationmono': 'cour',
     'dejavusansmono': 'cour', 'notosansmono': 'cour', 'fixed': 'cour'
 }
+
+
+def get_base14_font_variant(base_code: str, is_bold: bool, is_italic: bool) -> str:
+    """Get the standard Base14 font variant name."""
+    mapping = {'helv': 'Helvetica', 'timr': 'Times', 'cour': 'Courier'}
+    pdf_base = mapping.get(base_code, 'Helvetica')
+    if is_bold and is_italic:
+        if pdf_base == 'Helvetica': return 'Helvetica-BoldOblique'
+        if pdf_base == 'Times': return 'Times-BoldItalic'
+        if pdf_base == 'Courier': return 'Courier-BoldOblique'
+    elif is_bold:
+        if pdf_base == 'Helvetica': return 'Helvetica-Bold'
+        if pdf_base == 'Times': return 'Times-Bold'
+        if pdf_base == 'Courier': return 'Courier-Bold'
+    elif is_italic:
+        if pdf_base == 'Helvetica': return 'Helvetica-Oblique'
+        if pdf_base == 'Times': return 'Times-Italic'
+        if pdf_base == 'Courier': return 'Courier-Oblique'
+    else:
+        if pdf_base == 'Helvetica': return 'Helvetica'
+        if pdf_base == 'Times': return 'Times-Roman'
+        if pdf_base == 'Courier': return 'Courier'
+    return pdf_base
+
+
+def decompose_font_name(font_name: str, flags: int = 0) -> Dict[str, Any]:
+    """Decompose a PDF font name and flags into constituent family, style, and Base14 properties.
+    
+    Handles subset prefixes (e.g. 'BAAAAA+LiberationSans-Bold'), PostScript suffixes
+    (e.g. 'TimesNewRomanPSMT'), style indicators (Bold, Italic, Oblique, Kursiv),
+    font flags, and matches to standard Base14 fonts and clean family names.
+    """
+    raw_name = font_name or "Helvetica"
+    
+    # 1. Detect and strip 6-letter subset prefix like 'ABCDEF+'
+    subset_prefix = None
+    name_clean = raw_name
+    prefix_match = re.match(r'^([A-Z]{6}\+)(.*)$', raw_name)
+    if prefix_match:
+        subset_prefix = prefix_match.group(1)
+        name_clean = prefix_match.group(2)
+        
+    if ',' in name_clean:
+        name_clean = name_clean.split(',')[0]
+        
+    # 2. Check flags
+    is_bold = bool(flags & FLAG_BOLD)
+    is_italic = bool(flags & FLAG_ITALIC)
+    is_serif = bool(flags & FLAG_SERIF)
+    is_monospace = bool(flags & FLAG_MONOSPACED)
+    
+    # 3. Strip trailing PostScript identifiers
+    potential_family_name = re.sub(r'[-_ ]?(PSMT|PS|MT)$', '', name_clean, flags=re.IGNORECASE).strip('-_ ')
+    if not potential_family_name:
+        potential_family_name = name_clean
+        
+    # 4. Detect style tokens
+    style_patterns = [
+        (r"(BoldItalic|BoldOblique|BdI|Z|BI)$", "BoldItalic"),
+        (r"(Bold|Bd|Heavy|Black|DemiBold|SmBd|SemiBold)$", "Bold"),
+        (r"(Italic|It|Oblique|Kursiv|I|Obl)$", "Italic"),
+        (r"(Regular|Roman|Normal|Medium|Book|Rg|Text)$", "Regular")
+    ]
+    
+    temp_name = potential_family_name
+    for pattern, style_tag in style_patterns:
+        m = re.search(r"([-_ ]?" + pattern + r")$", temp_name, re.IGNORECASE)
+        if m:
+            matched_str = m.group(0).lower()
+            if "roman" in matched_str and ("times" in temp_name.lower()):
+                pass
+            else:
+                if style_tag == "BoldItalic":
+                    is_bold = True
+                    is_italic = True
+                elif style_tag == "Bold":
+                    is_bold = True
+                elif style_tag == "Italic":
+                    is_italic = True
+                temp_name = temp_name[:m.start()].strip("-_ ")
+                
+    cleaned_family_name = temp_name if temp_name else name_clean
+    cleaned_family_name = re.sub(r'[-_ ]?(PSMT|PS|MT)$', '', cleaned_family_name, flags=re.IGNORECASE).strip('-_ ')
+    
+    cleaned_family_name_spaced = re.sub(r"(\w)([A-Z])", r"\1 \2", cleaned_family_name)
+    base_name = ' '.join(word.capitalize() for word in cleaned_family_name_spaced.replace('-', ' ').replace('_', ' ').split())
+    base_name = base_name.replace("Deja Vu", "DejaVu")
+    
+    if base_name in ("Times New", "Times"):
+        base_name = "Times New Roman"
+        
+    lower_orig = raw_name.lower()
+    if any(kw in lower_orig for kw in ('mono', 'typewriter', 'courier', 'console', 'consolas', 'fixed')):
+        is_monospace = True
+    if any(kw in lower_orig for kw in ('serif', 'times', 'roman', 'georgia', 'cambria', 'garamond', 'minion')):
+        is_serif = True
+        
+    lower_base = base_name.lower().replace(" ", "")
+    sans_aliases = ("arial", "helvetica", "calibri")
+    serif_aliases = ("times", "timesnew", "timesnewroman")
+    mono_aliases = ("courier", "couriernew")
+    
+    matched_family = base_name
+    if lower_base in sans_aliases:
+        matched_family = "Liberation Sans"
+    elif lower_base in serif_aliases:
+        matched_family = "Liberation Serif"
+    elif lower_base in mono_aliases:
+        matched_family = "Liberation Mono"
+        
+    if not matched_family or matched_family == "Unknown":
+        matched_family = "Liberation Sans"
+        
+    normalized_for_base14 = re.sub(r'[^a-zA-Z0-9]', '', matched_family).lower()
+    matched_base14 = None
+    for name_key in sorted(BASE14_FALLBACK_MAP.keys(), key=len, reverse=True):
+        if name_key.replace(" ", "") in normalized_for_base14:
+            matched_base14 = BASE14_FALLBACK_MAP[name_key]
+            break
+            
+    if not matched_base14:
+        if is_monospace:
+            matched_base14 = 'cour'
+        elif is_serif:
+            matched_base14 = 'timr'
+        else:
+            matched_base14 = 'helv'
+            
+    base14_code = matched_base14
+    base14_name_map = {'helv': 'Helvetica', 'timr': 'Times', 'cour': 'Courier'}
+    base14_name = base14_name_map.get(base14_code, 'Helvetica')
+    base14_variant = get_base14_font_variant(base14_code, is_bold, is_italic)
+    
+    font_weight = 700 if is_bold else 400
+    font_slant = "italic" if is_italic else "normal"
+    
+    return {
+        "raw_name": raw_name,
+        "subset_prefix": subset_prefix,
+        "name_without_prefix": name_clean,
+        "clean_family": cleaned_family_name,
+        "clean_family_spaced": cleaned_family_name_spaced,
+        "base_family": base_name,
+        "matched_family": matched_family,
+        "is_bold": is_bold,
+        "is_italic": is_italic,
+        "is_serif": is_serif,
+        "is_monospace": is_monospace,
+        "font_weight": font_weight,
+        "font_slant": font_slant,
+        "base14_code": base14_code,
+        "base14_name": base14_name,
+        "base14_variant": base14_variant
+    }
+
+
+def extract_font_properties(font_name: str, flags: int = 0) -> Dict[str, Any]:
+    """Extract and decompose font properties from a PDF font name and flags."""
+    return decompose_font_name(font_name, flags)
+
 
 class EditableText:
     """Data model representing extracted or newly added editable text on a PDF page."""
@@ -49,112 +210,22 @@ class EditableText:
             pdf_font_name_original = span_data.get('font', pdf_font_name_original)
             flags = span_data.get('flags', 0)
 
-        self.font_family_original = pdf_font_name_original 
-
-        self.is_bold = bool(flags & FLAG_BOLD) 
-        self.is_italic = bool(flags & FLAG_ITALIC)
-        self.is_serif = bool(flags & FLAG_SERIF)
-        self.is_monospace = bool(flags & FLAG_MONOSPACED)
+        font_info = decompose_font_name(pdf_font_name_original, flags)
+        self.font_properties = font_info
+        self.font_family_original = font_info["raw_name"]
+        self.is_bold = font_info["is_bold"]
+        self.is_italic = font_info["is_italic"]
+        self.is_serif = font_info["is_serif"]
+        self.is_monospace = font_info["is_monospace"]
         self.is_underline = False
         self.is_strikethrough = False
         self.alignment = alignment or "left"
-
-        name_after_prefix_removal = re.sub(r'^[A-Z]{6}\+', '', pdf_font_name_original)
-        if ',' in name_after_prefix_removal:
-            name_after_prefix_removal = name_after_prefix_removal.split(',')[0]
-        
-        potential_family_name = re.sub(r'[-_ ]?(PSMT|PS|MT)$', '', name_after_prefix_removal, flags=re.IGNORECASE).strip('-_ ')
-        if not potential_family_name:
-            potential_family_name = name_after_prefix_removal
-        
-        style_patterns = [
-            (r"(BoldItalic|BoldOblique|BdI|Z|BI)$", "BoldItalic"),
-            (r"(Bold|Bd|Heavy|Black|DemiBold|SmBd|SemiBold)$", "Bold"),
-            (r"(Italic|It|Oblique|Kursiv|I|Obl)$", "Italic"),
-            (r"(Regular|Roman|Normal|Medium|Book|Rg|Text)$", "Regular")
-        ]
-
-        detected_style_parts = [] 
-
-        temp_name = potential_family_name
-        for pattern, style_tag in style_patterns:
-            m = re.search(r"([-_ ]?" + pattern + r")$", temp_name, re.IGNORECASE)
-            if m:
-                matched_str = m.group(0).lower()
-                if "roman" in matched_str and ("times" in temp_name.lower()):
-                    pass
-                else:
-                    if style_tag == "BoldItalic":
-                        if not self.is_bold: self.is_bold = True
-                        if not self.is_italic: self.is_italic = True
-                        detected_style_parts.extend(["Bold", "Italic"])
-                    elif style_tag == "Bold":
-                        if not self.is_bold: self.is_bold = True
-                        detected_style_parts.append("Bold")
-                    elif style_tag == "Italic":
-                        if not self.is_italic: self.is_italic = True
-                        detected_style_parts.append("Italic")
-                    temp_name = temp_name[:m.start()].strip("-_ ")
-        
-        cleaned_family_name = temp_name if temp_name else name_after_prefix_removal
-
-        cleaned_family_name = re.sub(r'[-_ ]?(PSMT|PS|MT)$', '', cleaned_family_name, flags=re.IGNORECASE).strip('-_ ')
-
-        cleaned_family_name_spaced = re.sub(r"(\w)([A-Z])", r"\1 \2", cleaned_family_name)
-        base_name = ' '.join(word.capitalize() for word in cleaned_family_name_spaced.replace('-', ' ').replace('_', ' ').split())
-        base_name = base_name.replace("Deja Vu", "DejaVu")
-        
-        if base_name in ("Times New", "Times"):
-            base_name = "Times New Roman"
-
-        lower_orig = pdf_font_name_original.lower()
-        if any(kw in lower_orig for kw in ('mono', 'typewriter', 'courier', 'console', 'consolas', 'fixed')):
-            self.is_monospace = True
-        if any(kw in lower_orig for kw in ('serif', 'times', 'roman', 'georgia', 'cambria', 'garamond', 'minion')):
-            self.is_serif = True
-
+        self.font_family_base = font_info["matched_family"]
+        self.pdf_fontname_base14 = font_info["base14_code"]
         self.font_fallback_used = False
-        lower_base = base_name.lower().replace(" ", "")
-        sans_aliases = ("arial", "helvetica", "calibri")
-        serif_aliases = ("times", "timesnew", "timesnewroman")
-        mono_aliases = ("courier", "couriernew")
-        
-        if lower_base in sans_aliases:
-            base_name = "Liberation Sans"
-        elif lower_base in serif_aliases:
-            base_name = "Liberation Serif"
-        elif lower_base in mono_aliases:
-            base_name = "Liberation Mono"
-            
-        self.font_family_base = base_name
-        
-        if not self.font_family_base or self.font_family_base == "Unknown":
-            self.font_family_base = "Liberation Sans"
-            self.font_fallback_used = "Liberation Sans"
-        
-        lower_base = self.font_family_base.lower()
-        if not self.is_bold and any(s in lower_base for s in ["bold", "heavy", "black"]):
-             pass 
-        if not self.is_italic and any(s in lower_base for s in ["italic", "oblique"]):
-             pass
-
         self.original_is_bold = self.is_bold
         self.original_is_italic = self.is_italic
-        normalized_for_base14 = re.sub(r'[^a-zA-Z0-9]', '', self.font_family_base).lower()
-        matched_base14 = None
-        for name_key in sorted(BASE14_FALLBACK_MAP.keys(), key=len, reverse=True):
-            if name_key.replace(" ", "") in normalized_for_base14:
-                matched_base14 = BASE14_FALLBACK_MAP[name_key]
-                break
-        if matched_base14:
-            self.pdf_fontname_base14 = matched_base14
-        elif self.is_monospace:
-            self.pdf_fontname_base14 = 'cour'
-        elif self.is_serif:
-            self.pdf_fontname_base14 = 'timr'
-        else:
-            self.pdf_fontname_base14 = 'helv'
-        
+
         pdf_color = color
         if span_data and 'color' in span_data:
             pdf_color = span_data['color']
@@ -166,6 +237,7 @@ class EditableText:
         self.editing = False
         self.span_data = span_data
         self.modified = is_new 
+        self.char_boxes: List[Dict[str, Any]] = []
 
         if span_data and "bbox" in span_data:
             self.bbox = span_data["bbox"]
@@ -193,6 +265,74 @@ class EditableText:
     def set_rotation(self, angle):
         """Set rotation in degrees (0-360)."""
         self.rotation = float(angle) % 360.0
+
+    def hit_test_char(self, x: float, y: float, tolerance: float = 2.0) -> Optional[Dict[str, Any]]:
+        """Hit-test a point against the character bounding boxes in this EditableText object.
+        
+        Returns the closest matching character dict with keys 'char', 'bbox', 'origin', 'index'
+        if within tolerance, else None.
+        """
+        if not self.char_boxes:
+            return None
+            
+        rot = getattr(self, 'rotation', 0.0) % 360.0
+        px, py = x, y
+        if rot != 0.0 and self.bbox:
+            cx = (self.bbox[0] + self.bbox[2]) / 2.0
+            cy = (self.bbox[1] + self.bbox[3]) / 2.0
+            rad = math.radians(-rot)
+            cos_a = math.cos(rad)
+            sin_a = math.sin(rad)
+            px = cx + (x - cx) * cos_a - (y - cy) * sin_a
+            py = cy + (x - cx) * sin_a + (y - cy) * cos_a
+            
+        candidates = []
+        for idx, cb in enumerate(self.char_boxes):
+            bbox = cb["bbox"]
+            if (bbox[0] - tolerance) <= px <= (bbox[2] + tolerance) and \
+               (bbox[1] - tolerance) <= py <= (bbox[3] + tolerance):
+                cx_c = (bbox[0] + bbox[2]) / 2.0
+                cy_c = (bbox[1] + bbox[3]) / 2.0
+                dist_sq = (px - cx_c) ** 2 + (py - cy_c) ** 2
+                candidates.append((dist_sq, idx, cb))
+                
+        if not candidates:
+            return None
+            
+        candidates.sort(key=lambda item: item[0])
+        best_idx, best_box = candidates[0][1], candidates[0][2]
+        res = dict(best_box)
+        res["index"] = best_idx
+        return res
+
+    def get_caret_index_at_pos(self, x: float, y: Optional[float] = None) -> int:
+        """Find the nearest caret insertion index (0 to len(text)) for a given x coordinate."""
+        if not self.text:
+            return 0
+        if not self.char_boxes:
+            if not self.bbox or (self.bbox[2] - self.bbox[0]) <= 0:
+                return len(self.text)
+            ratio = (x - self.bbox[0]) / (self.bbox[2] - self.bbox[0])
+            idx = int(round(ratio * len(self.text)))
+            return max(0, min(idx, len(self.text)))
+            
+        first_box = self.char_boxes[0]["bbox"]
+        if x <= first_box[0]:
+            return 0
+            
+        last_box = self.char_boxes[-1]["bbox"]
+        if x >= last_box[2]:
+            return len(self.char_boxes)
+            
+        for idx, cb in enumerate(self.char_boxes):
+            bbox = cb["bbox"]
+            mid_x = (bbox[0] + bbox[2]) / 2.0
+            if x < mid_x:
+                return idx
+            elif x <= bbox[2]:
+                return idx + 1
+                
+        return len(self.char_boxes)
 
     @property
     def is_link(self):
