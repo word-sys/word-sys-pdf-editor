@@ -1203,10 +1203,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         tools_grid.attach(self.cross_tool_button, 1, 4, 1, 1)
 
         self.form_builder_tool_button = _make_tool_btn("edit-select-all-symbolic", _("tool_form_builder"), _("tool_form_builder_tip"), "form_builder")
-        tools_grid.attach(self.form_builder_tool_button, 0, 5, 2, 1)
+        tools_grid.attach(self.form_builder_tool_button, 0, 5, 1, 1)
 
         self.calibrate_tool_button = _make_tool_btn("applications-engineering-symbolic", _("tool_calibrate"), _("tool_calibrate_tip"), "calibrate")
-        tools_grid.attach(self.calibrate_tool_button, 0, 6, 2, 1)
+        tools_grid.attach(self.calibrate_tool_button, 1, 5, 1, 1)
         
         sidebar_box.append(tools_grid)
 
@@ -7241,15 +7241,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def on_calibration_reset_clicked(self, button=None):
         """Reset active scale calibration."""
+        self.temp_calibration_line = None
         if hasattr(self, 'calibration_preset_dropdown') and self.calibration_preset_dropdown:
             self.calibration_preset_dropdown.set_selected(0)
         self.set_scale_calibration(None, page_index=self.current_page_index, entire_document=True)
 
     def on_calibrate_dialog_clicked(self, button=None):
-        """Open calibration dialog using default or current reference dimensions."""
+        """Open calibration dialog using drawn reference line or current scale dimensions."""
         calib = self.get_scale_calibration(self.current_page_index)
-        pt_len = calib.points_len if (calib and calib.points_len > 0) else 100.0
-        ref_line = calib.reference_line if calib else None
+        ref_line = getattr(self, 'temp_calibration_line', None) or (calib.reference_line if calib else None)
+        if ref_line:
+            sx, sy, ex, ey = ref_line
+            pt_len = math.hypot(ex - sx, ey - sy)
+        else:
+            pt_len = calib.points_len if (calib and calib.points_len > 0) else 100.0
         self.show_scale_calibration_dialog(pt_len, reference_line=ref_line)
 
     def show_scale_calibration_dialog(self, measured_points: float, reference_line=None):
@@ -8036,10 +8041,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 line = self.temp_calibration_line
                 sx, sy, ex, ey = line
                 measured_len = math.hypot(ex - sx, ey - sy)
-                if measured_len >= 5.0:
-                    self.show_scale_calibration_dialog(measured_len, reference_line=line)
-                else:
+                if measured_len < 5.0:
                     self.temp_calibration_line = None
+                else:
+                    active_calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
+                    mm_len = (measured_len * 25.4) / 72.0
+                    status_text = f"{measured_len:.1f} pt ({mm_len:.1f} mm)"
+                    if active_calib and active_calib.points_per_unit > 0:
+                        status_text += f" | {active_calib.format_distance(measured_len)}"
+                    if hasattr(self, 'status_label') and self.status_label:
+                        self.status_label.set_text(status_text)
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
             return

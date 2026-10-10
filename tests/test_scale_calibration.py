@@ -158,3 +158,40 @@ class TestDocumentSessionScale:
         sess.close()
         assert sess.scale_calibration is None
         assert sess.scale_calibrations == {}
+
+
+class TestWindowCalibrationInteractions:
+    """Test user interaction ergonomics with calibration and toolbar."""
+
+    def test_drag_end_does_not_auto_open_dialog(self):
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        window = MagicMock()
+        window.temp_calibration_line = (10.0, 20.0, 210.0, 20.0)
+        window.current_page_index = 0
+        window.get_scale_calibration = MagicMock(return_value=None)
+        window.status_label = MagicMock()
+        window.pdf_view = MagicMock()
+        window._update_ui_state = MagicMock()
+        window.show_scale_calibration_dialog = MagicMock()
+
+        # Call on_drag_end logic
+        # Simulate lines from on_drag_end
+        line = window.temp_calibration_line
+        sx, sy, ex, ey = line
+        measured_len = math.hypot(ex - sx, ey - sy)
+        assert measured_len == 200.0
+
+        # Execute PdfEditorWindow's on_calibrate_dialog_clicked
+        PdfEditorWindow.on_calibrate_dialog_clicked(window)
+        # It should pass the measured length and reference line
+        window.show_scale_calibration_dialog.assert_called_once_with(200.0, reference_line=(10.0, 20.0, 210.0, 20.0))
+
+    def test_sidebar_grid_layout_side_by_side(self):
+        """Verify that Form Builder and Calibrate buttons are attached side by side in row 5."""
+        import inspect
+        from word_sys_pdf_editor import window
+        src = inspect.getsource(window.PdfEditorWindow._create_sidebar)
+        assert 'tools_grid.attach(self.form_builder_tool_button, 0, 5, 1, 1)' in src
+        assert 'tools_grid.attach(self.calibrate_tool_button, 1, 5, 1, 1)' in src
+
