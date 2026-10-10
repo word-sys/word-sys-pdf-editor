@@ -593,6 +593,147 @@ class EditableStroke:
         """Set rotation in degrees (0-360)."""
         self.rotation = float(angle) % 360.0
 
+
+class MeasurementObject:
+    """Data model representing a linear distance or polygon area measurement on a PDF page."""
+    TYPE_DISTANCE = "distance"
+    TYPE_AREA = "area"
+
+    def __init__(self, measurement_type: str, points: List[Tuple[float, float]],
+                 page_number: int, color: Tuple[float, float, float] = (0.0, 0.55, 0.95),
+                 fill_color: Tuple[float, float, float, float] = (0.0, 0.55, 0.95, 0.22),
+                 stroke_width: float = 1.5, unit: Optional[str] = None,
+                 is_new: bool = True, rotation: float = 0.0,
+                 label: Optional[str] = None):
+        self.measurement_type = measurement_type  # "distance" or "area"
+        self.points = [tuple(p) for p in points]
+        self.page_number = page_number
+        self.color = normalize_color(color)
+        self.fill_color = fill_color
+        self.stroke_width = float(stroke_width)
+        self.unit = unit
+        self.is_new = is_new
+        self.selected = False
+        self.modified = is_new
+        self.rotation = float(rotation) % 360.0
+        self.label = label
+        self.original_points = list(self.points)
+        self.recalculate_bbox()
+
+    def recalculate_bbox(self):
+        """Update bounding box covering vertices, leader lines, and badge margin."""
+        if not self.points:
+            self.bbox = (0.0, 0.0, 0.0, 0.0)
+            self.x, self.y = 0.0, 0.0
+            return
+        xs = [p[0] for p in self.points]
+        ys = [p[1] for p in self.points]
+        pad = max(self.stroke_width * 2.0, 16.0)
+        self.bbox = (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
+        self.x, self.y = self.bbox[0], self.bbox[1]
+
+    def calculate_length(self) -> float:
+        """Calculate linear distance in points between the first two vertices."""
+        if len(self.points) < 2:
+            return 0.0
+        p0, p1 = self.points[0], self.points[1]
+        return math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+
+    def compute_raw_value(self) -> float:
+        """Return length or area in points depending on measurement type."""
+        if self.measurement_type == self.TYPE_DISTANCE:
+            return self.calculate_length()
+        return self.calculate_area()
+
+    def calculate_perimeter(self) -> float:
+        """Calculate polygon perimeter in points."""
+        if len(self.points) < 2:
+            return 0.0
+        total = 0.0
+        n = len(self.points)
+        for i in range(n):
+            p0 = self.points[i]
+            p1 = self.points[(i + 1) % n]
+            total += math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+        return total
+
+    def calculate_area(self) -> float:
+        """Calculate polygon area in points squared using the Shoelace formula."""
+        if len(self.points) < 3:
+            return 0.0
+        area = 0.0
+        n = len(self.points)
+        for i in range(n):
+            j = (i + 1) % n
+            area += self.points[i][0] * self.points[j][1]
+            area -= self.points[j][0] * self.points[i][1]
+        return abs(area) / 2.0
+
+    def get_centroid(self) -> Tuple[float, float]:
+        """Calculate center point for readout pill placement."""
+        if not self.points:
+            return (0.0, 0.0)
+        if self.measurement_type == self.TYPE_DISTANCE or len(self.points) == 2:
+            p0, p1 = self.points[0], self.points[1]
+            return ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+        xs = [p[0] for p in self.points]
+        ys = [p[1] for p in self.points]
+        return (sum(xs) / len(xs), sum(ys) / len(ys))
+
+    def format_measurement(self, scale_calib: Optional['ScaleCalibration'] = None) -> str:
+        """Return formatted measurement string based on active scale calibration."""
+        if self.label:
+            return self.label
+        if self.measurement_type == self.TYPE_DISTANCE:
+            pt_len = self.calculate_length()
+            if scale_calib and scale_calib.points_per_unit > 0:
+                return scale_calib.format_distance(pt_len)
+            else:
+                mm_len = (pt_len * 25.4) / 72.0
+                return f"{pt_len:.1f} pt ({mm_len:.1f} mm)"
+        else:
+            pt_area = self.calculate_area()
+            if scale_calib and scale_calib.points_per_unit > 0:
+                return scale_calib.format_area(pt_area)
+            else:
+                return f"{pt_area:.1f} pt²"
+
+    def set_position(self, new_x, new_y):
+        """Translate all vertices by (dx, dy)."""
+        dx = new_x - self.x
+        dy = new_y - self.y
+        self.points = [(px + dx, py + dy) for px, py in self.points]
+        self.recalculate_bbox()
+
+    def to_dict(self) -> dict:
+        return {
+            "type": self.measurement_type,
+            "points": self.points,
+            "page_number": self.page_number,
+            "color": self.color,
+            "fill_color": self.fill_color,
+            "stroke_width": self.stroke_width,
+            "unit": self.unit,
+            "rotation": self.rotation,
+            "label": self.label,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'MeasurementObject':
+        return cls(
+            measurement_type=data.get("type", cls.TYPE_DISTANCE),
+            points=[tuple(p) for p in data.get("points", [])],
+            page_number=data.get("page_number", 0),
+            color=tuple(data.get("color", (0.0, 0.55, 0.95))),
+            fill_color=tuple(data.get("fill_color", (0.0, 0.55, 0.95, 0.22))),
+            stroke_width=data.get("stroke_width", 1.5),
+            unit=data.get("unit"),
+            is_new=False,
+            rotation=data.get("rotation", 0.0),
+            label=data.get("label")
+        )
+
+
 @dataclass
 class AcroFormField:
     """Data model representing an interactive AcroForm field."""
@@ -694,8 +835,10 @@ POINTS_PER_CM = 720.0 / 25.4
 POINTS_PER_M = 72000.0 / 25.4
 POINTS_PER_FT = 72.0 * 12.0
 POINTS_PER_YD = 72.0 * 36.0
+POINTS_PER_PT = 1.0
 
 UNIT_FACTORS_TO_POINTS = {
+    "pt": POINTS_PER_PT,
     "m": POINTS_PER_M,
     "cm": POINTS_PER_CM,
     "mm": POINTS_PER_MM,
@@ -728,20 +871,22 @@ class ScaleCalibration:
 
     Attributes:
         points_per_unit: Number of PDF points per real-world unit (e.g. 28.35 points per meter).
-        unit: Measurement unit string ('m', 'cm', 'mm', 'ft', 'in', 'yd').
+        unit: Measurement unit string ('m', 'cm', 'mm', 'ft', 'in', 'yd', 'pt').
         known_distance: Real-world reference length used for calibration.
         points_len: Measured length in PDF points of the reference line.
         reference_line: Optional (x1, y1, x2, y2) coordinates of reference line in PDF page space.
         preset_name: Optional preset identifier (e.g. '1:100', '1/4" = 1\'-0"').
         page_index: Page index if page-specific, or None for document-wide.
+        ratio_value: Scale ratio factor (e.g. 1.0 for 1:1, 50.0 for 1:50).
     """
-    points_per_unit: float
-    unit: str = "m"
+    points_per_unit: float = 1.0
+    unit: str = "pt"
     known_distance: float = 1.0
     points_len: float = 0.0
     reference_line: Optional[Tuple[float, float, float, float]] = None
     preset_name: Optional[str] = None
     page_index: Optional[int] = None
+    ratio_value: float = 1.0
 
     @property
     def units_per_point(self) -> float:
@@ -752,6 +897,10 @@ class ScaleCalibration:
         """Convert a distance in PDF points to calibrated real-world units."""
         return (points / self.points_per_unit) if self.points_per_unit > 0 else points
 
+    def convert_distance(self, points: float) -> float:
+        """Alias for distance_in_units."""
+        return self.distance_in_units(points)
+
     def points_from_distance(self, distance: float) -> float:
         """Convert a real-world distance into PDF points."""
         return distance * self.points_per_unit
@@ -760,6 +909,30 @@ class ScaleCalibration:
         """Convert an area in square points to square real-world units."""
         factor = self.points_per_unit ** 2
         return (points_sq / factor) if factor > 0 else points_sq
+
+    def convert_area(self, points_sq: float) -> float:
+        """Alias for area_in_units."""
+        return self.area_in_units(points_sq)
+
+    @staticmethod
+    def convert_points_to_unit(points: float, unit: str) -> float:
+        """Convert raw points to specified unit length."""
+        factor = UNIT_FACTORS_TO_POINTS.get(unit, 1.0)
+        return points / factor if factor > 0 else points
+
+    def calibrate_from_points(self, points: List[Tuple[float, float]], real_world_dist: float, unit: str = "m"):
+        """Calibrate scale in-place using two line endpoints and real world distance."""
+        if len(points) >= 2:
+            p0, p1 = points[0], points[1]
+            dist_pt = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+            self.reference_line = (p0[0], p0[1], p1[0], p1[1])
+        else:
+            dist_pt = 0.0
+        safe_dist = max(float(real_world_dist), 1e-9)
+        self.points_per_unit = dist_pt / safe_dist
+        self.unit = unit
+        self.known_distance = safe_dist
+        self.points_len = dist_pt
 
     def format_distance(self, points: float, precision: int = 2) -> str:
         """Return human-readable distance with unit suffix."""
@@ -787,6 +960,7 @@ class ScaleCalibration:
             "reference_line": list(self.reference_line) if self.reference_line else None,
             "preset_name": self.preset_name,
             "page_index": self.page_index,
+            "ratio_value": float(self.ratio_value),
         }
 
     @classmethod
@@ -794,13 +968,14 @@ class ScaleCalibration:
         """Deserialize calibration state from dictionary."""
         ref_line = tuple(data["reference_line"]) if data.get("reference_line") else None
         return cls(
-            points_per_unit=float(data["points_per_unit"]),
-            unit=data.get("unit", "m"),
+            points_per_unit=float(data.get("points_per_unit", 1.0)),
+            unit=data.get("unit", "pt"),
             known_distance=float(data.get("known_distance", 1.0)),
             points_len=float(data.get("points_len", 0.0)),
             reference_line=ref_line,
             preset_name=data.get("preset_name"),
             page_index=data.get("page_index"),
+            ratio_value=float(data.get("ratio_value", 1.0)),
         )
 
     @classmethod
@@ -909,6 +1084,10 @@ class DocumentSession:
     scale_calibration: Optional[ScaleCalibration] = None
     scale_calibrations: Dict[int, ScaleCalibration] = field(default_factory=dict)
 
+    # Measurements (Distance & Area)
+    measurements: Dict[int, List[MeasurementObject]] = field(default_factory=dict)
+    selected_measurement: Optional[Any] = None
+
     # Tab integration
     tab_page: Any = None
     bin_widget: Any = None
@@ -973,6 +1152,8 @@ class DocumentSession:
         self.selected_form_field = None
         self.scale_calibration = None
         self.scale_calibrations.clear()
+        self.measurements.clear()
+        self.selected_measurement = None
         self.scroll_x = 0.0
         self.scroll_y = 0.0
 

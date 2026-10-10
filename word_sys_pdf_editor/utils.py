@@ -333,3 +333,36 @@ def normalize_color(color_val):
         return tuple(rgb)
 
     return (0.0, 0.0, 0.0)
+
+
+def point_to_segment_distance(px: float, py: float, x1: float, y1: float, x2: float, y2: float) -> float:
+    """Calculate the shortest Euclidean distance from a point to a 2D line segment."""
+    import math
+    dx = x2 - x1
+    dy = y2 - y1
+    if dx == 0 and dy == 0:
+        return math.hypot(px - x1, py - y1)
+    t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)))
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    return math.hypot(px - proj_x, py - proj_y)
+
+
+def point_in_polygon(px: float, py: float, vertices: list) -> bool:
+    """Check if point (px, py) lies inside the polygon defined by vertices."""
+    n = len(vertices)
+    if n < 3:
+        return False
+    inside = False
+    p1x, p1y = vertices[0]
+    for i in range(1, n + 1):
+        p2x, p2y = vertices[i % n]
+        if py > min(p1y, p2y):
+            if py <= max(p1y, p2y):
+                if px <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xinters = (py - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or px <= xinters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    return inside

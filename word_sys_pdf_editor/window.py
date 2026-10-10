@@ -1,6 +1,6 @@
 import copy
 from typing import Optional, List, Dict, Tuple, Any
-from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand, EditFormFieldCommand, AddFormFieldCommand, DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand, ReplaceImageCommand, CalibrateScaleCommand
+from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand, EditFormFieldCommand, AddFormFieldCommand, DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand, ReplaceImageCommand, CalibrateScaleCommand, AddMeasurementCommand, DeleteMeasurementCommand
 from .i18n import _, get_language, get_setting, set_setting
 
 import gi
@@ -23,7 +23,7 @@ from . import constants
 from . import pdf_handler
 from . import print_handler
 from .welcome_view import WelcomeView
-from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke, DocumentSession, AcroFormField, ScaleCalibration, PRESET_SCALES
+from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke, DocumentSession, AcroFormField, ScaleCalibration, PRESET_SCALES, MeasurementObject
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_confirm_dialog,
     show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog,
@@ -31,6 +31,7 @@ from .ui_components import (
 )
 from .quick_guide_dialog import QuickGuideDialog
 from . import utils
+from .utils import point_to_segment_distance, point_in_polygon
 
 class PdfEditorWindow(Adw.ApplicationWindow):
     """Main application window providing PDF viewing, editing, annotation, and exporting capabilities."""
@@ -117,6 +118,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.calibration_preset_dropdown = None
         self.calibrate_dialog_btn = None
         self.calibrate_reset_btn = None
+        self.measure_distance_tool_button = None
+        self.measure_area_tool_button = None
+        self.temp_measurement_line = None
+        self.temp_measurement_rect = None
+        self.temp_polygon_vertices = []
+        self.selected_measurement = None
+        self.measurement_toolbar_box = None
+        self.measurement_toolbar_sep = None
+        self.measurement_scale_indicator = None
+        self.measurement_calibrate_btn = None
+        self.measurement_hint_lbl = None
+        self.measurement_clear_btn = None
         self._updating_form_builder_ui = False
         self._active_editing_form_field = None
         self.current_pdf_page_width = 0
@@ -1207,6 +1220,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.calibrate_tool_button = _make_tool_btn("applications-engineering-symbolic", _("tool_calibrate"), _("tool_calibrate_tip"), "calibrate")
         tools_grid.attach(self.calibrate_tool_button, 1, 5, 1, 1)
+
+        self.measure_distance_tool_button = _make_tool_btn("straighten-symbolic", _("tool_measure_distance"), _("tool_measure_distance_tip"), "measure_distance")
+        tools_grid.attach(self.measure_distance_tool_button, 0, 6, 1, 1)
+
+        self.measure_area_tool_button = _make_tool_btn("view-grid-symbolic", _("tool_measure_area"), _("tool_measure_area_tip"), "measure_area")
+        tools_grid.attach(self.measure_area_tool_button, 1, 6, 1, 1)
         
         sidebar_box.append(tools_grid)
 
@@ -1591,6 +1610,44 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.toolbar_row2.append(self.calibration_toolbar_box)
         self.calibration_toolbar_box.set_visible(False)
 
+        # Measurement Toolbar (Distance & Area)
+        self.measurement_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
+        self.toolbar_row2.append(self.measurement_toolbar_sep)
+        self.measurement_toolbar_sep.set_visible(False)
+
+        self.measurement_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        meas_lbl = Gtk.Label(label=_("measurement_toolbar_label"))
+        meas_lbl.add_css_class("heading")
+        self.measurement_toolbar_box.append(meas_lbl)
+
+        self.measurement_scale_indicator = Gtk.Label(label=_("scale_uncalibrated"))
+        self.measurement_scale_indicator.add_css_class("dim-label")
+        self.measurement_toolbar_box.append(self.measurement_scale_indicator)
+
+        self.measurement_calibrate_btn = Gtk.Button(label=_("btn_calibrate"))
+        self.measurement_calibrate_btn.add_css_class("flat")
+        self.measurement_calibrate_btn.connect("clicked", self.on_calibrate_dialog_clicked)
+        self.measurement_toolbar_box.append(self.measurement_calibrate_btn)
+
+        sep_m = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=4, margin_end=4)
+        self.measurement_toolbar_box.append(sep_m)
+
+        self.measurement_hint_lbl = Gtk.Label(label="")
+        self.measurement_hint_lbl.add_css_class("dim-label")
+        self.measurement_toolbar_box.append(self.measurement_hint_lbl)
+
+        sep_m2 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=4, margin_end=4)
+        self.measurement_toolbar_box.append(sep_m2)
+
+        self.measurement_clear_btn = Gtk.Button(label=_("btn_clear_measurements"))
+        self.measurement_clear_btn.set_tooltip_text(_("btn_clear_measurements_tip"))
+        self.measurement_clear_btn.add_css_class("flat")
+        self.measurement_clear_btn.connect("clicked", self.on_clear_measurements_clicked)
+        self.measurement_toolbar_box.append(self.measurement_clear_btn)
+
+        self.toolbar_row2.append(self.measurement_toolbar_box)
+        self.measurement_toolbar_box.set_visible(False)
+
         self.view_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
         self.toolbar_row1.append(self.view_toolbar_sep)
         self.view_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -1802,7 +1859,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          getattr(self, 'checkmark_tool_button', None),
                          getattr(self, 'cross_tool_button', None),
                          getattr(self, 'form_builder_tool_button', None),
-                         getattr(self, 'calibrate_tool_button', None)]
+                         getattr(self, 'calibrate_tool_button', None),
+                         getattr(self, 'measure_distance_tool_button', None),
+                         getattr(self, 'measure_area_tool_button', None)]
         for btn in sidebar_tools:
             if btn:
                 btn.set_sensitive(in_edit and has_doc)
@@ -1828,13 +1887,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         shape_selected = self.selected_shape is not None
         stroke_selected = getattr(self, 'selected_stroke', None) is not None
         text_selected = self.selected_text is not None
+        meas_selected = getattr(self, 'selected_measurement', None) is not None
         shape_controls_active = in_edit and (shape_selected or self.tool_mode in ("add_ellipse", "add_rectangle", "add_checkmark", "add_cross"))
         stroke_controls_active = in_edit and (stroke_selected or self.tool_mode in ("pen", "highlighter"))
         form_builder_active = in_edit and (self.tool_mode == "form_builder")
         calibrate_active = in_edit and (self.tool_mode == "calibrate")
+        measure_active = in_edit and (self.tool_mode in ("measure_distance", "measure_area") or meas_selected)
         view_text_selected = self.view_mode and (getattr(self, 'view_sel_rect', None) is not None or getattr(self, 'selected_word', None) is not None)
         format_enabled_base = in_edit and ((text_selected or self.tool_mode == "add_text") and
-                               self.selected_image is None and not shape_selected and not stroke_selected and not form_builder_active and not calibrate_active)
+                               self.selected_image is None and not shape_selected and not stroke_selected and not form_builder_active and not calibrate_active and not measure_active)
 
         if hasattr(self, 'toolbar_row2'):
             self.toolbar_row2.set_visible(in_edit and has_doc)
@@ -1860,8 +1921,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if calibrate_active:
                 self._update_calibration_controls()
 
+        if hasattr(self, 'measurement_toolbar_box'):
+            self.measurement_toolbar_box.set_visible(measure_active)
+            self.measurement_toolbar_sep.set_visible(measure_active)
+            if measure_active:
+                self._update_measurement_controls()
+
         if hasattr(self, 'text_format_box'):
-            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active and not form_builder_active and not calibrate_active and self.selected_image is None)
+            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active and not form_builder_active and not calibrate_active and not measure_active and self.selected_image is None)
             self.text_format_sep.set_visible(False)
 
         self.font_combo.set_sensitive(format_enabled_base and not self.font_scan_in_progress)
@@ -1957,6 +2024,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.cross_tool_button.get_style_context().remove_class('active')
         if hasattr(self, 'form_builder_tool_button') and self.form_builder_tool_button:
             self.form_builder_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'calibrate_tool_button') and self.calibrate_tool_button:
+            self.calibrate_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'measure_distance_tool_button') and self.measure_distance_tool_button:
+            self.measure_distance_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'measure_area_tool_button') and self.measure_area_tool_button:
+            self.measure_area_tool_button.get_style_context().remove_class('active')
 
         if self.view_mode:
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
@@ -1997,6 +2070,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif self.tool_mode == "form_builder":
             if hasattr(self, 'form_builder_tool_button') and self.form_builder_tool_button:
                 self.form_builder_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "calibrate":
+            if hasattr(self, 'calibrate_tool_button') and self.calibrate_tool_button:
+                self.calibrate_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "measure_distance":
+            if hasattr(self, 'measure_distance_tool_button') and self.measure_distance_tool_button:
+                self.measure_distance_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "measure_area":
+            if hasattr(self, 'measure_area_tool_button') and self.measure_area_tool_button:
+                self.measure_area_tool_button.get_style_context().add_class('active')
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
 
         if has_doc:
@@ -2163,6 +2248,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.add_text_tool_button.set_sensitive(False)
         if getattr(self, 'calibrate_tool_button', None):
             self.calibrate_tool_button.set_sensitive(False)
+        if getattr(self, 'measure_distance_tool_button', None):
+            self.measure_distance_tool_button.set_sensitive(False)
+        if getattr(self, 'measure_area_tool_button', None):
+            self.measure_area_tool_button.set_sensitive(False)
         if not any(s.doc is not None for s in self.sessions):
             if hasattr(self, 'stack') and self.stack:
                 self.stack.set_visible_child_name("welcome")
@@ -2183,6 +2272,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.add_text_tool_button.set_sensitive(True)
             if getattr(self, 'calibrate_tool_button', None):
                 self.calibrate_tool_button.set_sensitive(True)
+            if getattr(self, 'measure_distance_tool_button', None):
+                self.measure_distance_tool_button.set_sensitive(True)
+            if getattr(self, 'measure_area_tool_button', None):
+                self.measure_area_tool_button.set_sensitive(True)
             self._update_ui_state()
             return
         elif doc and sess:
@@ -2202,6 +2295,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 except Exception as e:
                     print(f"Warning restoring scale calibration: {e}")
 
+            meas_data = pdf_handler.extract_measurements(doc)
+            if meas_data:
+                sess.measurements.clear()
+                for item in meas_data:
+                    try:
+                        m_obj = MeasurementObject.from_dict(item)
+                        if m_obj.page_number not in sess.measurements:
+                            sess.measurements[m_obj.page_number] = []
+                        sess.measurements[m_obj.page_number].append(m_obj)
+                    except Exception as e:
+                        print(f"Warning restoring measurement: {e}")
+
             if getattr(sess, 'is_repaired_file', False):
                 print(_("dbg_repaired_while_opening"))
             self._record_recent_file(filepath)
@@ -2217,6 +2322,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.add_text_tool_button.set_sensitive(True)
         if getattr(self, 'calibrate_tool_button', None):
             self.calibrate_tool_button.set_sensitive(True)
+        if getattr(self, 'measure_distance_tool_button', None):
+            self.measure_distance_tool_button.set_sensitive(True)
+        if getattr(self, 'measure_area_tool_button', None):
+            self.measure_area_tool_button.set_sensitive(True)
         self._update_ui_state()
 
     def _load_thumbnails(self, session=None):
@@ -2473,6 +2582,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if self._active_session and getattr(self._active_session, 'scale_calibration', None):
             pdf_handler.embed_scale_calibration(self.doc, self._active_session.scale_calibration.to_dict())
+
+        if self._active_session:
+            all_meas_dicts = []
+            for p_idx, m_list in self._active_session.measurements.items():
+                for m in m_list:
+                    all_meas_dicts.append(m.to_dict())
+            if all_meas_dicts:
+                pdf_handler.embed_measurements(self.doc, all_meas_dicts)
 
         success, error_msg = pdf_handler.save_document(self.doc, save_path, incremental=False)
         self.is_saving = False
@@ -3117,7 +3234,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             )
 
         selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
-                        self.selected_stroke or getattr(self, 'selected_form_field', None))
+                        self.selected_stroke or getattr(self, 'selected_form_field', None) or
+                        getattr(self, 'selected_measurement', None))
         if selected_obj and not self.dragged_object and not (
             isinstance(selected_obj, AcroFormField) and getattr(self, '_active_editing_form_field', None) == selected_obj
         ) and not (self.inline_editor_widget is not None and selected_obj == getattr(self, 'inline_editor_text_obj', None)):
@@ -3172,7 +3290,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.stroke()
 
             # Stalk rotation handle
-            is_form = isinstance(selected_obj, AcroFormField) or hasattr(selected_obj, 'field_name')
+            is_form = isinstance(selected_obj, AcroFormField) or hasattr(selected_obj, 'field_name') or isinstance(selected_obj, MeasurementObject)
             if not isinstance(selected_obj, EditableText) and not is_form:
                 stalk_len = 22.0 / self.zoom_level
                 stalk_x = rect_x + rect_w / 2.0
@@ -3300,6 +3418,292 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.set_source_rgb(1.0, 1.0, 1.0)
                 cr.move_to(bx + pad_x - ext.x_bearing, by + pad_y - ext.y_bearing)
                 cr.show_text(badge_str)
+                cr.restore()
+
+        # Draw persistent measurement objects (Distance & Area)
+        if self._active_session:
+            page_measurements = self._active_session.measurements.get(self.current_page_index, [])
+            for m in page_measurements:
+                is_selected = (getattr(self, 'selected_measurement', None) == m)
+                active_calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
+                cr.save()
+
+                if m.measurement_type == MeasurementObject.TYPE_DISTANCE and len(m.points) >= 2:
+                    p0, p1 = m.points[0], m.points[1]
+                    sx, sy = p0
+                    ex, ey = p1
+                    pt_len = math.hypot(ex - sx, ey - sy)
+                    if pt_len > 1.0:
+                        if is_selected:
+                            cr.set_source_rgba(1.0, 0.75, 0.0, 1.0)
+                            cr.set_line_width(2.2 / self.zoom_level)
+                        else:
+                            cr.set_source_rgba(m.color[0], m.color[1], m.color[2], 0.95)
+                            cr.set_line_width(m.stroke_width / self.zoom_level)
+
+                        # Main dimension line
+                        cr.move_to(sx, sy)
+                        cr.line_to(ex, ey)
+                        cr.stroke()
+
+                        # Perpendicular ticks
+                        theta = math.atan2(ey - sy, ex - sx)
+                        perp = theta + math.pi / 2.0
+                        tick_h = 7.0 / self.zoom_level
+                        dx_p = tick_h * math.cos(perp)
+                        dy_p = tick_h * math.sin(perp)
+
+                        cr.move_to(sx - dx_p, sy - dy_p)
+                        cr.line_to(sx + dx_p, sy + dy_p)
+                        cr.stroke()
+
+                        cr.move_to(ex - dx_p, ey - dy_p)
+                        cr.line_to(ex + dx_p, ey + dy_p)
+                        cr.stroke()
+
+                        # Vertex circles
+                        rad = 3.0 / self.zoom_level
+                        cr.arc(sx, sy, rad, 0, 2 * math.pi)
+                        cr.stroke()
+                        cr.arc(ex, ey, rad, 0, 2 * math.pi)
+                        cr.stroke()
+
+                        # Midpoint readout pill badge
+                        mx = (sx + ex) / 2.0
+                        my = (sy + ey) / 2.0
+                        badge_str = m.format_measurement(active_calib)
+
+                        cr.set_font_size(max(10.0 / self.zoom_level, 9.0))
+                        ext = cr.text_extents(badge_str)
+                        pad_x = 6.0 / self.zoom_level
+                        pad_y = 3.0 / self.zoom_level
+                        bw = ext.width + pad_x * 2.0
+                        bh = ext.height + pad_y * 2.0
+                        bx = mx - bw / 2.0
+                        by = my - bh / 2.0 - (12.0 / self.zoom_level)
+
+                        # Background pill
+                        cr.set_source_rgba(0.12, 0.15, 0.20, 0.88)
+                        cr.rectangle(bx, by, bw, bh)
+                        cr.fill()
+
+                        if is_selected:
+                            cr.set_source_rgba(1.0, 0.75, 0.0, 1.0)
+                            cr.set_line_width(1.5 / self.zoom_level)
+                        else:
+                            cr.set_source_rgba(m.color[0], m.color[1], m.color[2], 0.95)
+                            cr.set_line_width(1.0 / self.zoom_level)
+                        cr.rectangle(bx, by, bw, bh)
+                        cr.stroke()
+
+                        cr.set_source_rgb(1.0, 1.0, 1.0)
+                        cr.move_to(bx + pad_x - ext.x_bearing, by + pad_y - ext.y_bearing)
+                        cr.show_text(badge_str)
+
+                elif m.measurement_type == MeasurementObject.TYPE_AREA and len(m.points) >= 3:
+                    # Closed polygon path
+                    cr.move_to(m.points[0][0], m.points[0][1])
+                    for p in m.points[1:]:
+                        cr.line_to(p[0], p[1])
+                    cr.close_path()
+
+                    # Translucent fill
+                    cr.set_source_rgba(m.fill_color[0], m.fill_color[1], m.fill_color[2], m.fill_color[3])
+                    cr.fill_preserve()
+
+                    # Border stroke
+                    if is_selected:
+                        cr.set_source_rgba(1.0, 0.75, 0.0, 1.0)
+                        cr.set_line_width(2.2 / self.zoom_level)
+                    else:
+                        cr.set_source_rgba(m.color[0], m.color[1], m.color[2], 0.95)
+                        cr.set_line_width(m.stroke_width / self.zoom_level)
+                    cr.stroke()
+
+                    # Vertex markers
+                    rad = 3.0 / self.zoom_level
+                    for p in m.points:
+                        cr.arc(p[0], p[1], rad, 0, 2 * math.pi)
+                        cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+                        cr.fill_preserve()
+                        cr.set_source_rgba(m.color[0], m.color[1], m.color[2], 1.0)
+                        cr.stroke()
+
+                    # Centroid readout badge
+                    cx, cy = m.get_centroid()
+                    badge_str = m.format_measurement(active_calib)
+
+                    cr.set_font_size(max(10.0 / self.zoom_level, 9.0))
+                    ext = cr.text_extents(badge_str)
+                    pad_x = 6.0 / self.zoom_level
+                    pad_y = 3.0 / self.zoom_level
+                    bw = ext.width + pad_x * 2.0
+                    bh = ext.height + pad_y * 2.0
+                    bx = cx - bw / 2.0
+                    by = cy - bh / 2.0
+
+                    cr.set_source_rgba(0.12, 0.15, 0.20, 0.88)
+                    cr.rectangle(bx, by, bw, bh)
+                    cr.fill()
+
+                    if is_selected:
+                        cr.set_source_rgba(1.0, 0.75, 0.0, 1.0)
+                        cr.set_line_width(1.5 / self.zoom_level)
+                    else:
+                        cr.set_source_rgba(m.color[0], m.color[1], m.color[2], 0.95)
+                        cr.set_line_width(1.0 / self.zoom_level)
+                    cr.rectangle(bx, by, bw, bh)
+                    cr.stroke()
+
+                    cr.set_source_rgb(1.0, 1.0, 1.0)
+                    cr.move_to(bx + pad_x - ext.x_bearing, by + pad_y - ext.y_bearing)
+                    cr.show_text(badge_str)
+
+                cr.restore()
+
+        # In-progress distance measurement
+        if getattr(self, 'temp_measurement_line', None) is not None:
+            sx, sy, ex, ey = self.temp_measurement_line
+            pt_len = math.hypot(ex - sx, ey - sy)
+            if pt_len > 1.0:
+                cr.save()
+                cr.set_source_rgba(0.0, 0.65, 0.95, 0.95)
+                cr.set_line_width(2.0 / self.zoom_level)
+                cr.move_to(sx, sy)
+                cr.line_to(ex, ey)
+                cr.stroke()
+
+                theta = math.atan2(ey - sy, ex - sx)
+                perp = theta + math.pi / 2.0
+                tick_h = 7.0 / self.zoom_level
+                dx_p = tick_h * math.cos(perp)
+                dy_p = tick_h * math.sin(perp)
+
+                cr.move_to(sx - dx_p, sy - dy_p)
+                cr.line_to(sx + dx_p, sy + dy_p)
+                cr.stroke()
+                cr.move_to(ex - dx_p, ey - dy_p)
+                cr.line_to(ex + dx_p, ey + dy_p)
+                cr.stroke()
+
+                rad = 3.0 / self.zoom_level
+                cr.arc(sx, sy, rad, 0, 2 * math.pi)
+                cr.stroke()
+                cr.arc(ex, ey, rad, 0, 2 * math.pi)
+                cr.stroke()
+
+                active_calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
+                if active_calib and active_calib.points_per_unit > 0:
+                    badge_str = active_calib.format_distance(pt_len)
+                else:
+                    mm_len = (pt_len * 25.4) / 72.0
+                    badge_str = f"{pt_len:.1f} pt ({mm_len:.1f} mm)"
+
+                mx = (sx + ex) / 2.0
+                my = (sy + ey) / 2.0
+                cr.set_font_size(max(10.0 / self.zoom_level, 9.0))
+                ext = cr.text_extents(badge_str)
+                pad_x = 6.0 / self.zoom_level
+                pad_y = 3.0 / self.zoom_level
+                bw = ext.width + pad_x * 2.0
+                bh = ext.height + pad_y * 2.0
+                bx = mx - bw / 2.0
+                by = my - bh / 2.0 - (12.0 / self.zoom_level)
+
+                cr.set_source_rgba(0.12, 0.15, 0.20, 0.88)
+                cr.rectangle(bx, by, bw, bh)
+                cr.fill()
+
+                cr.set_source_rgba(0.0, 0.70, 1.0, 0.95)
+                cr.set_line_width(1.0 / self.zoom_level)
+                cr.rectangle(bx, by, bw, bh)
+                cr.stroke()
+
+                cr.set_source_rgb(1.0, 1.0, 1.0)
+                cr.move_to(bx + pad_x - ext.x_bearing, by + pad_y - ext.y_bearing)
+                cr.show_text(badge_str)
+                cr.restore()
+
+        # In-progress area measurement (drag rectangle)
+        if getattr(self, 'temp_measurement_rect', None) is not None:
+            x1, y1, x2, y2 = self.temp_measurement_rect
+            rw = x2 - x1
+            rh = y2 - y1
+            if abs(rw) > 1.0 and abs(rh) > 1.0:
+                cr.save()
+                cr.set_source_rgba(0.0, 0.55, 0.95, 0.22)
+                cr.rectangle(x1, y1, rw, rh)
+                cr.fill_preserve()
+
+                cr.set_source_rgba(0.0, 0.70, 1.0, 0.95)
+                cr.set_line_width(1.8 / self.zoom_level)
+                cr.rectangle(x1, y1, rw, rh)
+                cr.stroke()
+
+                pt_area = abs(rw * rh)
+                active_calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
+                if active_calib and active_calib.points_per_unit > 0:
+                    badge_str = active_calib.format_area(pt_area)
+                else:
+                    badge_str = f"{pt_area:.1f} pt²"
+
+                cx = x1 + rw / 2.0
+                cy = y1 + rh / 2.0
+                cr.set_font_size(max(10.0 / self.zoom_level, 9.0))
+                ext = cr.text_extents(badge_str)
+                pad_x = 6.0 / self.zoom_level
+                pad_y = 3.0 / self.zoom_level
+                bw = ext.width + pad_x * 2.0
+                bh = ext.height + pad_y * 2.0
+                bx = cx - bw / 2.0
+                by = cy - bh / 2.0
+
+                cr.set_source_rgba(0.12, 0.15, 0.20, 0.88)
+                cr.rectangle(bx, by, bw, bh)
+                cr.fill()
+
+                cr.set_source_rgba(0.0, 0.70, 1.0, 0.95)
+                cr.set_line_width(1.0 / self.zoom_level)
+                cr.rectangle(bx, by, bw, bh)
+                cr.stroke()
+
+                cr.set_source_rgb(1.0, 1.0, 1.0)
+                cr.move_to(bx + pad_x - ext.x_bearing, by + pad_y - ext.y_bearing)
+                cr.show_text(badge_str)
+                cr.restore()
+
+        # In-progress multi-click polygon area measurement
+        if getattr(self, 'temp_polygon_vertices', None) and len(self.temp_polygon_vertices) > 0 and getattr(self, 'tool_mode', None) == "measure_area":
+            pts = list(self.temp_polygon_vertices)
+            last_mouse = getattr(self, 'last_mouse_page_pos', None)
+            render_pts = pts + [last_mouse] if last_mouse else pts
+            if len(render_pts) >= 2:
+                cr.save()
+                if len(render_pts) >= 3:
+                    cr.move_to(render_pts[0][0], render_pts[0][1])
+                    for p in render_pts[1:]:
+                        cr.line_to(p[0], p[1])
+                    cr.close_path()
+                    cr.set_source_rgba(0.0, 0.55, 0.95, 0.18)
+                    cr.fill_preserve()
+                    cr.set_source_rgba(0.0, 0.70, 1.0, 0.95)
+                    cr.set_line_width(1.8 / self.zoom_level)
+                    cr.stroke()
+                else:
+                    cr.set_source_rgba(0.0, 0.70, 1.0, 0.95)
+                    cr.set_line_width(1.8 / self.zoom_level)
+                    cr.move_to(render_pts[0][0], render_pts[0][1])
+                    cr.line_to(render_pts[1][0], render_pts[1][1])
+                    cr.stroke()
+
+                # Vertex handles
+                rad = 3.5 / self.zoom_level
+                for p in pts:
+                    cr.arc(p[0], p[1], rad, 0, 2 * math.pi)
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+                    cr.fill_preserve()
+                    cr.set_source_rgba(0.0, 0.70, 1.0, 1.0)
+                    cr.stroke()
                 cr.restore()
 
         cr.restore()
@@ -3469,6 +3873,34 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             tolerance = 3.0 / getattr(self, 'zoom_level', 1.0)
             if (min_x - tolerance) <= page_x <= (max_x + tolerance) and (min_y - tolerance) <= page_y <= (max_y + tolerance):
                 return field
+        return None
+
+    def _find_measurement_at_pos(self, page_x, page_y):
+        """Find linear or area measurement object at page position."""
+        try:
+            coords = self._visual_to_unrotated_page_coords(page_x, page_y)
+            if isinstance(coords, (tuple, list)) and len(coords) == 2:
+                page_x, page_y = coords
+        except Exception:
+            pass
+        if not self._active_session:
+            return None
+        measurements = self._active_session.measurements.get(self.current_page_index, [])
+        for m in reversed(measurements):
+            bx1, by1, bx2, by2 = m.bbox
+            tolerance = 6.0 / getattr(self, 'zoom_level', 1.0)
+            if (bx1 - tolerance) <= page_x <= (bx2 + tolerance) and (by1 - tolerance) <= page_y <= (by2 + tolerance):
+                if m.measurement_type == MeasurementObject.TYPE_DISTANCE and len(m.points) >= 2:
+                    p0, p1 = m.points[0], m.points[1]
+                    dist_to_seg = point_to_segment_distance(page_x, page_y, p0[0], p0[1], p1[0], p1[1])
+                    if dist_to_seg <= (12.0 / getattr(self, 'zoom_level', 1.0)):
+                        return m
+                elif m.measurement_type == MeasurementObject.TYPE_AREA and len(m.points) >= 3:
+                    if point_in_polygon(page_x, page_y, m.points):
+                        return m
+                cx, cy = m.get_centroid()
+                if math.hypot(page_x - cx, page_y - cy) <= (22.0 / getattr(self, 'zoom_level', 1.0)):
+                    return m
         return None
 
     def _compute_form_field_screen_geometry(self, field):
@@ -5926,6 +6358,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.pdf_view.set_tooltip_text(None)
 
+        if not getattr(self, 'view_mode', False) and getattr(self, 'tool_mode', None) == "measure_area" and len(getattr(self, 'temp_polygon_vertices', [])) > 0:
+            page_offset_x = max(0, (self.pdf_view.get_allocated_width() - self.current_pdf_page_width) / 2)
+            page_offset_y = max(0, (self.pdf_view.get_allocated_height() - self.current_pdf_page_height) / 2)
+            vis_x = (x - page_offset_x) / self.zoom_level
+            vis_y = (y - page_offset_y) / self.zoom_level
+            unrot_x, unrot_y = self._visual_to_unrotated_page_coords(vis_x, vis_y)
+            self.last_mouse_page_pos = (unrot_x, unrot_y)
+            self.pdf_view.queue_draw()
+
         if not getattr(self, 'dragged_object', None):
             selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
                             getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None))
@@ -6391,6 +6832,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             clicked_shape = self._find_shape_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_stroke = self._find_stroke_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_form_field = self._find_form_field_at_pos(page_x_unzoomed, page_y_unzoomed)
+            clicked_measurement = self._find_measurement_at_pos(page_x_unzoomed, page_y_unzoomed)
 
             if clicked_image:
                 self._close_active_form_field_editor()
@@ -6399,12 +6841,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_shape = None
                 self.selected_stroke = None
                 self.selected_form_field = None
+                self.selected_measurement = None
             elif clicked_text:
                 self._close_active_form_field_editor()
                 self.selected_image = None
                 self.selected_shape = None
                 self.selected_stroke = None
                 self.selected_form_field = None
+                self.selected_measurement = None
                 self.selected_text = clicked_text
                 self.word_selection_mode = False
                 self.pending_format_change_obj = self.selected_text
@@ -6419,6 +6863,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_image = None
                 self.selected_stroke = None
                 self.selected_form_field = None
+                self.selected_measurement = None
             elif clicked_stroke:
                 self._close_active_form_field_editor()
                 self.selected_stroke = clicked_stroke
@@ -6426,6 +6871,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_text = None
                 self.selected_image = None
                 self.selected_form_field = None
+                self.selected_measurement = None
                 self._update_stroke_format_controls(self.selected_stroke)
             elif clicked_form_field:
                 self._close_active_form_field_editor()
@@ -6433,8 +6879,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_image = None
                 self.selected_shape = None
                 self.selected_stroke = None
+                self.selected_measurement = None
                 self.selected_form_field = clicked_form_field
                 self._update_form_builder_controls_for_selected()
+            elif clicked_measurement:
+                self._close_active_form_field_editor()
+                self.selected_text = None
+                self.selected_image = None
+                self.selected_shape = None
+                self.selected_stroke = None
+                self.selected_form_field = None
+                self.selected_measurement = clicked_measurement
             else:
                 self._close_active_form_field_editor()
                 if not self.view_mode and self.doc and 0 <= self.current_page_index < pdf_handler.get_page_count(self.doc):
@@ -6477,6 +6932,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self.selected_shape = None
                         self.selected_stroke = None
                         self.selected_form_field = None
+                        self.selected_measurement = None
                         self.word_selection_mode = False
                         self.pending_format_change_obj = found_text
                         self.before_format_change_state = copy.deepcopy(found_text.__dict__)
@@ -6492,9 +6948,74 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_shape = None
                 self.selected_stroke = None
                 self.selected_form_field = None
+                self.selected_measurement = None
 
             self.pdf_view.queue_draw()
             self._update_ui_state()
+
+        elif self.tool_mode in ("measure_area", "measure_distance"):
+            clicked_m = self._find_measurement_at_pos(page_x_unzoomed, page_y_unzoomed)
+            if clicked_m is not None:
+                self.selected_measurement = clicked_m
+                self.selected_text = None
+                self.selected_image = None
+                self.selected_shape = None
+                self.selected_stroke = None
+                self.selected_form_field = None
+                self.temp_polygon_vertices = []
+                self.temp_measurement_line = None
+                self.temp_measurement_rect = None
+                self.last_mouse_page_pos = None
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+                return
+
+            if self.tool_mode == "measure_area":
+                unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed)
+                if n_press >= 2:
+                    if len(getattr(self, 'temp_polygon_vertices', [])) >= 3:
+                        pts = list(self.temp_polygon_vertices)
+                        self.temp_polygon_vertices = []
+                        self.last_mouse_page_pos = None
+                        meas = MeasurementObject(
+                            measurement_type=MeasurementObject.TYPE_AREA,
+                            points=pts,
+                            page_number=self.current_page_index
+                        )
+                        cmd = AddMeasurementCommand(self, meas)
+                        cmd.execute()
+                        self.undo_manager.add_command(cmd)
+                        self.pdf_view.queue_draw()
+                        self._update_ui_state()
+                        return
+                    else:
+                        self.temp_polygon_vertices = []
+                        self.last_mouse_page_pos = None
+                        self.pdf_view.queue_draw()
+                        return
+                elif n_press == 1:
+                    if len(getattr(self, 'temp_polygon_vertices', [])) >= 3:
+                        start_pt = self.temp_polygon_vertices[0]
+                        if math.hypot(unrot_x - start_pt[0], unrot_y - start_pt[1]) <= (15.0 / self.zoom_level):
+                            pts = list(self.temp_polygon_vertices)
+                            self.temp_polygon_vertices = []
+                            self.last_mouse_page_pos = None
+                            meas = MeasurementObject(
+                                measurement_type=MeasurementObject.TYPE_AREA,
+                                points=pts,
+                                page_number=self.current_page_index
+                            )
+                            cmd = AddMeasurementCommand(self, meas)
+                            cmd.execute()
+                            self.undo_manager.add_command(cmd)
+                            self.pdf_view.queue_draw()
+                            self._update_ui_state()
+                            return
+                    if not hasattr(self, 'temp_polygon_vertices') or self.temp_polygon_vertices is None:
+                        self.temp_polygon_vertices = []
+                    self.temp_polygon_vertices.append((unrot_x, unrot_y))
+                    self.pdf_view.queue_draw()
+                    return
 
         elif self.tool_mode == "add_text":
             if self.inline_editor_widget is not None:
@@ -6926,6 +7447,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return False
 
         if keyval == Gdk.KEY_Escape:
+            if getattr(self, 'temp_polygon_vertices', None):
+                self.temp_polygon_vertices = []
+                self.last_mouse_page_pos = None
+                self.pdf_view.queue_draw()
+                return True
+            if getattr(self, 'temp_measurement_line', None) or getattr(self, 'temp_measurement_rect', None):
+                self.temp_measurement_line = None
+                self.temp_measurement_rect = None
+                self.last_mouse_page_pos = None
+                self.pdf_view.queue_draw()
+                return True
             if getattr(self, '_active_editing_form_field', None) is not None:
                 self._close_active_form_field_editor()
                 return True
@@ -7024,7 +7556,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if keyval == Gdk.KEY_Delete:
             self.commit_pending_format_change()
             obj_to_delete = (self.selected_text or self.selected_image or self.selected_shape or 
-                             getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None))
+                             getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None) or
+                             getattr(self, 'selected_measurement', None))
             if obj_to_delete and not is_input_focused:
                 self._handle_delete_with_confirmation(obj_to_delete, "delete_confirm_title")
                 return True
@@ -7044,7 +7577,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         # Arrow key nudge movement (1pt normal / 10pt with Shift) for selected objects
         if not is_input_focused and keyval in (Gdk.KEY_Left, Gdk.KEY_Right, Gdk.KEY_Up, Gdk.KEY_Down):
             selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
-                            getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None))
+                            getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None) or
+                            getattr(self, 'selected_measurement', None))
             if selected_obj:
                 step = 10.0 if bool(state & Gdk.ModifierType.SHIFT_MASK) else 1.0
                 dx, dy = 0.0, 0.0
@@ -7071,6 +7605,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     selected_obj.points = [(p[0] + dx, p[1] + dy) for p in selected_obj.points]
                     selected_obj.recalculate_bbox()
                     selected_obj.original_bbox = selected_obj.bbox
+                elif isinstance(selected_obj, MeasurementObject):
+                    selected_obj.points = [(p[0] + dx, p[1] + dy) for p in selected_obj.points]
+                    selected_obj.recalculate_bbox()
                 elif isinstance(selected_obj, AcroFormField):
                     x1, y1, x2, y2 = selected_obj.rect
                     new_rect = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
@@ -7158,6 +7695,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.tool_mode = tool_name
         print(_("dbg_tool_changed", self.tool_mode))
         self.temp_calibration_line = None
+        self.temp_measurement_line = None
+        self.temp_measurement_rect = None
+        self.temp_polygon_vertices = []
+        self.last_mouse_page_pos = None
         self._update_ui_state()
         if self.tool_mode in ("pen", "highlighter"):
             self._update_stroke_format_controls(None)
@@ -7207,6 +7748,91 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             else:
                 self.status_label.set_text(_("scale_reset_success"))
         self.pdf_view.queue_draw()
+
+    def _add_measurement_to_session(self, measurement):
+        """Add measurement to active session storage."""
+        if not self._active_session:
+            return
+        p_idx = getattr(measurement, 'page_number', self.current_page_index)
+        if p_idx not in self._active_session.measurements:
+            self._active_session.measurements[p_idx] = []
+        if measurement not in self._active_session.measurements[p_idx]:
+            self._active_session.measurements[p_idx].append(measurement)
+        self.selected_measurement = measurement
+        self.document_modified = True
+        if hasattr(self, '_update_tab_dirty_state'):
+            self._update_tab_dirty_state()
+        if hasattr(self, '_update_ui_state'):
+            self._update_ui_state()
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+
+    def _remove_measurement_from_session(self, measurement):
+        """Remove measurement from active session storage."""
+        if not self._active_session:
+            return
+        p_idx = getattr(measurement, 'page_number', self.current_page_index)
+        if p_idx in self._active_session.measurements:
+            if measurement in self._active_session.measurements[p_idx]:
+                self._active_session.measurements[p_idx].remove(measurement)
+        if getattr(self, 'selected_measurement', None) == measurement:
+            self.selected_measurement = None
+        self.document_modified = True
+        if hasattr(self, '_update_tab_dirty_state'):
+            self._update_tab_dirty_state()
+        if hasattr(self, '_update_ui_state'):
+            self._update_ui_state()
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+
+    def on_clear_measurements_clicked(self, button=None):
+        """Clear all measurements on the current page."""
+        if not self._active_session:
+            return
+        meas_list = list(self._active_session.measurements.get(self.current_page_index, []))
+        if not meas_list:
+            return
+        from .undo_manager import CompositeCommand, DeleteMeasurementCommand
+        commands = [DeleteMeasurementCommand(self, m) for m in meas_list]
+        composite = CompositeCommand(self, commands)
+        composite.execute()
+        self.undo_manager.add_command(composite)
+        self.selected_measurement = None
+        self.document_modified = True
+        if hasattr(self, '_update_tab_dirty_state'):
+            self._update_tab_dirty_state()
+        if hasattr(self, '_update_ui_state'):
+            self._update_ui_state()
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+        if hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(_("measurements_cleared_success"))
+
+    def _update_measurement_controls(self):
+        """Update scale indicator, hint label, and clear button in measurement toolbar."""
+        if not hasattr(self, 'measurement_toolbar_box') or not self.measurement_toolbar_box:
+            return
+        calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
+        if calib:
+            self.measurement_scale_indicator.set_text(calib.format_scale_ratio())
+            self.measurement_scale_indicator.remove_css_class("dim-label")
+            self.measurement_scale_indicator.add_css_class("accent")
+        else:
+            self.measurement_scale_indicator.set_text(_("scale_uncalibrated"))
+            self.measurement_scale_indicator.remove_css_class("accent")
+            self.measurement_scale_indicator.add_css_class("dim-label")
+
+        if self.tool_mode == "measure_distance":
+            self.measurement_hint_lbl.set_text(_("measure_distance_hint"))
+        elif self.tool_mode == "measure_area":
+            self.measurement_hint_lbl.set_text(_("measure_area_hint"))
+        else:
+            self.measurement_hint_lbl.set_text("")
+
+        has_meas = False
+        if self._active_session:
+            has_meas = bool(self._active_session.measurements.get(self.current_page_index, []))
+        self.measurement_clear_btn.set_sensitive(has_meas)
 
     def _update_calibration_controls(self):
         """Update scale label, preset dropdown, and buttons in calibration toolbar."""
@@ -7437,10 +8063,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         # Allow direct resize handle interaction on already selected objects regardless of active tool
         selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
-                        getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None))
+                        getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None) or
+                        getattr(self, 'selected_measurement', None))
         if selected_obj:
             resize_handle = self._find_resize_handle_at_pos(start_x, start_y, selected_obj)
             if resize_handle:
+                self.temp_polygon_vertices = []
+                self.last_mouse_page_pos = None
                 self.resize_handle = resize_handle
                 self.resize_start_bbox = selected_obj.bbox
                 self.dragged_object = selected_obj
@@ -7593,6 +8222,31 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.temp_calibration_line = (unrot_px, unrot_py, unrot_px, unrot_py)
             self.pdf_view.queue_draw()
             return
+        elif self.tool_mode in ("measure_distance", "measure_area"):
+            clicked_m = self._find_measurement_at_pos(page_x, page_y)
+            if clicked_m:
+                self.selected_measurement = clicked_m
+                self.temp_polygon_vertices = []
+                self.temp_measurement_line = None
+                self.temp_measurement_rect = None
+                self.last_mouse_page_pos = None
+                self.dragged_object = clicked_m
+                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+                self.drag_start_pos = (start_x, start_y)
+                self.drag_begin_state = copy.deepcopy(clicked_m.__dict__)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+                return
+
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (unrot_px, unrot_py)
+            if self.tool_mode == "measure_distance":
+                self.temp_measurement_line = (unrot_px, unrot_py, unrot_px, unrot_py)
+            else:
+                self.temp_measurement_rect = (unrot_px, unrot_py, unrot_px, unrot_py)
+            self.pdf_view.queue_draw()
+            return
 
         if self.tool_mode == "drag":
             self._close_active_form_field_editor()
@@ -7600,7 +8254,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                    self._find_text_at_pos(page_x, page_y) or 
                                    self._find_shape_at_pos(page_x, page_y) or 
                                    self._find_stroke_at_pos(page_x, page_y) or
-                                   self._find_form_field_at_pos(page_x, page_y))
+                                   self._find_form_field_at_pos(page_x, page_y) or
+                                   self._find_measurement_at_pos(page_x, page_y))
             if not self.dragged_object:
                 gesture.set_state(Gtk.EventSequenceState.DENIED)
                 return
@@ -7730,6 +8385,47 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.temp_calibration_line = (start_x, start_y, current_x, current_y)
                 self.pdf_view.queue_draw()
                 return
+            if getattr(self, 'temp_measurement_line', None) is not None:
+                start_x, start_y = self.drag_start_page_pos
+                current_x = start_x + delta_x
+                current_y = start_y + delta_y
+
+                shift_pressed = False
+                try:
+                    state = gesture.get_current_event_state()
+                    shift_pressed = bool(state & Gdk.ModifierType.SHIFT_MASK)
+                except Exception:
+                    pass
+
+                if shift_pressed and (abs(delta_x) > 2 or abs(delta_y) > 2):
+                    angle = math.atan2(delta_y, delta_x)
+                    snap_angle = round(angle / (math.pi / 4)) * (math.pi / 4)
+                    dist = math.hypot(delta_x, delta_y)
+                    current_x = start_x + dist * math.cos(snap_angle)
+                    current_y = start_y + dist * math.sin(snap_angle)
+
+                self.temp_measurement_line = (start_x, start_y, current_x, current_y)
+                if abs(delta_x) >= 3.0 or abs(delta_y) >= 3.0:
+                    self.temp_polygon_vertices = []
+                    self.last_mouse_page_pos = None
+                self.pdf_view.queue_draw()
+                return
+            if getattr(self, 'temp_measurement_rect', None) is not None:
+                if abs(delta_x) >= 3.0 or abs(delta_y) >= 3.0:
+                    self.temp_polygon_vertices = []
+                    self.last_mouse_page_pos = None
+                start_x, start_y = self.drag_start_page_pos
+                current_x = start_x + delta_x
+                current_y = start_y + delta_y
+
+                x1 = min(start_x, current_x)
+                y1 = min(start_y, current_y)
+                x2 = max(start_x, current_x)
+                y2 = max(start_y, current_y)
+
+                self.temp_measurement_rect = (x1, y1, x2, y2)
+                self.pdf_view.queue_draw()
+                return
             return
         
         if not self.dragged_object:
@@ -7796,6 +8492,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_shape = None
             self.selected_image = None
             self.selected_text = None
+
+        elif isinstance(self.dragged_object, MeasurementObject):
+            self.dragged_object.set_position(new_x, new_y)
+            self.selected_measurement = self.dragged_object
+            self.selected_text = None
+            self.selected_image = None
+            self.selected_shape = None
+            self.selected_stroke = None
+            self.selected_form_field = None
 
         self.pdf_view.queue_draw()
 
@@ -8051,6 +8756,46 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         status_text += f" | {active_calib.format_distance(measured_len)}"
                     if hasattr(self, 'status_label') and self.status_label:
                         self.status_label.set_text(status_text)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+            elif getattr(self, 'temp_measurement_line', None) is not None:
+                line = self.temp_measurement_line
+                self.temp_measurement_line = None
+                self.temp_polygon_vertices = []
+                self.last_mouse_page_pos = None
+                sx, sy, ex, ey = line
+                measured_len = math.hypot(ex - sx, ey - sy)
+                if measured_len >= 5.0:
+                    meas = MeasurementObject(
+                        measurement_type=MeasurementObject.TYPE_DISTANCE,
+                        points=[(sx, sy), (ex, ey)],
+                        page_number=self.current_page_index
+                    )
+                    cmd = AddMeasurementCommand(self, meas)
+                    cmd.execute()
+                    self.undo_manager.add_command(cmd)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+            elif getattr(self, 'temp_measurement_rect', None) is not None:
+                rect = self.temp_measurement_rect
+                self.temp_measurement_rect = None
+                self.temp_polygon_vertices = []
+                self.last_mouse_page_pos = None
+                x1, y1, x2, y2 = rect
+                w = abs(x2 - x1)
+                h = abs(y2 - y1)
+                if w >= 5.0 and h >= 5.0:
+                    min_x, max_x = min(x1, x2), max(x1, x2)
+                    min_y, max_y = min(y1, y2), max(y1, y2)
+                    vertices = [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]
+                    meas = MeasurementObject(
+                        measurement_type=MeasurementObject.TYPE_AREA,
+                        points=vertices,
+                        page_number=self.current_page_index
+                    )
+                    cmd = AddMeasurementCommand(self, meas)
+                    cmd.execute()
+                    self.undo_manager.add_command(cmd)
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
             return
@@ -8490,6 +9235,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not self.doc:
             return
         
+        if getattr(self, 'temp_polygon_vertices', None):
+            self.temp_polygon_vertices = []
+            self.last_mouse_page_pos = None
+            self.pdf_view.queue_draw()
+            return
+        
         drawing_area_width = self.pdf_view.get_allocated_width()
         drawing_area_height = self.pdf_view.get_allocated_height()
         page_offset_x = max(0, (drawing_area_width - self.current_pdf_page_width) / 2)
@@ -8547,6 +9298,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         clicked_text = self._find_text_at_pos(page_x, page_y)
         clicked_shape = self._find_shape_at_pos(page_x, page_y)
         clicked_image = self._find_image_at_pos(page_x, page_y)
+        clicked_measurement = self._find_measurement_at_pos(page_x, page_y)
         
         popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         popover_box.set_margin_start(6); popover_box.set_margin_end(6)
@@ -8683,6 +9435,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del.connect("clicked", on_delete_image)
             popover_box.append(btn_del)
             
+        elif clicked_measurement:
+            self.selected_measurement = clicked_measurement
+            self.selected_text = None
+            self.selected_shape = None
+            self.selected_image = None
+            
+            btn_del = Gtk.Button(label=_("delete_confirm"))
+            btn_del.add_css_class("destructive-action")
+            def on_delete_meas(b):
+                if hasattr(self, 'context_popover') and self.context_popover:
+                    self.context_popover.popdown()
+                self._handle_delete_with_confirmation(clicked_measurement, "delete_shape_confirm")
+            btn_del.connect("clicked", on_delete_meas)
+            popover_box.append(btn_del)
+
         else:
             popover_box_empty = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             popover_box_empty.set_margin_start(6); popover_box_empty.set_margin_end(6)
@@ -9182,6 +9949,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             fname = getattr(obj, 'field_name', '') or 'field'
             confirm_text = _("delete_form_field_confirm").format(fname)
             confirm_title = _("delete_confirm_title")
+        elif isinstance(obj, MeasurementObject):
+            confirm_text = _("delete_shape_confirm")
+            confirm_title = _("delete_confirm_title")
         else:
             return
 
@@ -9197,6 +9967,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_confirm_delete_menu_state(False)
             
         if confirmed:
+            if isinstance(obj, MeasurementObject):
+                self.selected_measurement = None
+                command = DeleteMeasurementCommand(self, obj)
+                command.execute()
+                self.undo_manager.add_command(command)
+                self.document_modified = True
+                self._update_tab_dirty_state()
+                self._update_ui_state()
+                self.pdf_view.queue_draw()
+                self.status_label.set_text(_("object_deleted"))
+                return
             if isinstance(obj, AcroFormField):
                 if getattr(self, '_active_editing_form_field', None) == obj:
                     self._close_active_form_field_editor()
@@ -9218,6 +9999,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_image = None
             self.selected_shape = None
             self.selected_stroke = None
+            self.selected_measurement = None
             self._update_ui_state()
             self.pdf_view.queue_draw()
             self.status_label.set_text(_("object_deleted"))

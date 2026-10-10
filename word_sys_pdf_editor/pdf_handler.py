@@ -32,7 +32,8 @@ gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf, Gdk, Pango, PangoCairo
 from .models import (
     EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape, EditableStroke,
-    AcroFormField, decompose_font_name, extract_font_properties, get_base14_font_variant
+    AcroFormField, decompose_font_name, extract_font_properties, get_base14_font_variant,
+    MeasurementObject
 )
 from .utils import find_specific_font_variant, get_default_unicode_font_path, normalize_color
 from .i18n import _
@@ -2069,6 +2070,127 @@ def ensure_form_widgets_have_appearance(doc) -> int:
     return updated_count
 
 
+def draw_measurement_to_cairo(cr, measurement, scale_calib=None, zoom_level=1.0):
+    """Draw a MeasurementObject (distance line or area polygon) to Cairo context."""
+    if not measurement or not hasattr(measurement, 'measurement_type'):
+        return
+    cr.save()
+    if measurement.measurement_type == MeasurementObject.TYPE_DISTANCE and len(measurement.points) >= 2:
+        p0, p1 = measurement.points[0], measurement.points[1]
+        sx, sy = p0
+        ex, ey = p1
+        pt_len = math.hypot(ex - sx, ey - sy)
+        if pt_len > 0.0:
+            cr.set_source_rgba(measurement.color[0], measurement.color[1], measurement.color[2], 0.95)
+            cr.set_line_width(measurement.stroke_width / zoom_level)
+
+            # Main dimension line
+            cr.move_to(sx, sy)
+            cr.line_to(ex, ey)
+            cr.stroke()
+
+            # Perpendicular ticks
+            theta = math.atan2(ey - sy, ex - sx)
+            perp = theta + math.pi / 2.0
+            tick_h = 7.0 / zoom_level
+            dx_p = tick_h * math.cos(perp)
+            dy_p = tick_h * math.sin(perp)
+
+            cr.move_to(sx - dx_p, sy - dy_p)
+            cr.line_to(sx + dx_p, sy + dy_p)
+            cr.stroke()
+
+            cr.move_to(ex - dx_p, ey - dy_p)
+            cr.line_to(ex + dx_p, ey + dy_p)
+            cr.stroke()
+
+            # Vertex circles
+            rad = 3.0 / zoom_level
+            cr.arc(sx, sy, rad, 0, 2 * math.pi)
+            cr.stroke()
+            cr.arc(ex, ey, rad, 0, 2 * math.pi)
+            cr.stroke()
+
+            # Midpoint readout badge
+            mx = (sx + ex) / 2.0
+            my = (sy + ey) / 2.0
+            badge_str = getattr(measurement, 'label', None) or measurement.format_measurement(scale_calib)
+
+            cr.set_font_size(max(10.0 / zoom_level, 9.0))
+            ext = cr.text_extents(badge_str)
+            pad_x = 6.0 / zoom_level
+            pad_y = 3.0 / zoom_level
+            bw = ext.width + pad_x * 2.0
+            bh = ext.height + pad_y * 2.0
+            bx = mx - bw / 2.0
+            by = my - bh / 2.0 - (12.0 / zoom_level)
+
+            cr.set_source_rgba(0.12, 0.15, 0.20, 0.88)
+            cr.rectangle(bx, by, bw, bh)
+            cr.fill()
+
+            cr.set_source_rgba(measurement.color[0], measurement.color[1], measurement.color[2], 0.95)
+            cr.set_line_width(1.0 / zoom_level)
+            cr.rectangle(bx, by, bw, bh)
+            cr.stroke()
+
+            cr.set_source_rgb(1.0, 1.0, 1.0)
+            cr.move_to(bx + pad_x - ext.x_bearing, by + pad_y - ext.y_bearing)
+            cr.show_text(badge_str)
+
+    elif measurement.measurement_type == MeasurementObject.TYPE_AREA and len(measurement.points) >= 3:
+        cr.move_to(measurement.points[0][0], measurement.points[0][1])
+        for p in measurement.points[1:]:
+            cr.line_to(p[0], p[1])
+        cr.close_path()
+
+        # Fill
+        cr.set_source_rgba(measurement.fill_color[0], measurement.fill_color[1], measurement.fill_color[2], measurement.fill_color[3])
+        cr.fill_preserve()
+
+        # Border
+        cr.set_source_rgba(measurement.color[0], measurement.color[1], measurement.color[2], 0.95)
+        cr.set_line_width(measurement.stroke_width / zoom_level)
+        cr.stroke()
+
+        # Vertex markers
+        rad = 3.0 / zoom_level
+        for p in measurement.points:
+            cr.arc(p[0], p[1], rad, 0, 2 * math.pi)
+            cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+            cr.fill_preserve()
+            cr.set_source_rgba(measurement.color[0], measurement.color[1], measurement.color[2], 1.0)
+            cr.stroke()
+
+        # Centroid readout badge
+        cx, cy = measurement.get_centroid()
+        badge_str = getattr(measurement, 'label', None) or measurement.format_measurement(scale_calib)
+
+        cr.set_font_size(max(10.0 / zoom_level, 9.0))
+        ext = cr.text_extents(badge_str)
+        pad_x = 6.0 / zoom_level
+        pad_y = 3.0 / zoom_level
+        bw = ext.width + pad_x * 2.0
+        bh = ext.height + pad_y * 2.0
+        bx = cx - bw / 2.0
+        by = cy - bh / 2.0
+
+        cr.set_source_rgba(0.12, 0.15, 0.20, 0.88)
+        cr.rectangle(bx, by, bw, bh)
+        cr.fill()
+
+        cr.set_source_rgba(measurement.color[0], measurement.color[1], measurement.color[2], 0.95)
+        cr.set_line_width(1.0 / zoom_level)
+        cr.rectangle(bx, by, bw, bh)
+        cr.stroke()
+
+        cr.set_source_rgb(1.0, 1.0, 1.0)
+        cr.move_to(bx + pad_x - ext.x_bearing, by + pad_y - ext.y_bearing)
+        cr.show_text(badge_str)
+
+    cr.restore()
+
+
 def add_form_widget(
     target: Any,
     *args,
@@ -2712,10 +2834,47 @@ def _apply_single_object_to_page(doc, page, obj):
                 stroke_opacity=getattr(obj, 'opacity', 1.0)
             )
             shape.commit()
+    elif isinstance(obj, MeasurementObject):
+        shape = page.new_shape()
+        color = tuple(float(c) for c in obj.color[:3])
+        if obj.measurement_type == MeasurementObject.TYPE_DISTANCE and len(obj.points) >= 2:
+            p0 = fitz.Point(obj.points[0][0], obj.points[0][1])
+            p1 = fitz.Point(obj.points[1][0], obj.points[1][1])
+            shape.draw_line(p0, p1)
+            theta = math.atan2(p1.y - p0.y, p1.x - p0.x)
+            perp = theta + math.pi / 2.0
+            dx_p = 7.0 * math.cos(perp)
+            dy_p = 7.0 * math.sin(perp)
+            shape.draw_line(fitz.Point(p0.x - dx_p, p0.y - dy_p), fitz.Point(p0.x + dx_p, p0.y + dy_p))
+            shape.draw_line(fitz.Point(p1.x - dx_p, p1.y - dy_p), fitz.Point(p1.x + dx_p, p1.y + dy_p))
+            shape.finish(color=color, width=obj.stroke_width)
+            shape.commit()
+
+            label_text = getattr(obj, 'label', None) or f"{math.hypot(p1.x - p0.x, p1.y - p0.y):.1f} pt"
+            mx = (p0.x + p1.x) / 2.0
+            my = (p0.y + p1.y) / 2.0
+            try:
+                page.insert_text(fitz.Point(mx, my - 6.0), label_text, fontsize=9.0, color=(0, 0, 0))
+            except Exception:
+                pass
+        elif obj.measurement_type == MeasurementObject.TYPE_AREA and len(obj.points) >= 3:
+            pts = [fitz.Point(p[0], p[1]) for p in obj.points]
+            shape.draw_polyline(pts + [pts[0]])
+            fill_c = tuple(float(c) for c in obj.fill_color[:3])
+            fill_op = float(obj.fill_color[3]) if len(obj.fill_color) > 3 else 0.2
+            shape.finish(color=color, fill=fill_c, fill_opacity=fill_op, width=obj.stroke_width)
+            shape.commit()
+
+            label_text = getattr(obj, 'label', None) or f"{obj.compute_raw_value():.1f} pt²"
+            cx, cy = obj.get_centroid()
+            try:
+                page.insert_text(fitz.Point(cx, cy), label_text, fontsize=9.0, color=(0, 0, 0))
+            except Exception:
+                pass
     return True, None
 
 def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
-                 exclude_obj=None, all_strokes=None):
+                 exclude_obj=None, all_strokes=None, all_measurements=None):
     """Re-render page from snapshot applying all active editable objects."""
     if not restore_page_from_snapshot(doc, page_num):
         print(f"Warning: no snapshot for page {page_num}, skipping restore")
@@ -2738,6 +2897,10 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
                 if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
                     if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
                         _apply_single_object_to_page(doc, page, obj)
+        if all_measurements:
+            for obj in all_measurements:
+                if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                    _apply_single_object_to_page(doc, page, obj)
         invalidate_page_cache(doc, page_num)
         return True, None
     except Exception as e:
@@ -3208,5 +3371,38 @@ def extract_scale_calibration(doc) -> Optional[dict]:
                 raw = raw[1:-1]
             return json.loads(raw)
     except Exception as e:
+        pass
+    return None
+
+
+def embed_measurements(doc, measurements_data: list) -> bool:
+    """Store distance and area measurement objects metadata in the PDF catalog dictionary."""
+    if not doc:
+        return False
+    try:
+        import json
+        cat = doc.pdf_catalog()
+        serialized = json.dumps(measurements_data)
+        doc.xref_set_key(cat, "WordSysMeasurements", f"({serialized})")
+        return True
+    except Exception as e:
+        print(f"Warning: failed to embed measurements in PDF catalog: {e}")
+        return False
+
+
+def extract_measurements(doc) -> Optional[list]:
+    """Retrieve embedded distance and area measurements from the PDF catalog dictionary."""
+    if not doc:
+        return None
+    try:
+        import json
+        cat = doc.pdf_catalog()
+        kind, val = doc.xref_get_key(cat, "WordSysMeasurements")
+        if val:
+            raw = val.strip()
+            if raw.startswith("(") and raw.endswith(")"):
+                raw = raw[1:-1]
+            return json.loads(raw)
+    except Exception:
         pass
     return None

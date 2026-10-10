@@ -9,7 +9,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk
 from . import pdf_handler
-from .models import EditableText, EditableShape, EditableStroke, EditableImage, AcroFormField
+from .models import EditableText, EditableShape, EditableStroke, EditableImage, AcroFormField, MeasurementObject
 from .i18n import _
 
 def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=None):
@@ -331,6 +331,9 @@ class EditObjectCommand(Command):
         if page_num is not None:
             self._erase_ghost_if_needed(page_num, properties_to_clear)
             
+        if isinstance(self.target_object, MeasurementObject):
+            return True
+
         strokes = getattr(self.window, 'editable_strokes', [])
         if isinstance(self.target_object, EditableStroke):
             temp_obj = copy.deepcopy(self.target_object)
@@ -1040,3 +1043,29 @@ class CalibrateScaleCommand(Command):
             page_index=self.page_index,
             entire_document=self.entire_document
         )
+
+
+class AddMeasurementCommand(Command):
+    """Command to add a linear distance or area measurement."""
+    def __init__(self, window, measurement):
+        super().__init__(window)
+        self.measurement = measurement
+
+    def execute(self):
+        self.window._add_measurement_to_session(self.measurement)
+
+    def undo(self):
+        self.window._remove_measurement_from_session(self.measurement)
+
+
+class DeleteMeasurementCommand(Command):
+    """Command to delete a linear distance or area measurement."""
+    def __init__(self, window, measurement):
+        super().__init__(window)
+        self.measurement = measurement
+
+    def execute(self):
+        self.window._remove_measurement_from_session(self.measurement)
+
+    def undo(self):
+        self.window._add_measurement_to_session(self.measurement)
