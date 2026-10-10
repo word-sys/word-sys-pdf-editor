@@ -1,6 +1,6 @@
 import copy
 from typing import Optional, List, Dict, Tuple, Any
-from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand, EditFormFieldCommand, AddFormFieldCommand, DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand, ReplaceImageCommand
+from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand, EditFormFieldCommand, AddFormFieldCommand, DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand, ReplaceImageCommand, CalibrateScaleCommand
 from .i18n import _, get_language, get_setting, set_setting
 
 import gi
@@ -23,7 +23,7 @@ from . import constants
 from . import pdf_handler
 from . import print_handler
 from .welcome_view import WelcomeView
-from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke, DocumentSession, AcroFormField
+from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke, DocumentSession, AcroFormField, ScaleCalibration, PRESET_SCALES
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_confirm_dialog,
     show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog,
@@ -110,6 +110,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.form_builder_options_box = None
         self.form_builder_options_entry = None
         self.form_builder_edit_options_btn = None
+        self.calibrate_tool_button = None
+        self.temp_calibration_line = None
+        self.calibration_toolbar_box = None
+        self.calibration_scale_label = None
+        self.calibration_preset_dropdown = None
+        self.calibrate_dialog_btn = None
+        self.calibrate_reset_btn = None
         self._updating_form_builder_ui = False
         self._active_editing_form_field = None
         self.current_pdf_page_width = 0
@@ -959,6 +966,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self._active_session:
             self._active_session.word_selection_mode = val
 
+    @property
+    def scale_calibration(self):
+        """Active document scale calibration."""
+        return self._active_session.scale_calibration if self._active_session else None
+
+    @scale_calibration.setter
+    def scale_calibration(self, val):
+        if self._active_session:
+            self._active_session.scale_calibration = val
+
     def _build_ui(self):
         """Build UI."""
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -1187,6 +1204,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.form_builder_tool_button = _make_tool_btn("edit-select-all-symbolic", _("tool_form_builder"), _("tool_form_builder_tip"), "form_builder")
         tools_grid.attach(self.form_builder_tool_button, 0, 5, 2, 1)
+
+        self.calibrate_tool_button = _make_tool_btn("applications-engineering-symbolic", _("tool_calibrate"), _("tool_calibrate_tip"), "calibrate")
+        tools_grid.attach(self.calibrate_tool_button, 0, 6, 2, 1)
         
         sidebar_box.append(tools_grid)
 
@@ -1537,6 +1557,40 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.toolbar_row2.append(self.form_builder_toolbar_box)
         self.form_builder_toolbar_box.set_visible(False)
 
+        self.calibration_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
+        self.toolbar_row2.append(self.calibration_toolbar_sep)
+        self.calibration_toolbar_sep.set_visible(False)
+
+        self.calibration_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        calib_lbl = Gtk.Label(label=_("calibration_toolbar_label"))
+        calib_lbl.add_css_class("heading")
+        self.calibration_toolbar_box.append(calib_lbl)
+
+        self.calibration_scale_label = Gtk.Label(label=_("scale_uncalibrated"))
+        self.calibration_scale_label.add_css_class("dim-label")
+        self.calibration_toolbar_box.append(self.calibration_scale_label)
+
+        preset_strings = [_("scale_preset_custom")] + list(PRESET_SCALES.keys())
+        self.calibration_preset_dropdown = Gtk.DropDown.new_from_strings(preset_strings)
+        self.calibration_preset_dropdown.connect("notify::selected", self.on_calibration_preset_changed)
+        self.calibration_toolbar_box.append(self.calibration_preset_dropdown)
+
+        self.calibrate_dialog_btn = Gtk.Button(label=_("btn_calibrate"))
+        self.calibrate_dialog_btn.connect("clicked", self.on_calibrate_dialog_clicked)
+        self.calibration_toolbar_box.append(self.calibrate_dialog_btn)
+
+        self.calibrate_reset_btn = Gtk.Button(label=_("btn_reset_scale"))
+        self.calibrate_reset_btn.add_css_class("flat")
+        self.calibrate_reset_btn.connect("clicked", self.on_calibration_reset_clicked)
+        self.calibration_toolbar_box.append(self.calibrate_reset_btn)
+
+        calib_hint_lbl = Gtk.Label(label=_("tool_calibrate_tip"))
+        calib_hint_lbl.add_css_class("dim-label")
+        self.calibration_toolbar_box.append(calib_hint_lbl)
+
+        self.toolbar_row2.append(self.calibration_toolbar_box)
+        self.calibration_toolbar_box.set_visible(False)
+
         self.view_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
         self.toolbar_row1.append(self.view_toolbar_sep)
         self.view_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -1747,7 +1801,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          self.pen_tool_button, self.highlighter_tool_button,
                          getattr(self, 'checkmark_tool_button', None),
                          getattr(self, 'cross_tool_button', None),
-                         getattr(self, 'form_builder_tool_button', None)]
+                         getattr(self, 'form_builder_tool_button', None),
+                         getattr(self, 'calibrate_tool_button', None)]
         for btn in sidebar_tools:
             if btn:
                 btn.set_sensitive(in_edit and has_doc)
@@ -1776,9 +1831,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         shape_controls_active = in_edit and (shape_selected or self.tool_mode in ("add_ellipse", "add_rectangle", "add_checkmark", "add_cross"))
         stroke_controls_active = in_edit and (stroke_selected or self.tool_mode in ("pen", "highlighter"))
         form_builder_active = in_edit and (self.tool_mode == "form_builder")
+        calibrate_active = in_edit and (self.tool_mode == "calibrate")
         view_text_selected = self.view_mode and (getattr(self, 'view_sel_rect', None) is not None or getattr(self, 'selected_word', None) is not None)
         format_enabled_base = in_edit and ((text_selected or self.tool_mode == "add_text") and
-                               self.selected_image is None and not shape_selected and not stroke_selected and not form_builder_active)
+                               self.selected_image is None and not shape_selected and not stroke_selected and not form_builder_active and not calibrate_active)
 
         if hasattr(self, 'toolbar_row2'):
             self.toolbar_row2.set_visible(in_edit and has_doc)
@@ -1798,8 +1854,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, '_update_form_field_overlay_interactivity'):
                 self._update_form_field_overlay_interactivity()
 
+        if hasattr(self, 'calibration_toolbar_box'):
+            self.calibration_toolbar_box.set_visible(calibrate_active)
+            self.calibration_toolbar_sep.set_visible(calibrate_active)
+            if calibrate_active:
+                self._update_calibration_controls()
+
         if hasattr(self, 'text_format_box'):
-            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active and not form_builder_active and self.selected_image is None)
+            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active and not form_builder_active and not calibrate_active and self.selected_image is None)
             self.text_format_sep.set_visible(False)
 
         self.font_combo.set_sensitive(format_enabled_base and not self.font_scan_in_progress)
@@ -2099,6 +2161,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.color_button.set_sensitive(False)
         self.select_tool_button.set_sensitive(False)
         self.add_text_tool_button.set_sensitive(False)
+        if getattr(self, 'calibrate_tool_button', None):
+            self.calibrate_tool_button.set_sensitive(False)
         if not any(s.doc is not None for s in self.sessions):
             if hasattr(self, 'stack') and self.stack:
                 self.stack.set_visible_child_name("welcome")
@@ -2117,6 +2181,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.open_button.set_sensitive(True)
             self.select_tool_button.set_sensitive(True)
             self.add_text_tool_button.set_sensitive(True)
+            if getattr(self, 'calibrate_tool_button', None):
+                self.calibrate_tool_button.set_sensitive(True)
             self._update_ui_state()
             return
         elif doc and sess:
@@ -2128,6 +2194,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             sess.is_modified = False
             sess.current_page_index = target_page
             self._update_tab_title(sess)
+
+            calib_data = pdf_handler.extract_scale_calibration(doc)
+            if calib_data:
+                try:
+                    sess.scale_calibration = ScaleCalibration.from_dict(calib_data)
+                except Exception as e:
+                    print(f"Warning restoring scale calibration: {e}")
 
             if getattr(sess, 'is_repaired_file', False):
                 print(_("dbg_repaired_while_opening"))
@@ -2142,6 +2215,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.open_button.set_sensitive(True)
         self.select_tool_button.set_sensitive(True)
         self.add_text_tool_button.set_sensitive(True)
+        if getattr(self, 'calibrate_tool_button', None):
+            self.calibrate_tool_button.set_sensitive(True)
         self._update_ui_state()
 
     def _load_thumbnails(self, session=None):
@@ -2395,6 +2470,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._apply_and_hide_editor(force_apply=True)
         if hasattr(self, '_commit_pending_form_field_edit'):
             self._commit_pending_form_field_edit()
+
+        if self._active_session and getattr(self._active_session, 'scale_calibration', None):
+            pdf_handler.embed_scale_calibration(self.doc, self._active_session.scale_calibration.to_dict())
 
         success, error_msg = pdf_handler.save_document(self.doc, save_path, incremental=False)
         self.is_saving = False
@@ -3143,6 +3221,86 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     cr.set_line_width(1.0 / self.zoom_level)
                     cr.stroke()
             cr.restore()
+
+        # Draw active scale calibration reference line or saved reference line
+        calib_line = getattr(self, 'temp_calibration_line', None)
+        active_calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
+        is_calib_tool = getattr(self, 'tool_mode', None) == "calibrate"
+        
+        if calib_line or (is_calib_tool and active_calib and active_calib.reference_line):
+            line_to_draw = calib_line or active_calib.reference_line
+            sx, sy, ex, ey = line_to_draw
+            pt_len = math.hypot(ex - sx, ey - sy)
+            if pt_len > 1.0:
+                cr.save()
+                is_temp = (calib_line is not None)
+                if is_temp:
+                    cr.set_source_rgba(0.0, 0.65, 0.95, 0.95)
+                    cr.set_line_width(2.0 / self.zoom_level)
+                else:
+                    cr.set_source_rgba(0.0, 0.50, 0.85, 0.70)
+                    cr.set_line_width(1.5 / self.zoom_level)
+                    cr.set_dash([4.0 / self.zoom_level, 3.0 / self.zoom_level])
+
+                # Main reference line
+                cr.move_to(sx, sy)
+                cr.line_to(ex, ey)
+                cr.stroke()
+                cr.set_dash([])
+
+                # Perpendicular end ticks
+                theta = math.atan2(ey - sy, ex - sx)
+                perp = theta + math.pi / 2.0
+                tick_h = 7.0 / self.zoom_level
+                dx_p = tick_h * math.cos(perp)
+                dy_p = tick_h * math.sin(perp)
+
+                cr.move_to(sx - dx_p, sy - dy_p)
+                cr.line_to(sx + dx_p, sy + dy_p)
+                cr.stroke()
+
+                cr.move_to(ex - dx_p, ey - dy_p)
+                cr.line_to(ex + dx_p, ey + dy_p)
+                cr.stroke()
+
+                # Endpoint crosshair circles
+                rad = 3.0 / self.zoom_level
+                cr.arc(sx, sy, rad, 0, 2 * math.pi)
+                cr.stroke()
+                cr.arc(ex, ey, rad, 0, 2 * math.pi)
+                cr.stroke()
+
+                # Midpoint readout pill badge
+                mx = (sx + ex) / 2.0
+                my = (sy + ey) / 2.0
+                badge_str = f"{pt_len:.1f} pt"
+                if active_calib and active_calib.points_per_unit > 0:
+                    badge_str += f" ({active_calib.format_distance(pt_len)})"
+
+                cr.set_font_size(max(10.0 / self.zoom_level, 9.0))
+                ext = cr.text_extents(badge_str)
+                pad_x = 6.0 / self.zoom_level
+                pad_y = 3.0 / self.zoom_level
+                bw = ext.width + pad_x * 2.0
+                bh = ext.height + pad_y * 2.0
+                bx = mx - bw / 2.0
+                by = my - bh / 2.0 - (12.0 / self.zoom_level)
+
+                # Background pill
+                cr.set_source_rgba(0.12, 0.15, 0.20, 0.88)
+                cr.rectangle(bx, by, bw, bh)
+                cr.fill()
+
+                cr.set_source_rgba(0.0, 0.70, 1.0, 0.95)
+                cr.set_line_width(1.0 / self.zoom_level)
+                cr.rectangle(bx, by, bw, bh)
+                cr.stroke()
+
+                # Text
+                cr.set_source_rgb(1.0, 1.0, 1.0)
+                cr.move_to(bx + pad_x - ext.x_bearing, by + pad_y - ext.y_bearing)
+                cr.show_text(badge_str)
+                cr.restore()
 
         cr.restore()
 
@@ -5725,7 +5883,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
         elif self.tool_mode == "select":
             self.pdf_view.set_cursor(None)
-        elif self.tool_mode in ("add_text", "add_ellipse", "add_rectangle", "add_checkmark", "add_cross", "pen", "highlighter", "form_builder"):
+        elif self.tool_mode in ("add_text", "add_ellipse", "add_rectangle", "add_checkmark", "add_cross", "pen", "highlighter", "form_builder", "calibrate"):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
         elif self.tool_mode == "add_image":
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("cell"))
@@ -6999,9 +7157,257 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.tool_mode = tool_name
         print(_("dbg_tool_changed", self.tool_mode))
+        self.temp_calibration_line = None
         self._update_ui_state()
         if self.tool_mode in ("pen", "highlighter"):
             self._update_stroke_format_controls(None)
+        elif self.tool_mode == "calibrate":
+            self._update_calibration_controls()
+
+    def get_scale_calibration(self, page_index: Optional[int] = None) -> Optional[ScaleCalibration]:
+        """Return the active scale calibration for the specified page or whole document."""
+        if not self._active_session:
+            return None
+        idx = page_index if page_index is not None else self.current_page_index
+        page_calib = self._active_session.scale_calibrations.get(idx)
+        if page_calib:
+            return page_calib
+        return self._active_session.scale_calibration
+
+    def set_scale_calibration(self, calibration: Optional[ScaleCalibration],
+                              page_index: Optional[int] = None, entire_document: bool = True):
+        """Set or update scale calibration recording an undoable action in the history stack."""
+        if not self._active_session:
+            return
+        old_calib = self.get_scale_calibration(page_index)
+        cmd = CalibrateScaleCommand(self, old_calib, calibration, page_index=page_index, entire_document=entire_document)
+        cmd.execute()
+        self.undo_manager.add_command(cmd)
+
+    def _apply_scale_calibration_state(self, calibration: Optional[ScaleCalibration],
+                                       page_index: Optional[int] = None, entire_document: bool = True):
+        """Apply scale calibration directly to the active session and synchronize UI components."""
+        if not self._active_session:
+            return
+        idx = page_index if page_index is not None else self.current_page_index
+        if entire_document:
+            self._active_session.scale_calibration = calibration
+            self._active_session.scale_calibrations.clear()
+        else:
+            if calibration is not None:
+                self._active_session.scale_calibrations[idx] = calibration
+            else:
+                self._active_session.scale_calibrations.pop(idx, None)
+
+        self.document_modified = True
+        self._update_calibration_controls()
+        if hasattr(self, 'status_label') and self.status_label:
+            if calibration:
+                self.status_label.set_text(_("scale_applied_success", calibration.unit, calibration.points_per_unit))
+            else:
+                self.status_label.set_text(_("scale_reset_success"))
+        self.pdf_view.queue_draw()
+
+    def _update_calibration_controls(self):
+        """Update scale label, preset dropdown, and buttons in calibration toolbar."""
+        if not hasattr(self, 'calibration_toolbar_box') or not self.calibration_toolbar_box:
+            return
+        calib = self.get_scale_calibration(self.current_page_index)
+        if calib:
+            summary = calib.format_scale_ratio()
+            self.calibration_scale_label.set_text(summary)
+            self.calibration_scale_label.remove_css_class("dim-label")
+            self.calibration_scale_label.add_css_class("accent")
+            self.calibrate_reset_btn.set_sensitive(True)
+        else:
+            self.calibration_scale_label.set_text(_("scale_uncalibrated"))
+            self.calibration_scale_label.remove_css_class("accent")
+            self.calibration_scale_label.add_css_class("dim-label")
+            self.calibrate_reset_btn.set_sensitive(False)
+
+    def on_calibration_preset_changed(self, dropdown, param):
+        """Apply selected preset scale from dropdown."""
+        sel_idx = dropdown.get_selected()
+        if sel_idx == 0:
+            return  # Custom / Reference Line item
+        preset_keys = list(PRESET_SCALES.keys())
+        if 1 <= sel_idx <= len(preset_keys):
+            key = preset_keys[sel_idx - 1]
+            try:
+                new_calib = ScaleCalibration.from_preset(key)
+                self.set_scale_calibration(new_calib, page_index=self.current_page_index, entire_document=True)
+            except Exception as e:
+                print(f"Error applying preset scale {key}: {e}")
+
+    def on_calibration_reset_clicked(self, button=None):
+        """Reset active scale calibration."""
+        if hasattr(self, 'calibration_preset_dropdown') and self.calibration_preset_dropdown:
+            self.calibration_preset_dropdown.set_selected(0)
+        self.set_scale_calibration(None, page_index=self.current_page_index, entire_document=True)
+
+    def on_calibrate_dialog_clicked(self, button=None):
+        """Open calibration dialog using default or current reference dimensions."""
+        calib = self.get_scale_calibration(self.current_page_index)
+        pt_len = calib.points_len if (calib and calib.points_len > 0) else 100.0
+        ref_line = calib.reference_line if calib else None
+        self.show_scale_calibration_dialog(pt_len, reference_line=ref_line)
+
+    def show_scale_calibration_dialog(self, measured_points: float, reference_line=None):
+        """Display popover dialog allowing user to set known real-world distance and unit."""
+        if not self.doc:
+            return
+
+        dialog = Gtk.Popover(autohide=True, has_arrow=True)
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        content_box.set_margin_start(16)
+        content_box.set_margin_end(16)
+        content_box.set_margin_top(16)
+        content_box.set_margin_bottom(16)
+
+        title_lbl = Gtk.Label(label=_("dialog_calibrate_title"))
+        title_lbl.add_css_class("title-4")
+        title_lbl.set_halign(Gtk.Align.START)
+        content_box.append(title_lbl)
+
+        desc_lbl = Gtk.Label(label=_("dialog_calibrate_desc"))
+        desc_lbl.add_css_class("dim-label")
+        desc_lbl.set_halign(Gtk.Align.START)
+        content_box.append(desc_lbl)
+
+        # Measured points display
+        meas_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        meas_lbl = Gtk.Label(label=_("label_reference_length"))
+        meas_lbl.set_halign(Gtk.Align.START)
+        meas_box.append(meas_lbl)
+
+        mm_len = (measured_points * 25.4) / 72.0
+        meas_val_lbl = Gtk.Label(label=f"{measured_points:.2f} pt ({mm_len:.1f} mm)")
+        meas_val_lbl.add_css_class("heading")
+        meas_box.append(meas_val_lbl)
+        content_box.append(meas_box)
+
+        # Input grid: Known Distance and Unit
+        grid = Gtk.Grid(column_spacing=8, row_spacing=8)
+
+        dist_lbl = Gtk.Label(label=_("label_known_distance"))
+        dist_lbl.set_halign(Gtk.Align.START)
+        grid.attach(dist_lbl, 0, 0, 1, 1)
+
+        # Initial distance and unit from existing calibration if any
+        current_calib = self.get_scale_calibration(self.current_page_index)
+        init_dist = current_calib.known_distance if current_calib else 5.0
+        init_unit = current_calib.unit if current_calib else "m"
+
+        dist_spin = Gtk.SpinButton.new_with_range(0.001, 1000000.0, 0.5)
+        dist_spin.set_digits(2)
+        dist_spin.set_value(init_dist)
+        dist_spin.set_hexpand(True)
+        grid.attach(dist_spin, 1, 0, 1, 1)
+
+        unit_lbl = Gtk.Label(label=_("label_unit"))
+        unit_lbl.set_halign(Gtk.Align.START)
+        grid.attach(unit_lbl, 0, 1, 1, 1)
+
+        unit_keys = ["m", "cm", "mm", "ft", "in", "yd"]
+        unit_names = [
+            _("unit_meter"), _("unit_centimeter"), _("unit_millimeter"),
+            _("unit_foot"), _("unit_inch"), _("unit_yard")
+        ]
+        unit_dropdown = Gtk.DropDown.new_from_strings(unit_names)
+        if init_unit in unit_keys:
+            unit_dropdown.set_selected(unit_keys.index(init_unit))
+        else:
+            unit_dropdown.set_selected(0)
+        grid.attach(unit_dropdown, 1, 1, 1, 1)
+
+        content_box.append(grid)
+
+        # Scope options: Entire Document vs Current Page
+        scope_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        doc_radio = Gtk.CheckButton(label=_("opt_entire_document"))
+        doc_radio.set_active(True)
+        page_radio = Gtk.CheckButton(label=_("opt_current_page"))
+        page_radio.set_group(doc_radio)
+        scope_box.append(doc_radio)
+        scope_box.append(page_radio)
+        content_box.append(scope_box)
+
+        # Live preview label
+        preview_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        prev_title = Gtk.Label(label=_("label_calculated_scale"))
+        prev_title.set_halign(Gtk.Align.START)
+        preview_box.append(prev_title)
+
+        prev_val_lbl = Gtk.Label(label="")
+        prev_val_lbl.add_css_class("accent")
+        preview_box.append(prev_val_lbl)
+        content_box.append(preview_box)
+
+        def update_preview(*a):
+            dist = max(dist_spin.get_value(), 1e-9)
+            u_idx = unit_dropdown.get_selected()
+            u_key = unit_keys[u_idx] if 0 <= u_idx < len(unit_keys) else "m"
+            ppu = measured_points / dist
+            prev_val_lbl.set_text(f"1 {u_key} = {ppu:.2f} pt")
+
+        dist_spin.connect("value-changed", update_preview)
+        unit_dropdown.connect("notify::selected", update_preview)
+        update_preview()
+
+        # Action Buttons
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_box.set_halign(Gtk.Align.END)
+
+        def on_cancel(b):
+            dialog.popdown()
+            self.temp_calibration_line = None
+            self.pdf_view.queue_draw()
+
+        def on_apply(b):
+            dist = max(dist_spin.get_value(), 1e-9)
+            u_idx = unit_dropdown.get_selected()
+            u_key = unit_keys[u_idx] if 0 <= u_idx < len(unit_keys) else "m"
+            entire_doc = doc_radio.get_active()
+
+            rl = reference_line
+            if rl:
+                new_calib = ScaleCalibration.from_reference_line(
+                    rl[0], rl[1], rl[2], rl[3],
+                    known_distance=dist, unit=u_key,
+                    page_index=(None if entire_doc else self.current_page_index)
+                )
+            else:
+                ppu = measured_points / dist
+                new_calib = ScaleCalibration(
+                    points_per_unit=ppu,
+                    unit=u_key,
+                    known_distance=dist,
+                    points_len=measured_points,
+                    reference_line=reference_line,
+                    page_index=(None if entire_doc else self.current_page_index)
+                )
+
+            dialog.popdown()
+            self.temp_calibration_line = None
+            self.set_scale_calibration(new_calib, page_index=self.current_page_index, entire_document=entire_doc)
+            if hasattr(self, 'calibration_preset_dropdown') and self.calibration_preset_dropdown:
+                self.calibration_preset_dropdown.set_selected(0)
+
+        cancel_btn = Gtk.Button(label=_("btn_cancel"))
+        cancel_btn.connect("clicked", on_cancel)
+        btn_box.append(cancel_btn)
+
+        apply_btn = Gtk.Button(label=_("btn_apply"))
+        apply_btn.add_css_class("suggested-action")
+        apply_btn.connect("clicked", on_apply)
+        btn_box.append(apply_btn)
+
+        content_box.append(btn_box)
+        dialog.set_child(content_box)
+
+        anchor = getattr(self, 'calibrate_dialog_btn', self.pdf_view)
+        dialog.set_parent(anchor)
+        dialog.popup()
 
     def on_drag_begin(self, gesture, start_x, start_y):
         """Initiate canvas drag gesture for selection, movement, resizing, or freehand drawing."""
@@ -7175,6 +7581,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._update_form_builder_controls_for_selected()
             self.pdf_view.queue_draw()
             return
+        elif self.tool_mode == "calibrate":
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (unrot_px, unrot_py)
+            self.temp_calibration_line = (unrot_px, unrot_py, unrot_px, unrot_py)
+            self.pdf_view.queue_draw()
+            return
 
         if self.tool_mode == "drag":
             self._close_active_form_field_editor()
@@ -7288,6 +7701,28 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 y2 = max(start_y, current_y)
                 
                 self.temp_form_field_rect = (x1, y1, x2, y2)
+                self.pdf_view.queue_draw()
+                return
+            if getattr(self, 'temp_calibration_line', None) is not None:
+                start_x, start_y = self.drag_start_page_pos
+                current_x = start_x + delta_x
+                current_y = start_y + delta_y
+
+                shift_pressed = False
+                try:
+                    state = gesture.get_current_event_state()
+                    shift_pressed = bool(state & Gdk.ModifierType.SHIFT_MASK)
+                except Exception:
+                    pass
+
+                if shift_pressed and (abs(delta_x) > 2 or abs(delta_y) > 2):
+                    angle = math.atan2(delta_y, delta_x)
+                    snap_angle = round(angle / (math.pi / 4)) * (math.pi / 4)
+                    dist = math.hypot(delta_x, delta_y)
+                    current_x = start_x + dist * math.cos(snap_angle)
+                    current_y = start_y + dist * math.sin(snap_angle)
+
+                self.temp_calibration_line = (start_x, start_y, current_x, current_y)
                 self.pdf_view.queue_draw()
                 return
             return
@@ -7595,6 +8030,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
                 rect = (x1, y1, x2, y2)
                 self._create_new_form_field(rect)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+            elif getattr(self, 'temp_calibration_line', None) is not None:
+                line = self.temp_calibration_line
+                sx, sy, ex, ey = line
+                measured_len = math.hypot(ex - sx, ey - sy)
+                if measured_len >= 5.0:
+                    self.show_scale_calibration_dialog(measured_len, reference_line=line)
+                else:
+                    self.temp_calibration_line = None
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
             return

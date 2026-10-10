@@ -1016,3 +1016,27 @@ class EditFormFieldChoicesCommand(Command):
             self.window.pdf_view.queue_draw()
         if hasattr(self.window, '_update_ui_state'):
             self.window._update_ui_state()
+
+
+class CalibrateScaleCommand(Command):
+    """Command to apply, update, or reset drawing scale calibration."""
+    def __init__(self, window, old_calibration, new_calibration, page_index=None, entire_document=True):
+        super().__init__(window)
+        self.old_calibration = old_calibration
+        self.new_calibration = new_calibration
+        self.page_index = page_index
+        self.entire_document = entire_document
+
+    def execute(self):
+        self.window._apply_scale_calibration_state(
+            self.new_calibration,
+            page_index=self.page_index,
+            entire_document=self.entire_document
+        )
+
+    def undo(self):
+        self.window._apply_scale_calibration_state(
+            self.old_calibration,
+            page_index=self.page_index,
+            entire_document=self.entire_document
+        )

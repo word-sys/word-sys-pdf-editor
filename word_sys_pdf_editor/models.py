@@ -687,6 +687,159 @@ class AcroFormField:
         }
 
 
+# Precision Drawing Units & Scales
+POINTS_PER_INCH = 72.0
+POINTS_PER_MM = 72.0 / 25.4
+POINTS_PER_CM = 720.0 / 25.4
+POINTS_PER_M = 72000.0 / 25.4
+POINTS_PER_FT = 72.0 * 12.0
+POINTS_PER_YD = 72.0 * 36.0
+
+UNIT_FACTORS_TO_POINTS = {
+    "m": POINTS_PER_M,
+    "cm": POINTS_PER_CM,
+    "mm": POINTS_PER_MM,
+    "in": POINTS_PER_INCH,
+    "ft": POINTS_PER_FT,
+    "yd": POINTS_PER_YD,
+}
+
+PRESET_SCALES = {
+    "1:1": {"name": "1:1", "ratio": 1.0, "unit": "m"},
+    "1:10": {"name": "1:10", "ratio": 10.0, "unit": "m"},
+    "1:20": {"name": "1:20", "ratio": 20.0, "unit": "m"},
+    "1:50": {"name": "1:50", "ratio": 50.0, "unit": "m"},
+    "1:100": {"name": "1:100", "ratio": 100.0, "unit": "m"},
+    "1:200": {"name": "1:200", "ratio": 200.0, "unit": "m"},
+    "1:500": {"name": "1:500", "ratio": 500.0, "unit": "m"},
+    "1:1000": {"name": "1:1000", "ratio": 1000.0, "unit": "m"},
+    '1/8" = 1\'-0"': {"name": '1/8" = 1\'-0"', "ratio": 96.0, "unit": "ft"},
+    '1/4" = 1\'-0"': {"name": '1/4" = 1\'-0"', "ratio": 48.0, "unit": "ft"},
+    '1/2" = 1\'-0"': {"name": '1/2" = 1\'-0"', "ratio": 24.0, "unit": "ft"},
+    '1" = 1\'-0"': {"name": '1" = 1\'-0"', "ratio": 12.0, "unit": "ft"},
+    '1" = 10\'': {"name": '1" = 10\'', "ratio": 120.0, "unit": "ft"},
+    '1" = 20\'': {"name": '1" = 20\'', "ratio": 240.0, "unit": "ft"},
+}
+
+
+@dataclass
+class ScaleCalibration:
+    """Document scale calibration for architectural, engineering, and precision drawings.
+
+    Attributes:
+        points_per_unit: Number of PDF points per real-world unit (e.g. 28.35 points per meter).
+        unit: Measurement unit string ('m', 'cm', 'mm', 'ft', 'in', 'yd').
+        known_distance: Real-world reference length used for calibration.
+        points_len: Measured length in PDF points of the reference line.
+        reference_line: Optional (x1, y1, x2, y2) coordinates of reference line in PDF page space.
+        preset_name: Optional preset identifier (e.g. '1:100', '1/4" = 1\'-0"').
+        page_index: Page index if page-specific, or None for document-wide.
+    """
+    points_per_unit: float
+    unit: str = "m"
+    known_distance: float = 1.0
+    points_len: float = 0.0
+    reference_line: Optional[Tuple[float, float, float, float]] = None
+    preset_name: Optional[str] = None
+    page_index: Optional[int] = None
+
+    @property
+    def units_per_point(self) -> float:
+        """Return the reciprocal factor: real-world units per PDF point."""
+        return (1.0 / self.points_per_unit) if self.points_per_unit > 0 else 1.0
+
+    def distance_in_units(self, points: float) -> float:
+        """Convert a distance in PDF points to calibrated real-world units."""
+        return (points / self.points_per_unit) if self.points_per_unit > 0 else points
+
+    def points_from_distance(self, distance: float) -> float:
+        """Convert a real-world distance into PDF points."""
+        return distance * self.points_per_unit
+
+    def area_in_units(self, points_sq: float) -> float:
+        """Convert an area in square points to square real-world units."""
+        factor = self.points_per_unit ** 2
+        return (points_sq / factor) if factor > 0 else points_sq
+
+    def format_distance(self, points: float, precision: int = 2) -> str:
+        """Return human-readable distance with unit suffix."""
+        val = self.distance_in_units(points)
+        return f"{val:.{precision}f} {self.unit}"
+
+    def format_area(self, points_sq: float, precision: int = 2) -> str:
+        """Return human-readable area with unit squared suffix."""
+        val = self.area_in_units(points_sq)
+        return f"{val:.{precision}f} {self.unit}\u00b2"
+
+    def format_scale_ratio(self) -> str:
+        """Return summary of the scale ratio."""
+        if self.preset_name:
+            return f"{self.preset_name} (1 {self.unit} = {self.points_per_unit:.2f} pt)"
+        return f"1 {self.unit} = {self.points_per_unit:.2f} pt"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize calibration state to dictionary."""
+        return {
+            "points_per_unit": float(self.points_per_unit),
+            "unit": self.unit,
+            "known_distance": float(self.known_distance),
+            "points_len": float(self.points_len),
+            "reference_line": list(self.reference_line) if self.reference_line else None,
+            "preset_name": self.preset_name,
+            "page_index": self.page_index,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ScaleCalibration":
+        """Deserialize calibration state from dictionary."""
+        ref_line = tuple(data["reference_line"]) if data.get("reference_line") else None
+        return cls(
+            points_per_unit=float(data["points_per_unit"]),
+            unit=data.get("unit", "m"),
+            known_distance=float(data.get("known_distance", 1.0)),
+            points_len=float(data.get("points_len", 0.0)),
+            reference_line=ref_line,
+            preset_name=data.get("preset_name"),
+            page_index=data.get("page_index"),
+        )
+
+    @classmethod
+    def from_reference_line(cls, x1: float, y1: float, x2: float, y2: float,
+                            known_distance: float, unit: str = "m",
+                            page_index: Optional[int] = None) -> "ScaleCalibration":
+        """Compute calibration from reference line coordinates and known real-world distance."""
+        dist_pt = math.hypot(x2 - x1, y2 - y1)
+        safe_dist = max(float(known_distance), 1e-9)
+        ppu = dist_pt / safe_dist
+        return cls(
+            points_per_unit=ppu,
+            unit=unit,
+            known_distance=safe_dist,
+            points_len=dist_pt,
+            reference_line=(x1, y1, x2, y2),
+            page_index=page_index,
+        )
+
+    @classmethod
+    def from_preset(cls, preset_key: str, page_index: Optional[int] = None) -> "ScaleCalibration":
+        """Generate calibration from standard preset scale name."""
+        preset = PRESET_SCALES.get(preset_key)
+        if not preset:
+            raise ValueError(f"Unknown preset scale: {preset_key}")
+        unit = preset["unit"]
+        ratio = preset["ratio"]
+        base_ppu = UNIT_FACTORS_TO_POINTS.get(unit, POINTS_PER_M)
+        ppu = base_ppu / ratio
+        return cls(
+            points_per_unit=ppu,
+            unit=unit,
+            known_distance=1.0,
+            points_len=ppu,
+            preset_name=preset_key,
+            page_index=page_index,
+        )
+
+
 class PdfPage(GObject.GObject):
     """GObject model for PDF page index and thumbnail in sidebar list."""
     __gtype_name__ = 'PdfPage'
@@ -752,6 +905,10 @@ class DocumentSession:
     # Page render caches
     page_cache: Dict[int, Any] = field(default_factory=dict)
 
+    # Scale calibration
+    scale_calibration: Optional[ScaleCalibration] = None
+    scale_calibrations: Dict[int, ScaleCalibration] = field(default_factory=dict)
+
     # Tab integration
     tab_page: Any = None
     bin_widget: Any = None
@@ -814,6 +971,8 @@ class DocumentSession:
         self.selected_shape = None
         self.selected_stroke = None
         self.selected_form_field = None
+        self.scale_calibration = None
+        self.scale_calibrations.clear()
         self.scroll_x = 0.0
         self.scroll_y = 0.0
 

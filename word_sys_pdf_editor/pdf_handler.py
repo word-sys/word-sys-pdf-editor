@@ -3177,3 +3177,36 @@ def export_merged_pdf(pages: list, output_path: str, primary_metadata_doc=None) 
                 os.remove(temp_path)
             except Exception:
                 pass
+
+
+def embed_scale_calibration(doc, calibration_dict: dict) -> bool:
+    """Store scale calibration metadata in the PDF catalog dictionary."""
+    if not doc:
+        return False
+    try:
+        import json
+        cat = doc.pdf_catalog()
+        serialized = json.dumps(calibration_dict)
+        doc.xref_set_key(cat, "WordSysScaleCalibration", f"({serialized})")
+        return True
+    except Exception as e:
+        print(f"Warning: failed to embed scale calibration in PDF catalog: {e}")
+        return False
+
+
+def extract_scale_calibration(doc) -> Optional[dict]:
+    """Retrieve embedded scale calibration metadata from the PDF catalog dictionary."""
+    if not doc:
+        return None
+    try:
+        import json
+        cat = doc.pdf_catalog()
+        kind, val = doc.xref_get_key(cat, "WordSysScaleCalibration")
+        if val:
+            raw = val.strip()
+            if raw.startswith("(") and raw.endswith(")"):
+                raw = raw[1:-1]
+            return json.loads(raw)
+    except Exception as e:
+        pass
+    return None
