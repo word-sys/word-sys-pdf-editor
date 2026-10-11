@@ -30,6 +30,7 @@ from .ui_components import (
     SymbolsPopover, render_emoji_to_png_bytes, show_new_document_dialog
 )
 from .quick_guide_dialog import QuickGuideDialog
+from .annotations_sidebar import AnnotationsSidebar, AnnotationListItem
 from . import utils
 from .utils import point_to_segment_distance, point_in_polygon
 
@@ -312,6 +313,45 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             }
             .acroform-dropdown:focus {
                 border: 2px solid @accent_color;
+            }
+            .annotations-sidebar {
+                background-color: @theme_bg_color;
+                border-left: 1px solid @borders;
+            }
+            .annotations-header {
+                border-bottom: 1px solid @borders;
+            }
+            .annotation-row {
+                border-radius: 6px;
+                padding: 4px;
+                transition: background-color 150ms ease;
+            }
+            .annotation-row:hover {
+                background-color: alpha(@accent_color, 0.08);
+            }
+            .annotation-row:selected, .annotation-row:active {
+                background-color: alpha(@accent_color, 0.18);
+            }
+            .annotation-title {
+                font-weight: 600;
+                font-size: 13px;
+            }
+            .annotation-subtitle {
+                font-size: 11px;
+            }
+            .annotation-badge {
+                font-size: 11px;
+                padding: 2px 6px;
+                border-radius: 10px;
+                background-color: alpha(@theme_fg_color, 0.08);
+            }
+            .annotation-count-pill {
+                font-size: 11px;
+                padding: 2px 7px;
+                border-radius: 10px;
+                background-color: alpha(@accent_color, 0.15);
+                color: @accent_color;
+                font-weight: bold;
             }
         """)
         Gtk.StyleContext.add_provider_for_display(
@@ -1030,6 +1070,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu_button = Gtk.MenuButton(icon_name="open-menu-symbolic")
         header.pack_end(menu_button)
 
+        self.toggle_annotations_button = Gtk.ToggleButton(icon_name="sidebar-show-right-symbolic")
+        self.toggle_annotations_button.set_tooltip_text(_("toggle_annotations_sidebar_tip"))
+        self.toggle_annotations_button.connect("toggled", lambda b: self.toggle_annotations_sidebar(b.get_active()))
+        header.pack_end(self.toggle_annotations_button)
+
         self.home_button = Gtk.Button.new_from_icon_name("go-home-symbolic")
         self.home_button.set_tooltip_text(_("home_button_tip"))
         self.home_button.connect("clicked", lambda w: self.go_to_welcome())
@@ -1061,6 +1106,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu.append_submenu(_("menu_export"), export_menu)
         
         pref_section = Gio.Menu()
+        pref_section.append(_("menu_toggle_annotations"), "win.toggle_annotations")
         pref_section.append(_("menu_confirm_delete"), "win.confirm_delete")
         menu.append_section(None, pref_section)
 
@@ -1135,7 +1181,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         content_box.append(self.pdf_scroll)
 
-        self.paned.set_end_child(content_box)
+        self.main_content_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL, wide_handle=True, vexpand=True, shrink_end_child=False)
+        self.main_content_paned.set_start_child(content_box)
+
+        self.annotations_sidebar = AnnotationsSidebar(editor_window=self)
+        self.annotations_sidebar.set_visible(False)
+        self.main_content_paned.set_end_child(self.annotations_sidebar)
+        self.main_content_paned.set_position(950)
+
+        self.paned.set_end_child(self.main_content_paned)
         self.paned.set_position(200)
 
         self.stack.add_named(self.tab_view, "editor")
@@ -1798,6 +1852,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_prev_tab.connect('activate', self.on_prev_tab)
         self.add_action(action_prev_tab)
 
+        action_toggle_annots = Gio.SimpleAction.new('toggle_annotations', None)
+        action_toggle_annots.connect('activate', lambda a, p: self.toggle_annotations_sidebar())
+        self.add_action(action_toggle_annots)
+
         app = self.get_application()
         if app:
             app.set_accels_for_action("win.new", ["<Control>n"])
@@ -1812,6 +1870,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             app.set_accels_for_action("win.redo", ["<Control>y", "<Control><Shift>z"])
             app.set_accels_for_action("win.print", ["<Control>p"])
             app.set_accels_for_action("win.quick_guide", ["F1"])
+            app.set_accels_for_action("win.toggle_annotations", ["F7"])
             app.set_accels_for_action("win.rotate_page_cw", ["<Control><Shift>r"])
             app.set_accels_for_action("win.rotate_page_ccw", ["<Control><Shift>l"])
 
@@ -2099,6 +2158,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         else:
             self.page_label.set_text(_("page_info_count").format(0, 0))
             self.update_zoom_label()
+
+        selected_obj = (self.selected_text or self.selected_image or self.selected_shape or
+                        getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None) or
+                        getattr(self, 'selected_measurement', None))
+        if hasattr(self, 'annotations_sidebar') and self.annotations_sidebar.get_visible():
+            self.annotations_sidebar.sync_selection(selected_obj)
             self.status_label.set_text(_("status_open_or_drop"))
             self.set_title(constants.APP_NAME)
             self.document_modified = False
@@ -2315,6 +2380,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             self.target_page_after_load = target_page
             self._load_page(target_page)
+            if hasattr(self, 'annotations_sidebar'):
+                self.annotations_sidebar.refresh()
             GLib.idle_add(self._load_thumbnails, sess)
 
         self.open_button.set_sensitive(True)
@@ -3707,6 +3774,33 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.restore()
 
         cr.restore()
+
+        # Highlighted native annotation from Annotations Sidebar
+        if getattr(self, 'highlighted_native_annot', None):
+            ha = self.highlighted_native_annot
+            if ha.get('page') == self.current_page_index and ha.get('bbox'):
+                bx1, by1, bx2, by2 = ha['bbox']
+                v_x1, v_y1 = self._unrotated_to_visual_page_coords(bx1, by1)
+                v_x2, v_y2 = self._unrotated_to_visual_page_coords(bx2, by2)
+                min_vx = min(v_x1, v_x2)
+                max_vx = max(v_x1, v_x2)
+                min_vy = min(v_y1, v_y2)
+                max_vy = max(v_y1, v_y2)
+
+                sel_dx = page_offset_x + min_vx * self.zoom_level
+                sel_dy = page_offset_y + min_vy * self.zoom_level
+                sel_dw = (max_vx - min_vx) * self.zoom_level
+                sel_dh = (max_vy - min_vy) * self.zoom_level
+
+                cr.save()
+                cr.set_source_rgba(0.0, 0.45, 1.0, 0.22)
+                cr.rectangle(sel_dx, sel_dy, sel_dw, sel_dh)
+                cr.fill_preserve()
+                cr.set_source_rgba(0.0, 0.45, 1.0, 0.90)
+                cr.set_line_width(2.0)
+                cr.set_dash([4.0, 3.0])
+                cr.stroke()
+                cr.restore()
 
         if self.view_mode and self.view_sel_rect:
             sx1, sy1, sx2, sy2 = self.view_sel_rect
@@ -7416,6 +7510,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Handle global keyboard shortcuts (undo/redo, delete, zoom, navigation, escape)."""
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
 
+        if keyval == Gdk.KEY_F7:
+            self.toggle_annotations_sidebar()
+            return True
+
         if self.view_mode:
             if keyval == Gdk.KEY_Escape:
                 self.view_sel_rect = None
@@ -10063,3 +10161,131 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             
         except Exception as e:
             print(f"Error creating text from paste: {e}")
+
+    def toggle_annotations_sidebar(self, visible: Optional[bool] = None):
+        """Toggle or explicitly set visibility of the annotations sidebar."""
+        if not hasattr(self, 'annotations_sidebar') or self.annotations_sidebar is None:
+            return
+        new_vis = not self.annotations_sidebar.get_visible() if visible is None else visible
+        self.annotations_sidebar.set_visible(new_vis)
+        if hasattr(self, 'toggle_annotations_button') and self.toggle_annotations_button:
+            if self.toggle_annotations_button.get_active() != new_vis:
+                self.toggle_annotations_button.set_active(new_vis)
+        if new_vis:
+            self.annotations_sidebar.refresh()
+
+    def refresh_annotations_list(self):
+        """Refresh the annotations sidebar list store if it is currently visible."""
+        if hasattr(self, 'annotations_sidebar') and self.annotations_sidebar:
+            if self.annotations_sidebar.get_visible():
+                self.annotations_sidebar.refresh()
+
+    def select_and_scroll_to_annotation(self, item):
+        """Select the target object or annotation and scroll the canvas viewport to center it."""
+        if not item:
+            return
+
+        page_index = item.page_number
+        if self.doc and 0 <= page_index < len(self.doc):
+            if page_index != self.current_page_index:
+                self._load_page(page_index, preserve_scroll=True)
+
+        # Clear canvas selections
+        self.selected_text = None
+        self.selected_image = None
+        self.selected_shape = None
+        if hasattr(self, 'selected_stroke'):
+            self.selected_stroke = None
+        if hasattr(self, 'selected_form_field'):
+            self.selected_form_field = None
+        if hasattr(self, 'selected_measurement'):
+            self.selected_measurement = None
+        self.highlighted_native_annot = None
+
+        target = getattr(item, 'target_obj', None)
+        if target is not None:
+            if isinstance(target, EditableText):
+                self.selected_text = target
+            elif isinstance(target, EditableImage):
+                self.selected_image = target
+            elif isinstance(target, EditableShape):
+                self.selected_shape = target
+            elif isinstance(target, EditableStroke):
+                self.selected_stroke = target
+            elif isinstance(target, AcroFormField):
+                self.selected_form_field = target
+            elif isinstance(target, MeasurementObject):
+                self.selected_measurement = target
+            else:
+                self.highlighted_native_annot = {
+                    'bbox': item.bbox,
+                    'page': page_index,
+                    'type': item.item_type,
+                    'title': item.title,
+                }
+        else:
+            matched = False
+            if item.item_type == "image" and hasattr(self, 'editable_images'):
+                for img in self.editable_images:
+                    ib = getattr(img, 'bbox', None)
+                    if ib and item.bbox and abs(ib[0] - item.bbox[0]) < 2.0 and abs(ib[1] - item.bbox[1]) < 2.0:
+                        self.selected_image = img
+                        matched = True
+                        break
+            if not matched:
+                self.highlighted_native_annot = {
+                    'bbox': item.bbox,
+                    'page': page_index,
+                    'type': item.item_type,
+                    'title': item.title,
+                }
+
+        bbox = getattr(item, 'bbox', None)
+        if bbox and any(c != 0.0 for c in bbox):
+            self.scroll_to_object_rect(page_index, bbox)
+
+        self.pdf_view.queue_draw()
+        self._update_ui_state()
+
+    def scroll_to_object_rect(self, page_index: int, bbox: Tuple[float, float, float, float]):
+        """Scroll the canvas viewport to center the specified object bounding box."""
+        if not self.doc or page_index >= len(self.doc):
+            return
+
+        if page_index != self.current_page_index:
+            self._load_page(page_index, preserve_scroll=True)
+
+        x1, y1, x2, y2 = bbox
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+
+        vis_cx, vis_cy = self._unrotated_to_visual_page_coords(cx, cy)
+
+        da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
+        da_h = max(self.pdf_view.get_allocated_height(), self.current_pdf_page_height)
+        page_offset_x = max(0.0, (da_w - self.current_pdf_page_width) / 2.0)
+        page_offset_y = max(0.0, (da_h - self.current_pdf_page_height) / 2.0)
+
+        target_canvas_x = page_offset_x + vis_cx * self.zoom_level
+        target_canvas_y = page_offset_y + vis_cy * self.zoom_level
+
+        h_adj = self.pdf_scroll.get_hadjustment()
+        v_adj = self.pdf_scroll.get_vadjustment()
+
+        def do_scroll():
+            if h_adj:
+                vp_w = h_adj.get_page_size()
+                if vp_w > 0:
+                    target_h = max(0.0, target_canvas_x - vp_w / 2.0)
+                    max_h = max(0.0, h_adj.get_upper() - vp_w)
+                    h_adj.set_value(min(target_h, max_h))
+
+            if v_adj:
+                vp_h = v_adj.get_page_size()
+                if vp_h > 0:
+                    target_v = max(0.0, target_canvas_y - vp_h / 2.0)
+                    max_v = max(0.0, v_adj.get_upper() - vp_h)
+                    v_adj.set_value(min(target_v, max_v))
+            self.pdf_view.queue_draw()
+
+        GLib.idle_add(do_scroll)

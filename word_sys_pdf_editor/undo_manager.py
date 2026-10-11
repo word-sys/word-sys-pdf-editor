@@ -274,6 +274,8 @@ class UndoManager:
         self.undo_stack.append(command)
         self.redo_stack.clear()
         self._update_ui_callback()
+        if hasattr(self.window, 'refresh_annotations_list'):
+            self.window.refresh_annotations_list()
 
     def can_undo(self) -> bool:
         """Check if an undo action is available."""
@@ -293,6 +295,8 @@ class UndoManager:
         command.undo()
         self.redo_stack.append(command)
         self._update_ui_callback()
+        if hasattr(self.window, 'refresh_annotations_list'):
+            self.window.refresh_annotations_list()
         self.window.pdf_view.queue_draw()
 
     def redo(self):
@@ -305,6 +309,8 @@ class UndoManager:
         command.execute()
         self.undo_stack.append(command)
         self._update_ui_callback()
+        if hasattr(self.window, 'refresh_annotations_list'):
+            self.window.refresh_annotations_list()
         self.window.pdf_view.queue_draw()
 
     def clear(self):
