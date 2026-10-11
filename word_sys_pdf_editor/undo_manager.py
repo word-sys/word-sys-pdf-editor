@@ -9,7 +9,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk
 from . import pdf_handler
-from .models import EditableText, EditableShape, EditableStroke, EditableImage, AcroFormField, MeasurementObject
+from .models import EditableText, EditableShape, EditableStroke, EditableImage, AcroFormField, MeasurementObject, StickyNoteObject
 from .i18n import _
 
 def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=None):
@@ -255,6 +255,10 @@ class Command:
     def undo(self):
         """Undo the command."""
         raise NotImplementedError
+
+    def redo(self):
+        """Redo the command by executing it again."""
+        self.execute()
 
     def _erase_ghost_if_needed(self, target_object, page_num, properties_to_clear=None):
         """Redact original object from snapshot if edited/moved."""
@@ -1075,3 +1079,59 @@ class DeleteMeasurementCommand(Command):
 
     def undo(self):
         self.window._add_measurement_to_session(self.measurement)
+
+
+class AddStickyNoteCommand(Command):
+    """Command to add a sticky note / comment annotation."""
+    def __init__(self, window, note):
+        super().__init__(window)
+        self.note = note
+
+    def execute(self):
+        self.window._add_sticky_note_to_session(self.note)
+
+    def undo(self):
+        self.window._remove_sticky_note_from_session(self.note)
+
+
+class DeleteStickyNoteCommand(Command):
+    """Command to delete a sticky note / comment annotation."""
+    def __init__(self, window, note):
+        super().__init__(window)
+        self.note = note
+
+    def execute(self):
+        self.window._remove_sticky_note_from_session(self.note)
+
+    def undo(self):
+        self.window._add_sticky_note_to_session(self.note)
+
+
+class EditStickyNoteCommand(Command):
+    """Command to modify a sticky note's content, author, color, or icon."""
+    def __init__(self, window, note, old_state: dict, new_state: dict):
+        super().__init__(window)
+        self.note = note
+        self.old_state = dict(old_state)
+        self.new_state = dict(new_state)
+
+    def execute(self):
+        self.window._apply_sticky_note_state(self.note, self.new_state)
+
+    def undo(self):
+        self.window._apply_sticky_note_state(self.note, self.old_state)
+
+
+class MoveStickyNoteCommand(Command):
+    """Command to move a sticky note position."""
+    def __init__(self, window, note, old_pos: tuple, new_pos: tuple):
+        super().__init__(window)
+        self.note = note
+        self.old_pos = tuple(old_pos)
+        self.new_pos = tuple(new_pos)
+
+    def execute(self):
+        self.window._set_sticky_note_pos(self.note, self.new_pos[0], self.new_pos[1])
+
+    def undo(self):
+        self.window._set_sticky_note_pos(self.note, self.old_pos[0], self.old_pos[1])

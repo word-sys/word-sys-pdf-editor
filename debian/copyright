@@ -1,5 +1,5 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: word-sys's PDF Editor
+Upstream-Name: word-sys PDF Editor
 Source: https://github.com/word-sys/word-sys-pdf-editor
 
 Files: *

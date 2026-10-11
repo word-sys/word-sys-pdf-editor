@@ -3,8 +3,12 @@
   <id>org.word_sys.pdfeditor</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <name>word-sys's PDF Editor</name>
+  <name>word-sys PDF Editor</name>
   <summary>Edit text content in PDF files</summary>
+  <branding>
+    <color type="primary" scheme_preference="light">#3584e4</color>
+    <color type="primary" scheme_preference="dark">#1a5fb4</color>
+  </branding>
   <description>
     <p>
       An open-source tool for editing content in PDF files on Linux. Edit text

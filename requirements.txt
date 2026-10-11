@@ -1,0 +1,6 @@
+# Use the following command to regenerate the Python modules
+# flatpak-pip-generator -r requirements.txt --runtime=org.gnome.Sdk//51 --prefer-wheels=numpy,PyMuPDF
+
+numpy
+PyMuPDF
+anyconvert

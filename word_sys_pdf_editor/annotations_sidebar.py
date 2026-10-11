@@ -559,7 +559,30 @@ class AnnotationsSidebar(Gtk.Box):
                         )
                     )
 
-            # 7. Native PDF Page Annotations
+            # 7. Session Sticky Notes & Comments
+            if session and hasattr(session, "sticky_notes"):
+                page_notes = session.sticky_notes.get(p, [])
+                for note in page_notes:
+                    content = (note.content or "").strip()
+                    title = content[:26] + ("…" if len(content) > 26 else "") if content else _("sticky_note")
+                    author_str = note.author or _("author_user")
+                    date_snippet = note.created_at[:10] if getattr(note, 'created_at', None) else ""
+                    sub = f"{author_str} • {date_snippet}".strip(" •")
+                    items.append(
+                        AnnotationListItem(
+                            item_id=f"stickynote_{p}_{note.id}",
+                            item_type="sticky_note",
+                            category=self.CATEGORY_NOTES,
+                            title=title,
+                            subtitle=sub or _("sticky_note"),
+                            page_number=p,
+                            icon_name="dialog-information-symbolic",
+                            target_obj=note,
+                            bbox=note.bbox,
+                        )
+                    )
+
+            # 8. Native PDF Page Annotations
             try:
                 page = doc.load_page(p)
                 annots = page.annots()
@@ -615,6 +638,13 @@ class AnnotationsSidebar(Gtk.Box):
                                 )
                             )
                         elif atype in (0, 1):  # Text / Note
+                            # Avoid duplicate listing if already tracked in session.sticky_notes
+                            if session and hasattr(session, "sticky_notes") and any(
+                                getattr(sn, "native_annot", None) == a or
+                                (abs(sn.x - arect[0]) < 2.0 and abs(sn.y - arect[1]) < 2.0)
+                                for sn in session.sticky_notes.get(p, [])
+                            ):
+                                continue
                             items.append(
                                 AnnotationListItem(
                                     item_id=f"native_{p}_{idx}",

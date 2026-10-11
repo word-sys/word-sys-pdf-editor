@@ -1015,6 +1015,129 @@ class ScaleCalibration:
         )
 
 
+class StickyNoteObject:
+    """Data model representing an interactive PDF Sticky Note / Text Comment annotation."""
+    ICON_COMMENT = "Comment"
+    ICON_NOTE = "Note"
+    ICON_HELP = "Help"
+    ICON_KEY = "Key"
+    ICON_NEW_PARAGRAPH = "NewParagraph"
+
+    COLOR_YELLOW = (1.0, 0.86, 0.24)
+    COLOR_BLUE = (0.25, 0.60, 1.0)
+    COLOR_GREEN = (0.30, 0.82, 0.45)
+    COLOR_PINK = (1.0, 0.42, 0.62)
+    COLOR_PURPLE = (0.68, 0.45, 0.98)
+
+    COLOR_MAP = {
+        "yellow": COLOR_YELLOW,
+        "blue": COLOR_BLUE,
+        "green": COLOR_GREEN,
+        "pink": COLOR_PINK,
+        "purple": COLOR_PURPLE,
+    }
+
+    def __init__(self, page_number: int = 0, x: float = 0.0, y: float = 0.0,
+                 content: str = "", author: str = "",
+                 color: Any = (1.0, 0.86, 0.24),
+                 icon_type: str = "Comment",
+                 created_at: Optional[str] = None,
+                 modified_at: Optional[str] = None,
+                 width: float = 24.0, height: float = 24.0,
+                 is_new: bool = True, note_id: Optional[str] = None,
+                 native_annot: Any = None,
+                 color_hex: Optional[str] = None,
+                 icon_name: Optional[str] = None):
+        import datetime
+        self.id = note_id or str(uuid.uuid4())[:8]
+        self.page_number = int(page_number)
+        self.x = float(x)
+        self.y = float(y)
+        self.width = float(width)
+        self.height = float(height)
+        self.content = str(content or "")
+        self.author = str(author or "")
+        actual_color = color_hex if color_hex else color
+        self.color = normalize_color(actual_color) if actual_color else self.COLOR_YELLOW
+        eff_icon = icon_name if icon_name else icon_type
+        self.icon_type = eff_icon if eff_icon in (self.ICON_COMMENT, self.ICON_NOTE, self.ICON_HELP, self.ICON_KEY, self.ICON_NEW_PARAGRAPH) else self.ICON_COMMENT
+        now_iso = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        self.created_at = created_at or now_iso
+        self.modified_at = modified_at or self.created_at
+        self.is_new = is_new
+        self.selected = False
+        self.modified = is_new
+        self.native_annot = native_annot
+
+    @property
+    def icon_name(self) -> str:
+        return self.icon_type
+
+    @icon_name.setter
+    def icon_name(self, val: str):
+        self.icon_type = val
+
+    @property
+    def rgba_tuple(self) -> Tuple[float, float, float, float]:
+        r, g, b = self.color[:3]
+        return (r, g, b, 1.0)
+
+    @property
+    def color_hex(self) -> str:
+        r, g, b = self.color[:3]
+        return f"#{int(r*255):02X}{int(g*255):02X}{int(b*255):02X}"
+
+    @color_hex.setter
+    def color_hex(self, hex_val: str):
+        self.color = normalize_color(hex_val)
+
+    def contains_point(self, px: float, py: float, padding: float = 4.0) -> bool:
+        """Check if point (px, py) lies within note icon or hit padding."""
+        x0, y0, x1, y1 = self.bbox
+        return (x0 - padding <= px <= x1 + padding) and (y0 - padding <= py <= y1 + padding)
+
+    @property
+    def bbox(self) -> Tuple[float, float, float, float]:
+        """Return (x0, y0, x1, y1) bounding box in PDF points."""
+        return (self.x, self.y, self.x + self.width, self.y + self.height)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize sticky note to dictionary."""
+        return {
+            "id": self.id,
+            "page_number": self.page_number,
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+            "content": self.content,
+            "author": self.author,
+            "color": list(self.color),
+            "icon_type": self.icon_type,
+            "created_at": self.created_at,
+            "modified_at": self.modified_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "StickyNoteObject":
+        """Reconstruct sticky note from serialized dictionary."""
+        return cls(
+            page_number=data.get("page_number", 0),
+            x=data.get("x", 0.0),
+            y=data.get("y", 0.0),
+            content=data.get("content", ""),
+            author=data.get("author", ""),
+            color=tuple(data.get("color", cls.COLOR_YELLOW)),
+            icon_type=data.get("icon_type", cls.ICON_COMMENT),
+            created_at=data.get("created_at"),
+            modified_at=data.get("modified_at"),
+            width=data.get("width", 24.0),
+            height=data.get("height", 24.0),
+            is_new=False,
+            note_id=data.get("id"),
+        )
+
+
 class PdfPage(GObject.GObject):
     """GObject model for PDF page index and thumbnail in sidebar list."""
     __gtype_name__ = 'PdfPage'
@@ -1088,6 +1211,10 @@ class DocumentSession:
     measurements: Dict[int, List[MeasurementObject]] = field(default_factory=dict)
     selected_measurement: Optional[Any] = None
 
+    # Sticky Notes & Comments
+    sticky_notes: Dict[int, List[StickyNoteObject]] = field(default_factory=dict)
+    selected_sticky_note: Optional[Any] = None
+
     # Tab integration
     tab_page: Any = None
     bin_widget: Any = None
@@ -1154,6 +1281,8 @@ class DocumentSession:
         self.scale_calibrations.clear()
         self.measurements.clear()
         self.selected_measurement = None
+        self.sticky_notes.clear()
+        self.selected_sticky_note = None
         self.scroll_x = 0.0
         self.scroll_y = 0.0
 

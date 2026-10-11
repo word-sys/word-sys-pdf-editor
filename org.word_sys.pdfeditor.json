@@ -93,7 +93,8 @@
                 "install -Dm644 io.github.word_sys.word-sys-pdf-editor.metainfo.xml /app/share/metainfo/io.github.word_sys.word-sys-pdf-editor.metainfo.xml",
                 "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/org.word_sys.pdfeditor.svg",
                 "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/io.github.word_sys.word-sys-pdf-editor.svg",
-                "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/f-pv1.svg"
+                "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg /app/share/icons/hicolor/scalable/apps/f-pv1.svg",
+                "install -Dm644 LICENSE /app/share/doc/word-sys-pdf-editor/LICENSE"
             ],
             "sources": [
                 {

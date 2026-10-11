@@ -310,6 +310,25 @@ def normalize_color(color_val):
     if color_val is None:
         return (0.0, 0.0, 0.0)
 
+    if isinstance(color_val, str):
+        c_str = color_val.strip().lstrip("#")
+        if len(c_str) == 6:
+            try:
+                r = int(c_str[0:2], 16) / 255.0
+                g = int(c_str[2:4], 16) / 255.0
+                b = int(c_str[4:6], 16) / 255.0
+                return (r, g, b)
+            except ValueError:
+                pass
+        elif len(c_str) == 3:
+            try:
+                r = int(c_str[0] * 2, 16) / 255.0
+                g = int(c_str[1] * 2, 16) / 255.0
+                b = int(c_str[2] * 2, 16) / 255.0
+                return (r, g, b)
+            except ValueError:
+                pass
+
     if isinstance(color_val, int):
         blue = (color_val & 255) / 255.0
         green = ((color_val >> 8) & 255) / 255.0

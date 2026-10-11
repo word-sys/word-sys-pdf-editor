@@ -2,7 +2,7 @@
 set -e
 
 ARCH="$(uname -m)"
-echo "=== Building word-sys's PDF Editor for architecture: $ARCH ==="
+echo "=== Building word-sys PDF Editor for architecture: $ARCH ==="
 
 case "$ARCH" in
     x86_64|amd64)

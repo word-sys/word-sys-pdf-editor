@@ -33,7 +33,7 @@ from gi.repository import GdkPixbuf, Gdk, Pango, PangoCairo
 from .models import (
     EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape, EditableStroke,
     AcroFormField, decompose_font_name, extract_font_properties, get_base14_font_variant,
-    MeasurementObject
+    MeasurementObject, StickyNoteObject
 )
 from .utils import find_specific_font_variant, get_default_unicode_font_path, normalize_color
 from .i18n import _
@@ -2871,10 +2871,22 @@ def _apply_single_object_to_page(doc, page, obj):
                 page.insert_text(fitz.Point(cx, cy), label_text, fontsize=9.0, color=(0, 0, 0))
             except Exception:
                 pass
+    elif isinstance(obj, StickyNoteObject):
+        annot = page.add_text_annot((obj.x, obj.y), obj.content, icon=obj.icon_type)
+        annot.set_info(
+            title=obj.author,
+            content=obj.content,
+            creationDate=obj.created_at,
+            modDate=obj.modified_at,
+        )
+        annot.set_colors(stroke=obj.color)
+        annot.update()
+        obj.native_annot = annot
     return True, None
 
 def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
-                 exclude_obj=None, all_strokes=None, all_measurements=None):
+                 exclude_obj=None, all_strokes=None, all_measurements=None,
+                 all_sticky_notes=None):
     """Re-render page from snapshot applying all active editable objects."""
     if not restore_page_from_snapshot(doc, page_num):
         print(f"Warning: no snapshot for page {page_num}, skipping restore")
@@ -2899,6 +2911,10 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
                         _apply_single_object_to_page(doc, page, obj)
         if all_measurements:
             for obj in all_measurements:
+                if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                    _apply_single_object_to_page(doc, page, obj)
+        if all_sticky_notes:
+            for obj in all_sticky_notes:
                 if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
                     _apply_single_object_to_page(doc, page, obj)
         invalidate_page_cache(doc, page_num)
@@ -3406,3 +3422,127 @@ def extract_measurements(doc) -> Optional[list]:
     except Exception:
         pass
     return None
+
+
+def extract_sticky_notes(doc) -> Dict[int, List[StickyNoteObject]]:
+    """Extract all text/sticky note annotations from document pages."""
+    notes_by_page = {}
+    if not doc:
+        return notes_by_page
+    for p in range(doc.page_count):
+        try:
+            page = doc.load_page(p)
+            page_notes = []
+            annots = page.annots()
+            if annots:
+                for a in annots:
+                    if a.type[0] in (0, 1):  # Text / Note
+                        info = a.info or {}
+                        colors = a.colors or {}
+                        stroke = colors.get("stroke") or (1.0, 0.86, 0.24)
+                        note = StickyNoteObject(
+                            page_number=p,
+                            x=a.rect.x0,
+                            y=a.rect.y0,
+                            content=info.get("content", ""),
+                            author=info.get("title", ""),
+                            color=tuple(float(c) for c in stroke[:3]),
+                            icon_type=info.get("name", "Comment"),
+                            created_at=info.get("creationDate") or None,
+                            modified_at=info.get("modDate") or None,
+                            width=a.rect.width if a.rect.width > 0 else 24.0,
+                            height=a.rect.height if a.rect.height > 0 else 24.0,
+                            is_new=False,
+                            native_annot=a,
+                        )
+                        page_notes.append(note)
+            if page_notes:
+                notes_by_page[p] = page_notes
+        except Exception as e:
+            print(f"Warning: error extracting sticky notes on page {p}: {e}")
+    return notes_by_page
+
+
+def sync_sticky_notes(doc, sticky_notes_by_page: dict) -> bool:
+    """Synchronize session sticky notes as fitz.PDF_ANNOT_TEXT on document pages."""
+    if not doc:
+        return False
+    try:
+        for p in range(doc.page_count):
+            page = doc.load_page(p)
+            # 1. Remove all existing text/note annotations on this page
+            for a in list(page.annots()):
+                if a.type[0] in (0, 1):
+                    page.delete_annot(a)
+            # 2. Add current session sticky notes for this page
+            session_notes = sticky_notes_by_page.get(p, []) if sticky_notes_by_page else []
+            for note in session_notes:
+                annot = page.add_text_annot((note.x, note.y), note.content, icon=note.icon_type)
+                annot.set_info(
+                    title=note.author,
+                    content=note.content,
+                    creationDate=note.created_at,
+                    modDate=note.modified_at,
+                )
+                annot.set_colors(stroke=note.color)
+                annot.update()
+                note.native_annot = annot
+                note.is_new = False
+                note.modified = False
+        invalidate_page_cache(doc)
+        return True
+    except Exception as e:
+        print(f"Error synchronizing sticky notes to PDF: {e}")
+        return False
+
+
+def add_sticky_note_to_pdf(page, note: StickyNoteObject):
+    """Add a StickyNoteObject as a native text annotation to a page."""
+    annot = page.add_text_annot((note.x, note.y), note.content, icon=note.icon_type)
+    annot.set_info(
+        title=note.author,
+        content=note.content,
+        creationDate=note.created_at,
+        modDate=note.modified_at,
+    )
+    annot.set_colors(stroke=note.color)
+    annot.update()
+    note.native_annot = annot
+    note.is_new = False
+    note.modified = False
+    return annot
+
+
+def get_sticky_notes_from_pdf(page, page_number: int = 0) -> List[StickyNoteObject]:
+    """Extract sticky notes from a single page."""
+    notes = []
+    annots = page.annots()
+    if annots:
+        for a in annots:
+            if a.type[0] in (0, 1):
+                info = a.info or {}
+                colors = a.colors or {}
+                stroke = colors.get("stroke") or (1.0, 0.86, 0.24)
+                note = StickyNoteObject(
+                    page_number=page_number,
+                    x=a.rect.x0,
+                    y=a.rect.y0,
+                    content=info.get("content", ""),
+                    author=info.get("title", ""),
+                    color=tuple(float(c) for c in stroke[:3]),
+                    icon_type=info.get("name", "Comment"),
+                    created_at=info.get("creationDate") or None,
+                    modified_at=info.get("modDate") or None,
+                    width=a.rect.width if a.rect.width > 0 else 24.0,
+                    height=a.rect.height if a.rect.height > 0 else 24.0,
+                    is_new=False,
+                    native_annot=a,
+                )
+                notes.append(note)
+    return notes
+
+
+def apply_sticky_notes_to_pdf(doc, session) -> bool:
+    """Synchronize sticky notes from session to doc."""
+    sticky_dict = getattr(session, 'sticky_notes', {})
+    return sync_sticky_notes(doc, sticky_dict)

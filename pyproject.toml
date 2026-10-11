@@ -30,7 +30,7 @@ Releases = "https://github.com/word-sys/word-sys-pdf-editor/releases"
 packages = ["word_sys_pdf_editor"]
 
 [tool.setuptools.package-data]
-word_sys_pdf_editor = ["img/*", "icons/**", "locales/*.json"]
+word_sys_pdf_editor = ["img/*", "icons/**", "locales/*.json", "LICENSE*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "word_sys_pdf_editor.constants.APP_VERSION"}

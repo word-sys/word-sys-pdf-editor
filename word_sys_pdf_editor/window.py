@@ -1,6 +1,12 @@
 import copy
 from typing import Optional, List, Dict, Tuple, Any
-from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand, EditFormFieldCommand, AddFormFieldCommand, DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand, ReplaceImageCommand, CalibrateScaleCommand, AddMeasurementCommand, DeleteMeasurementCommand
+from .undo_manager import (
+    UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand,
+    RotatePageCommand, RotateObjectCommand, EditFormFieldCommand, AddFormFieldCommand,
+    DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand,
+    ReplaceImageCommand, CalibrateScaleCommand, AddMeasurementCommand, DeleteMeasurementCommand,
+    AddStickyNoteCommand, DeleteStickyNoteCommand, EditStickyNoteCommand, MoveStickyNoteCommand
+)
 from .i18n import _, get_language, get_setting, set_setting
 
 import gi
@@ -23,7 +29,11 @@ from . import constants
 from . import pdf_handler
 from . import print_handler
 from .welcome_view import WelcomeView
-from .models import PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke, DocumentSession, AcroFormField, ScaleCalibration, PRESET_SCALES, MeasurementObject
+from .models import (
+    PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke,
+    DocumentSession, AcroFormField, ScaleCalibration, PRESET_SCALES, MeasurementObject,
+    StickyNoteObject
+)
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_confirm_dialog,
     show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog,
@@ -33,6 +43,188 @@ from .quick_guide_dialog import QuickGuideDialog
 from .annotations_sidebar import AnnotationsSidebar, AnnotationListItem
 from . import utils
 from .utils import point_to_segment_distance, point_in_polygon
+
+
+class StickyNotePopover(Gtk.Popover):
+    """Floating comment and sticky note editor popover."""
+    def __init__(self, editor_window, note, on_close_callback=None):
+        super().__init__(autohide=True, has_arrow=True)
+        self.editor_window = editor_window
+        self.note = note
+        self.on_close_callback = on_close_callback
+        self.set_parent(editor_window.pdf_view)
+
+        # Snapshot for undo tracking
+        self.initial_state = {
+            "content": note.content,
+            "author": note.author,
+            "color": note.color,
+            "icon_type": note.icon_type,
+            "modified_at": note.modified_at,
+        }
+        self.is_committing = False
+
+        self._build_ui()
+        self.connect("closed", self._on_popover_closed)
+
+    def _build_ui(self):
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        main_box.set_margin_top(8)
+        main_box.set_margin_bottom(8)
+        main_box.set_margin_start(8)
+        main_box.set_margin_end(8)
+        main_box.set_size_request(280, -1)
+
+        # 1. Header Row
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
+        icon_options = [
+            ("Comment", _("note_icon_comment")),
+            ("Note", _("note_icon_note")),
+            ("Help", _("note_icon_help")),
+            ("Key", _("note_icon_key")),
+            ("NewParagraph", _("note_icon_paragraph")),
+        ]
+        self.icon_keys = [opt[0] for opt in icon_options]
+        icon_labels = [opt[1] for opt in icon_options]
+
+        self.icon_dropdown = Gtk.DropDown.new_from_strings(icon_labels)
+        current_icon = getattr(self.note, 'icon_type', 'Comment')
+        if current_icon in self.icon_keys:
+            self.icon_dropdown.set_selected(self.icon_keys.index(current_icon))
+        else:
+            self.icon_dropdown.set_selected(0)
+        self.icon_dropdown.connect("notify::selected", self._on_icon_changed)
+        header_box.append(self.icon_dropdown)
+
+        # Color palette chips
+        color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+        colors = [
+            ("yellow", (1.0, 0.86, 0.24)),
+            ("blue", (0.25, 0.60, 1.0)),
+            ("green", (0.30, 0.82, 0.45)),
+            ("pink", (1.0, 0.42, 0.62)),
+            ("purple", (0.68, 0.45, 0.98)),
+        ]
+        for name, rgb in colors:
+            btn = Gtk.Button()
+            btn.add_css_class("flat")
+            provider = Gtk.CssProvider()
+            css = f"button {{ background-color: rgb({int(rgb[0]*255)}, {int(rgb[1]*255)}, {int(rgb[2]*255)}); min-width: 18px; min-height: 18px; border-radius: 9px; border: 1px solid rgba(0,0,0,0.3); padding: 0; margin: 1px; }}"
+            provider.load_from_data(css.encode('utf-8'))
+            btn.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            btn.connect("clicked", lambda b, c=rgb: self._on_color_selected(c))
+            color_box.append(btn)
+        header_box.append(color_box)
+
+        spacer = Gtk.Box(hexpand=True)
+        header_box.append(spacer)
+
+        del_btn = Gtk.Button.new_from_icon_name("user-trash-symbolic")
+        del_btn.add_css_class("flat")
+        del_btn.set_tooltip_text(_("btn_delete_note"))
+        del_btn.connect("clicked", self._on_delete_clicked)
+        header_box.append(del_btn)
+
+        close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
+        close_btn.add_css_class("flat")
+        close_btn.connect("clicked", lambda b: self.popdown())
+        header_box.append(close_btn)
+
+        main_box.append(header_box)
+
+        # 2. Metadata Row
+        meta_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.author_entry = Gtk.Entry()
+        self.author_entry.set_placeholder_text(_("sticky_note_author_placeholder"))
+        self.author_entry.set_text(self.note.author or "")
+        self.author_entry.set_hexpand(True)
+        self.author_entry.connect("changed", self._on_author_changed)
+        meta_box.append(self.author_entry)
+
+        date_str = self.note.created_at[:16] if getattr(self.note, 'created_at', None) else ""
+        self.date_label = Gtk.Label(label=date_str)
+        self.date_label.add_css_class("dim-label")
+        meta_box.append(self.date_label)
+        main_box.append(meta_box)
+
+        # 3. Content Area
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_min_content_height(100)
+        scroller.set_max_content_height(180)
+        scroller.set_propagate_natural_height(True)
+
+        self.text_view = Gtk.TextView()
+        self.text_view.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        self.buffer = self.text_view.get_buffer()
+        self.buffer.set_text(self.note.content or "")
+        self.buffer.connect("changed", self._on_text_changed)
+        scroller.set_child(self.text_view)
+        main_box.append(scroller)
+
+        self.set_child(main_box)
+
+    def _on_icon_changed(self, dropdown, param):
+        idx = dropdown.get_selected()
+        if 0 <= idx < len(self.icon_keys):
+            self.note.icon_type = self.icon_keys[idx]
+            self.note.modified = True
+            if self.editor_window:
+                self.editor_window.document_modified = True
+                self.editor_window.pdf_view.queue_draw()
+
+    def _on_color_selected(self, color_tuple):
+        self.note.color = color_tuple
+        self.note.modified = True
+        if self.editor_window:
+            self.editor_window.document_modified = True
+            self.editor_window.pdf_view.queue_draw()
+
+    def _on_author_changed(self, entry):
+        self.note.author = entry.get_text()
+        self.note.modified = True
+        if self.editor_window:
+            self.editor_window.document_modified = True
+
+    def _on_text_changed(self, text_buffer):
+        start = text_buffer.get_start_iter()
+        end = text_buffer.get_end_iter()
+        new_text = text_buffer.get_text(start, end, True)
+        self.note.content = new_text
+        self.note.modified = True
+        import datetime
+        self.note.modified_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        if self.editor_window:
+            self.editor_window.document_modified = True
+            self.editor_window.pdf_view.queue_draw()
+
+    def _on_delete_clicked(self, btn):
+        self.popdown()
+        if self.editor_window:
+            self.editor_window.delete_sticky_note(self.note)
+
+    def _on_popover_closed(self, popover):
+        if self.is_committing:
+            return
+        self.is_committing = True
+        current_state = {
+            "content": self.note.content,
+            "author": self.note.author,
+            "color": self.note.color,
+            "icon_type": self.note.icon_type,
+            "modified_at": self.note.modified_at,
+        }
+        if current_state != self.initial_state and self.editor_window:
+            from .undo_manager import EditStickyNoteCommand
+            cmd = EditStickyNoteCommand(self.editor_window, self.note, self.initial_state, current_state)
+            if self.editor_window.undo_manager:
+                self.editor_window.undo_manager.record(cmd)
+            if hasattr(self.editor_window, 'annotations_sidebar'):
+                self.editor_window.annotations_sidebar.refresh()
+        if self.on_close_callback:
+            self.on_close_callback()
+
 
 class PdfEditorWindow(Adw.ApplicationWindow):
     """Main application window providing PDF viewing, editing, annotation, and exporting capabilities."""
@@ -131,6 +323,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.measurement_calibrate_btn = None
         self.measurement_hint_lbl = None
         self.measurement_clear_btn = None
+        self.selected_sticky_note = None
+        self.active_sticky_popover = None
+        self.dragged_sticky_note = None
+        self.sticky_note_start_coords = None
+        self.view_tool_mode = None
+        self.view_mode_secondary_toolbar = None
+        self.view_sticky_note_btn = None
         self._updating_form_builder_ui = False
         self._active_editing_form_field = None
         self.current_pdf_page_width = 0
@@ -1730,10 +1929,27 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         self.remove_highlight_button = _make_icon_label_btn("edit-clear-symbolic", _("remove_highlight"), _("remove_highlight_tip"), self.on_remove_highlight_clicked)
         self.view_toolbar_box.append(self.remove_highlight_button)
-        
+
+        self.view_sticky_note_btn = Gtk.ToggleButton()
+        sn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        sn_img = Gtk.Image.new_from_icon_name("dialog-information-symbolic")
+        sn_lbl = Gtk.Label(label=_("tool_sticky_note"))
+        sn_box.append(sn_img)
+        sn_box.append(sn_lbl)
+        self.view_sticky_note_btn.set_child(sn_box)
+        self.view_sticky_note_btn.set_tooltip_text(_("tool_sticky_note_tip"))
+        self.view_sticky_note_btn.add_css_class("tool-button")
+        self.view_sticky_note_btn.connect("toggled", self.on_view_sticky_note_toggled)
+        self.view_toolbar_box.append(self.view_sticky_note_btn)
+
         self.toolbar_row1.append(self.view_toolbar_box)
         self.view_toolbar_box.set_visible(False)
         self.view_toolbar_sep.set_visible(False)
+
+        # View Mode Secondary Toolbar in row 2
+        self.view_mode_secondary_toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.toolbar_row2.append(self.view_mode_secondary_toolbar)
+        self.view_mode_secondary_toolbar.set_visible(False)
 
     def _setup_controllers(self):
         """Setup controllers."""
@@ -1957,7 +2173,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                self.selected_image is None and not shape_selected and not stroke_selected and not form_builder_active and not calibrate_active and not measure_active)
 
         if hasattr(self, 'toolbar_row2'):
-            self.toolbar_row2.set_visible(in_edit and has_doc)
+            self.toolbar_row2.set_visible(has_doc)
+
+        if hasattr(self, 'view_mode_secondary_toolbar') and self.view_mode_secondary_toolbar:
+            self.view_mode_secondary_toolbar.set_visible(self.view_mode and has_doc)
+            if hasattr(self, 'view_sticky_note_btn') and self.view_sticky_note_btn:
+                self.view_sticky_note_btn.set_sensitive(has_doc)
 
         if hasattr(self, 'form_builder_toolbar_box'):
             self.form_builder_toolbar_box.set_visible(form_builder_active)
@@ -2161,7 +2382,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         selected_obj = (self.selected_text or self.selected_image or self.selected_shape or
                         getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None) or
-                        getattr(self, 'selected_measurement', None))
+                        getattr(self, 'selected_measurement', None) or getattr(self, 'selected_sticky_note', None))
         if hasattr(self, 'annotations_sidebar') and self.annotations_sidebar.get_visible():
             self.annotations_sidebar.sync_selection(selected_obj)
             self.status_label.set_text(_("status_open_or_drop"))
@@ -2186,20 +2407,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             except AttributeError:
                 about_dialog.set_license_type(Gtk.License.CUSTOM)
         try:
-            license_path = Path(__file__).resolve().parent.parent / "LICENSE"
-            if not license_path.exists():
-                license_path = Path("/usr/share/common-licenses/GPL-3")
-
-            if license_path.exists():
-                with open(license_path, 'r', encoding='utf-8') as f:
-                    license_text = f.read()
-                about_dialog.set_license(license_text)
-                about_dialog.set_wrap_license(True)
-            else:
-                about_dialog.set_license("GNU General Public License v3.0 or later.\nFull text could not be loaded.")
+            license_text = constants.get_application_license_text()
+            about_dialog.set_license(license_text)
+            about_dialog.set_wrap_license(True)
         except Exception as e:
-            print(f"Error reading LICENSE file: {e}")
-            about_dialog.set_license("Error reading license text.")
+            print(f"Error loading license text: {e}")
+            about_dialog.set_license("GNU General Public License v3.0 or later.")
 
         about_dialog.set_website("https://github.com/word-sys/word-sys-pdf-editor")
         about_dialog.set_website_label(_("about_website_label"))
@@ -2371,6 +2584,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         sess.measurements[m_obj.page_number].append(m_obj)
                     except Exception as e:
                         print(f"Warning restoring measurement: {e}")
+
+            notes_data = pdf_handler.extract_sticky_notes(doc)
+            if notes_data:
+                sess.sticky_notes = notes_data
 
             if getattr(sess, 'is_repaired_file', False):
                 print(_("dbg_repaired_while_opening"))
@@ -2657,6 +2874,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     all_meas_dicts.append(m.to_dict())
             if all_meas_dicts:
                 pdf_handler.embed_measurements(self.doc, all_meas_dicts)
+            pdf_handler.sync_sticky_notes(self.doc, getattr(self._active_session, 'sticky_notes', {}))
 
         success, error_msg = pdf_handler.save_document(self.doc, save_path, incremental=False)
         self.is_saving = False
@@ -3625,6 +3843,92 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     cr.set_source_rgb(1.0, 1.0, 1.0)
                     cr.move_to(bx + pad_x - ext.x_bearing, by + pad_y - ext.y_bearing)
                     cr.show_text(badge_str)
+
+                cr.restore()
+
+        # Draw persistent sticky note & comment annotations
+        if self._active_session:
+            page_notes = self._active_session.sticky_notes.get(self.current_page_index, [])
+            for note in page_notes:
+                is_selected = (getattr(self, 'selected_sticky_note', None) == note)
+                cr.save()
+                nx = note.x
+                ny = note.y
+                nw = getattr(note, 'width', 24.0)
+                nh = getattr(note, 'height', 24.0)
+                nc = getattr(note, 'color', (1.0, 0.86, 0.24))
+
+                # If selected, render glowing halo
+                if is_selected:
+                    cr.set_source_rgba(0.2, 0.55, 0.95, 0.40)
+                    cr.arc(nx + nw / 2.0, ny + nh / 2.0, max(nw, nh) * 0.85, 0, 2 * math.pi)
+                    cr.fill()
+                    cr.set_source_rgba(0.2, 0.55, 0.95, 0.9)
+                    cr.set_line_width(1.8 / self.zoom_level)
+                    cr.set_dash([3.0 / self.zoom_level, 3.0 / self.zoom_level])
+                    cr.arc(nx + nw / 2.0, ny + nh / 2.0, max(nw, nh) * 0.85, 0, 2 * math.pi)
+                    cr.stroke()
+                    cr.set_dash([])
+
+                # Drop shadow
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.22)
+                cr.rectangle(nx + 1.5 / self.zoom_level, ny + 1.5 / self.zoom_level, nw, nh)
+                cr.fill()
+
+                # Main note body with accent color fill
+                cr.set_source_rgb(nc[0], nc[1], nc[2])
+                cr.rectangle(nx, ny, nw, nh)
+                cr.fill_preserve()
+
+                # Dark border
+                cr.set_source_rgba(0.15, 0.15, 0.15, 0.85)
+                cr.set_line_width(1.2 / self.zoom_level)
+                cr.stroke()
+
+                # Folded top-right corner effect
+                fold_s = min(6.0, nw * 0.3)
+                cr.move_to(nx + nw - fold_s, ny)
+                cr.line_to(nx + nw, ny + fold_s)
+                cr.line_to(nx + nw - fold_s, ny + fold_s)
+                cr.close_path()
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.18)
+                cr.fill()
+
+                # Vector icon symbol inside note
+                itype = getattr(note, 'icon_type', 'Comment')
+                cr.set_source_rgba(0.12, 0.12, 0.12, 0.9)
+                cr.set_line_width(1.2 / self.zoom_level)
+
+                if itype == "Help":
+                    cx = nx + nw / 2.0
+                    cy = ny + nh / 2.0
+                    cr.arc(cx, cy - 2.0, 3.0, -math.pi, 0)
+                    cr.stroke()
+                    cr.arc(cx, cy + 4.0, 1.0, 0, 2 * math.pi)
+                    cr.fill()
+                elif itype == "Key":
+                    cx = nx + nw / 2.0
+                    cy = ny + nh / 2.0
+                    cr.arc(cx - 3.0, cy, 3.0, 0, 2 * math.pi)
+                    cr.stroke()
+                    cr.move_to(cx, cy)
+                    cr.line_to(cx + 6.0, cy)
+                    cr.line_to(cx + 6.0, cy + 3.0)
+                    cr.stroke()
+                else:
+                    pad_in = 5.0
+                    l_x = nx + pad_in
+                    l_w = nw - pad_in * 2.0
+                    cy = ny + nh / 2.0
+                    cr.move_to(l_x, cy - 3.0)
+                    cr.line_to(l_x + l_w - fold_s * 0.5, cy - 3.0)
+                    cr.stroke()
+                    cr.move_to(l_x, cy + 1.5)
+                    cr.line_to(l_x + l_w, cy + 1.5)
+                    cr.stroke()
+                    cr.move_to(l_x, cy + 5.5)
+                    cr.line_to(l_x + l_w * 0.65, cy + 5.5)
+                    cr.stroke()
 
                 cr.restore()
 
@@ -6427,6 +6731,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             vis_x = (x - page_offset_x) / self.zoom_level
             vis_y = (y - page_offset_y) / self.zoom_level
             unrot_x, unrot_y = self._visual_to_unrotated_page_coords(vis_x, vis_y)
+
+            if getattr(self, 'view_tool_mode', None) == "add_sticky_note":
+                self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+                self.pdf_view.set_tooltip_text(None)
+                return
+
+            hovered_note = self._find_sticky_note_at_pos(unrot_x, unrot_y) if hasattr(self, '_find_sticky_note_at_pos') else None
+            if hovered_note:
+                self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("pointer"))
+                tip = f"{hovered_note.author or _('author_user')}: {hovered_note.content[:60]}" if hovered_note.content else _("sticky_note")
+                self.pdf_view.set_tooltip_text(tip)
+                return
+
             url = self._get_link_url_at_pos(unrot_x, unrot_y)
             if url:
                 self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("pointer"))
@@ -6844,6 +7161,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if self.view_mode:
             if n_press == 1:
+                if getattr(self, 'view_tool_mode', None) == "add_sticky_note" or (hasattr(self, 'view_sticky_note_btn') and self.view_sticky_note_btn and self.view_sticky_note_btn.get_active()):
+                    if hasattr(self, 'view_sticky_note_btn') and self.view_sticky_note_btn:
+                        self.view_sticky_note_btn.set_active(False)
+                    self.view_tool_mode = None
+                    self._create_sticky_note_at(page_x_unzoomed, page_y_unzoomed)
+                    return
+
+                clicked_note = self._find_sticky_note_at_pos(page_x_unzoomed, page_y_unzoomed) if hasattr(self, '_find_sticky_note_at_pos') else None
+                if clicked_note:
+                    self.selected_sticky_note = clicked_note
+                    self._open_sticky_note_popover(clicked_note)
+                    self.pdf_view.queue_draw()
+                    self._update_ui_state()
+                    return
+
+                self.selected_sticky_note = None
                 url = self._get_link_url_at_pos(page_x_unzoomed, page_y_unzoomed) if hasattr(self, '_get_link_url_at_pos') else None
                 if url:
                     self._open_url(url)
@@ -8151,6 +8484,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         page_y = (start_y - page_offset_y) / self.zoom_level
 
         if self.view_mode:
+            unrot_px, unrot_py = self._visual_to_unrotated_page_coords(page_x, page_y)
+            clicked_note = self._find_sticky_note_at_pos(unrot_px, unrot_py) if hasattr(self, '_find_sticky_note_at_pos') else None
+            if clicked_note:
+                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+                self.dragged_sticky_note = clicked_note
+                self.sticky_note_start_coords = (clicked_note.x, clicked_note.y)
+                self.drag_start_pos = (unrot_px, unrot_py)
+                return
+
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             self.view_drag_active = True
             self.view_sel_start = (page_x, page_y)
@@ -8383,6 +8725,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def on_drag_update(self, gesture, offset_x, offset_y):
         """Update canvas interaction during drag (move/resize objects, text select, or draw strokes)."""
         if self.view_mode:
+            if getattr(self, 'dragged_sticky_note', None) and getattr(self, 'sticky_note_start_coords', None):
+                dx, dy = self._visual_to_unrotated_delta(offset_x / self.zoom_level, offset_y / self.zoom_level)
+                sx, sy = self.sticky_note_start_coords
+                self.dragged_sticky_note.x = max(0, sx + dx)
+                self.dragged_sticky_note.y = max(0, sy + dy)
+                self.pdf_view.queue_draw()
+                return
+
             if self.view_sel_start and self.view_drag_active:
                 sx, sy = self.view_sel_start
                 dx = offset_x / self.zoom_level
@@ -8706,6 +9056,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def on_drag_end(self, gesture, offset_x, offset_y):
         """Finalize canvas drag interaction, committing created or modified objects to undo history."""
         if self.view_mode:
+            if getattr(self, 'dragged_sticky_note', None):
+                note = self.dragged_sticky_note
+                start_coords = self.sticky_note_start_coords
+                self.dragged_sticky_note = None
+                self.sticky_note_start_coords = None
+                if start_coords and (note.x != start_coords[0] or note.y != start_coords[1]):
+                    command = MoveStickyNoteCommand(self, note, start_coords, (note.x, note.y))
+                    self.undo_manager.add_command(command)
+                    self.document_modified = True
+                    self._update_ui_state()
+                    self.pdf_view.queue_draw()
+                return
+
             self.view_drag_active = False
             if self.view_sel_rect:
                 x1, y1, x2, y2 = self.view_sel_rect
@@ -9250,6 +9613,157 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             
         self._remove_highlight_at_region(target_rect, is_visual=is_visual)
 
+    def on_view_sticky_note_toggled(self, button):
+        """Toggle sticky note placement mode in View Mode."""
+        if button.get_active():
+            self.view_tool_mode = "add_sticky_note"
+            if hasattr(self, 'pdf_view'):
+                self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        else:
+            if getattr(self, 'view_tool_mode', None) == "add_sticky_note":
+                self.view_tool_mode = None
+            if hasattr(self, 'pdf_view'):
+                self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
+
+    def on_view_sticky_note_clicked(self, button=None):
+        """Toggle sticky note placement mode when clicked."""
+        if hasattr(self, 'view_sticky_note_btn') and isinstance(self.view_sticky_note_btn, Gtk.ToggleButton):
+            self.view_sticky_note_btn.set_active(not self.view_sticky_note_btn.get_active())
+        else:
+            self.view_tool_mode = "add_sticky_note" if getattr(self, 'view_tool_mode', None) != "add_sticky_note" else None
+
+    def _find_sticky_note_at_pos(self, page_x, page_y):
+        """Find interactive sticky note at unrotated coordinates."""
+        try:
+            coords = self._visual_to_unrotated_page_coords(page_x, page_y)
+            if isinstance(coords, (tuple, list)) and len(coords) == 2:
+                page_x, page_y = coords
+        except Exception:
+            pass
+        if not self._active_session:
+            return None
+        notes = self._active_session.sticky_notes.get(self.current_page_index, [])
+        for note in reversed(notes):
+            if note.contains_point(page_x, page_y):
+                return note
+        return None
+
+    def _create_sticky_note_at(self, page_x, page_y):
+        """Create new sticky note at coordinates and open editor popover."""
+        if not self.doc or not self._active_session:
+            return
+        unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x, page_y)
+        note = StickyNoteObject(
+            page_number=self.current_page_index,
+            x=unrot_x,
+            y=unrot_y,
+            content="",
+            author=_("author_user"),
+            color=(1.0, 0.86, 0.24),
+            icon_type="Comment",
+            is_new=True,
+        )
+        from .undo_manager import AddStickyNoteCommand
+        cmd = AddStickyNoteCommand(self, note)
+        cmd.execute()
+        if self.undo_manager:
+            self.undo_manager.record(cmd)
+        self._open_sticky_note_popover(note)
+
+    def _open_sticky_note_popover(self, note):
+        """Open floating comment editor popover attached to sticky note."""
+        if not note:
+            return
+        self.selected_sticky_note = note
+
+        page_offset_x = max(0, (self.pdf_view.get_allocated_width() - self.current_pdf_page_width) / 2)
+        page_offset_y = max(0, (self.pdf_view.get_allocated_height() - self.current_pdf_page_height) / 2)
+        vis_x, vis_y = self._unrotated_to_visual_page_coords(note.x + note.width / 2.0, note.y + note.height / 2.0)
+        screen_x = int(page_offset_x + vis_x * self.zoom_level)
+        screen_y = int(page_offset_y + vis_y * self.zoom_level)
+
+        rect = Gdk.Rectangle()
+        rect.x = max(0, screen_x)
+        rect.y = max(0, screen_y)
+        rect.width = 1
+        rect.height = 1
+
+        popover = StickyNotePopover(editor_window=self, note=note)
+        popover.set_pointing_to(rect)
+        popover.popup()
+
+    def delete_sticky_note(self, note):
+        """Delete sticky note with undo support."""
+        if not note:
+            return
+        from .undo_manager import DeleteStickyNoteCommand
+        cmd = DeleteStickyNoteCommand(self, note)
+        cmd.execute()
+        if self.undo_manager:
+            self.undo_manager.record(cmd)
+
+    def _delete_sticky_note(self, note):
+        """Delete sticky note alias."""
+        self.delete_sticky_note(note)
+
+    def _add_sticky_note_to_session(self, note):
+        """Add sticky note to active session and trigger canvas/sidebar refresh."""
+        if not self._active_session:
+            return
+        p = note.page_number
+        if p not in self._active_session.sticky_notes:
+            self._active_session.sticky_notes[p] = []
+        if note not in self._active_session.sticky_notes[p]:
+            self._active_session.sticky_notes[p].append(note)
+        self.selected_sticky_note = note
+        self.document_modified = True
+        if hasattr(self, 'annotations_sidebar'):
+            self.annotations_sidebar.refresh()
+            self.annotations_sidebar.sync_selection(note)
+        self.pdf_view.queue_draw()
+
+    def _remove_sticky_note_from_session(self, note):
+        """Remove sticky note from active session."""
+        if not self._active_session:
+            return
+        p = note.page_number
+        if p in self._active_session.sticky_notes and note in self._active_session.sticky_notes[p]:
+            self._active_session.sticky_notes[p].remove(note)
+        if self.selected_sticky_note == note:
+            self.selected_sticky_note = None
+        self.document_modified = True
+        if hasattr(self, 'annotations_sidebar'):
+            self.annotations_sidebar.refresh()
+        self.pdf_view.queue_draw()
+
+    def _apply_sticky_note_state(self, note, state):
+        """Apply state dictionary to sticky note."""
+        if not note or not state:
+            return
+        note.content = state.get("content", note.content)
+        note.author = state.get("author", note.author)
+        note.color = state.get("color", note.color)
+        note.icon_type = state.get("icon_type", note.icon_type)
+        if "modified_at" in state:
+            note.modified_at = state["modified_at"]
+        note.modified = True
+        self.document_modified = True
+        if hasattr(self, 'annotations_sidebar'):
+            self.annotations_sidebar.refresh()
+        self.pdf_view.queue_draw()
+
+    def _set_sticky_note_pos(self, note, new_x, new_y):
+        """Reposition sticky note."""
+        if not note:
+            return
+        note.x = float(new_x)
+        note.y = float(new_y)
+        note.modified = True
+        self.document_modified = True
+        if hasattr(self, 'annotations_sidebar'):
+            self.annotations_sidebar.refresh()
+        self.pdf_view.queue_draw()
+
     def _extract_word_at_position(self, text, click_pos_in_text):
         """Extract contiguous non-whitespace word and its character indices at cursor."""
         if not text or click_pos_in_text < 0 or click_pos_in_text > len(text):
@@ -9352,15 +9866,40 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         ctrl_pressed = bool(modifiers & Gdk.ModifierType.CONTROL_MASK)
 
         if self.view_mode:
+            unrot_px, unrot_py = self._visual_to_unrotated_page_coords(page_x, page_y)
+            clicked_note = self._find_sticky_note_at_pos(unrot_px, unrot_py) if hasattr(self, '_find_sticky_note_at_pos') else None
+            if clicked_note:
+                self.selected_sticky_note = clicked_note
+                self.pdf_view.queue_draw()
+                popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                popover_box.set_margin_start(6); popover_box.set_margin_end(6)
+                popover_box.set_margin_top(6); popover_box.set_margin_bottom(6)
+                
+                btn_edit = Gtk.Button(label=_("edit_sticky_note"))
+                btn_edit.connect("clicked", lambda b: (self.context_popover.popdown() if hasattr(self, 'context_popover') else None, self._open_sticky_note_popover(clicked_note)))
+                popover_box.append(btn_edit)
+                
+                btn_del = Gtk.Button(label=_("delete_sticky_note"))
+                btn_del.add_css_class("destructive-action")
+                btn_del.connect("clicked", lambda b: (self.context_popover.popdown() if hasattr(self, 'context_popover') else None, self._delete_sticky_note(clicked_note)))
+                popover_box.append(btn_del)
+                
+                self.context_popover = Gtk.Popover(autohide=True, has_arrow=True)
+                self.context_popover.set_child(popover_box)
+                self.context_popover.set_parent(self.pdf_view)
+                rect = Gdk.Rectangle()
+                rect.x = int(x); rect.y = int(y); rect.width = 1; rect.height = 1
+                self.context_popover.set_pointing_to(rect)
+                self.context_popover.popup()
+                return
+
             if not self.view_sel_rect or not (self.view_sel_rect[0] <= page_x <= self.view_sel_rect[2] and self.view_sel_rect[1] <= page_y <= self.view_sel_rect[3]):
                 clicked_word = pdf_handler.get_word_at_pos(self.doc, self.current_page_index, (page_x, page_y))
                 if clicked_word:
                     self.view_sel_rect = clicked_word['bbox']
                     self.view_selected_text = clicked_word['text']
                     self.pdf_view.queue_draw()
-                else:
-                    return
-            
+
             if ctrl_pressed and self.view_selected_text:
                 import webbrowser
                 import re
@@ -9368,19 +9907,24 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if match:
                     webbrowser.open(match.group(0))
                 return
-                    
+
             popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             popover_box.set_margin_start(6); popover_box.set_margin_end(6)
             popover_box.set_margin_top(6); popover_box.set_margin_bottom(6)
-            
-            btn_copy = Gtk.Button(label=_("btn_copy_text"))
-            btn_copy.connect("clicked", lambda b: self._handle_context_action("copy_view", None, x, y))
-            popover_box.append(btn_copy)
-            
-            btn_hl = Gtk.Button(label=_("menu_highlight"))
-            btn_hl.connect("clicked", lambda b: self._handle_context_action("highlight_view", None, x, y))
-            popover_box.append(btn_hl)
-            
+
+            if self.view_selected_text:
+                btn_copy = Gtk.Button(label=_("btn_copy_text"))
+                btn_copy.connect("clicked", lambda b: self._handle_context_action("copy_view", None, x, y))
+                popover_box.append(btn_copy)
+
+                btn_hl = Gtk.Button(label=_("menu_highlight"))
+                btn_hl.connect("clicked", lambda b: self._handle_context_action("highlight_view", None, x, y))
+                popover_box.append(btn_hl)
+
+            btn_add_note = Gtk.Button(label=_("add_sticky_note"))
+            btn_add_note.connect("clicked", lambda b: (self.context_popover.popdown() if hasattr(self, 'context_popover') else None, self._create_sticky_note_at(page_x, page_y)))
+            popover_box.append(btn_add_note)
+
             self.context_popover = Gtk.Popover(autohide=True, has_arrow=True)
             self.context_popover.set_child(popover_box)
             self.context_popover.set_parent(self.pdf_view)
@@ -10200,6 +10744,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_form_field = None
         if hasattr(self, 'selected_measurement'):
             self.selected_measurement = None
+        if hasattr(self, 'selected_sticky_note'):
+            self.selected_sticky_note = None
         self.highlighted_native_annot = None
 
         target = getattr(item, 'target_obj', None)
@@ -10216,6 +10762,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_form_field = target
             elif isinstance(target, MeasurementObject):
                 self.selected_measurement = target
+            elif isinstance(target, StickyNoteObject):
+                self.selected_sticky_note = target
             else:
                 self.highlighted_native_annot = {
                     'bbox': item.bbox,

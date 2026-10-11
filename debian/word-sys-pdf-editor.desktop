@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=word-sys's PDF Editor
+Name=word-sys PDF Editor
 Comment=Edit text content in PDF files
 Exec=word-sys-pdf-editor %F
 Icon=f-pv1
