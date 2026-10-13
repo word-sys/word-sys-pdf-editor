@@ -41,11 +41,16 @@ from .i18n import _
 _cairo_page_cache = {}
 
 def invalidate_page_cache(doc=None, page_index=None):
-    """Invalidate cached Cairo page surfaces."""
+    """Invalidate cached Cairo page surfaces and internal document page cache."""
     global _cairo_page_cache
     if doc is None:
         _cairo_page_cache.clear()
         return
+    if hasattr(doc, '_page_cache') and isinstance(doc._page_cache, dict):
+        if page_index is None:
+            doc._page_cache.clear()
+        else:
+            doc._page_cache.pop(page_index, None)
     doc_id = id(doc)
     if page_index is None:
         keys_to_del = [k for k in _cairo_page_cache if k[0] == doc_id]
@@ -1273,6 +1278,12 @@ def extract_editable_images(doc, page_index):
  
                 rect = fitz.Rect(bbox)
                 if rect.is_empty or not rect.is_valid:
+                    continue
+
+                # Full-page background image (e.g. from flattening or scanned page) is static and not editable
+                if (abs(rect.x0) <= 2 and abs(rect.y0) <= 2 and
+                        abs(rect.width - page.rect.width) <= 2 and
+                        abs(rect.height - page.rect.height) <= 2):
                     continue
  
                 try:
@@ -3546,3 +3557,154 @@ def apply_sticky_notes_to_pdf(doc, session) -> bool:
     """Synchronize sticky notes from session to doc."""
     sticky_dict = getattr(session, 'sticky_notes', {})
     return sync_sticky_notes(doc, sticky_dict)
+
+
+def flatten_page_annotations(doc, page_num: int, include_forms: bool = False, session_objects: Optional[List[Any]] = None) -> tuple[bool, Optional[str]]:
+    """Burn all annotations, highlights, marks, drawings, text, and optionally form fields on page_num
+    directly into a high-resolution raster background stream (true OLED burn-in).
+
+    All text, shapes, markings, and form entries are permanently flattened into pixels so they
+    cannot be selected, extracted, or edited. Sticky notes are preserved as live interactive comments.
+    """
+    if not doc or page_num < 0 or page_num >= doc.page_count:
+        return False, "Invalid document or page index"
+    try:
+        # 1. Create a 1-page temp document for page_num to compose all elements
+        temp_doc = fitz.open()
+        temp_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
+        tp = temp_doc[0]
+        rect = tp.rect
+
+        # 2. Apply any in-memory session objects onto the temp page so they are included in the burn-in
+        if session_objects:
+            for obj in session_objects:
+                try:
+                    if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
+                        _apply_single_object_to_page(temp_doc, tp, obj)
+                except Exception as ex:
+                    print(f"Warning applying object before burn-in: {ex}")
+
+        # 3. Preserve sticky notes (PDF_ANNOT_TEXT): extract details and remove before rasterizing
+        saved_notes = []
+        annot = tp.first_annot
+        while annot:
+            if annot.type and annot.type[0] in (0, 1):
+                info = annot.info or {}
+                colors = annot.colors or {}
+                stroke = colors.get("stroke") or (1.0, 0.86, 0.24)
+                saved_notes.append({
+                    'point': (annot.rect.x0, annot.rect.y0),
+                    'content': info.get('content', ''),
+                    'author': info.get('title', ''),
+                    'icon': info.get('name', 'Comment'),
+                    'color': tuple(float(c) for c in stroke[:3]) if stroke else (1.0, 0.86, 0.24),
+                    'created_at': info.get('creationDate'),
+                    'modified_at': info.get('modDate'),
+                })
+            annot = annot.next
+
+        # Delete sticky notes from temp page so their icons are not rasterized into background
+        while True:
+            found = None
+            annot = tp.first_annot
+            while annot:
+                if annot.type and annot.type[0] in (0, 1):
+                    found = annot
+                    break
+                annot = annot.next
+            if found:
+                tp.delete_annot(found)
+            else:
+                break
+
+        # 4. If form fields should NOT be burned in, preserve them as interactive widgets
+        saved_widgets = []
+        if not include_forms:
+            for w in list(tp.widgets()):
+                try:
+                    saved_widgets.append({
+                        'rect': fitz.Rect(w.rect),
+                        'field_name': w.field_name,
+                        'field_type': w.field_type,
+                        'field_value': w.field_value,
+                    })
+                    tp.delete_widget(w)
+                except Exception as ex:
+                    print(f"Warning preserving widget: {ex}")
+
+        # 5. Render high-resolution (300 DPI) lossless raster image (true OLED burn-in)
+        zoom = 300.0 / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        pix = tp.get_pixmap(matrix=mat, annots=True)
+        img_bytes = pix.tobytes("png")
+
+        # 6. Create clean replacement page with exact same dimensions and burn image into content stream
+        burn_doc = fitz.open()
+        bp = burn_doc.new_page(width=rect.width, height=rect.height)
+        bp.insert_image(rect, stream=img_bytes)
+
+        # 7. Restore preserved sticky notes as live interactive comments
+        for sn in saved_notes:
+            try:
+                na = bp.add_text_annot(sn['point'], sn['content'], icon=sn['icon'])
+                na.set_info(
+                    title=sn['author'],
+                    content=sn['content'],
+                    creationDate=sn.get('created_at'),
+                    modDate=sn.get('modified_at'),
+                )
+                if sn.get('color'):
+                    na.set_colors(stroke=sn['color'])
+                na.update()
+            except Exception as e:
+                print(f"Warning restoring sticky note after burn-in: {e}")
+
+        # 8. Restore preserved form widgets if include_forms was False
+        if not include_forms and saved_widgets:
+            for sw in saved_widgets:
+                try:
+                    nw = fitz.Widget()
+                    nw.rect = sw['rect']
+                    nw.field_name = sw['field_name']
+                    nw.field_type = sw['field_type']
+                    nw.field_value = sw['field_value']
+                    bp.add_widget(nw)
+                except Exception as e:
+                    print(f"Warning restoring widget: {e}")
+
+        # 9. Replace page in original document
+        doc.delete_page(page_num)
+        doc.insert_pdf(burn_doc, from_page=0, to_page=0, start_at=page_num)
+        burn_doc.close()
+        temp_doc.close()
+
+        if hasattr(doc, '_page_cache') and isinstance(doc._page_cache, dict):
+            doc._page_cache.clear()
+
+        invalidate_page_cache(doc, page_num)
+        return True, None
+    except Exception as e:
+        print(f"Error flattening annotations on page {page_num}: {e}")
+        traceback.print_exc()
+        return False, str(e)
+
+
+def flatten_document_annotations(doc, page_indices: Optional[List[int]] = None, include_forms: bool = False, session_objects_by_page: Optional[dict] = None) -> tuple[bool, Optional[str]]:
+    """Flatten annotations across specified page indices (or all pages if None)."""
+    if not doc:
+        return False, "No document loaded"
+    if page_indices is None:
+        page_indices = list(range(doc.page_count))
+    try:
+        # Sort in reverse order to ensure page replacement does not affect lower indices
+        for p in sorted(page_indices, reverse=True):
+            objs = session_objects_by_page.get(p, []) if session_objects_by_page else None
+            ok, err = flatten_page_annotations(doc, p, include_forms=include_forms, session_objects=objs)
+            if not ok:
+                return False, err
+        invalidate_page_cache(doc)
+        return True, None
+    except Exception as e:
+        print(f"Error flattening document annotations: {e}")
+        traceback.print_exc()
+        return False, str(e)

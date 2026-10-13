@@ -1292,6 +1292,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu = Gio.Menu()
         menu.append(_("menu_save_as"), "win.save_as")
         menu.append(_("menu_merge_documents"), "win.merge_documents")
+        menu.append(_("menu_flatten"), "win.flatten_annotations")
 
         export_menu = Gio.Menu()
         export_menu.append(_("menu_export_as"), "win.export_as")
@@ -2003,6 +2004,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_merge = Gio.SimpleAction.new('merge_documents', None)
         action_merge.connect('activate', self.on_merge_documents)
         self.add_action(action_merge)
+
+        action_flatten = Gio.SimpleAction.new('flatten_annotations', None)
+        action_flatten.connect('activate', self.on_flatten_annotations)
+        self.add_action(action_flatten)
 
         action_export_as = Gio.SimpleAction.new('export_as', None)
         action_export_as.connect('activate', self.on_export_as)
@@ -6518,6 +6523,50 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             dialog.cleanup()
         self._merge_dialog = None
         return False
+
+    def on_flatten_annotations(self, _action=None, _param=None):
+        """Show the Flatten Annotations dialog."""
+        if not self.doc:
+            return
+        from .flatten_dialog import FlattenDialog
+        if getattr(self, "_flatten_dialog", None) is not None:
+            self._flatten_dialog.present()
+            return
+        self._flatten_dialog = FlattenDialog(
+            parent_window=self,
+            current_page=self.current_page_index,
+            total_pages=self.doc.page_count,
+            on_confirm_callback=self._execute_flatten_from_dialog,
+        )
+        self._flatten_dialog.connect("close-request", self._on_flatten_dialog_closed)
+        self._flatten_dialog.present()
+
+    def _on_flatten_dialog_closed(self, dialog):
+        self._flatten_dialog = None
+        return False
+
+    def _execute_flatten_from_dialog(self, scope: str, include_forms: bool):
+        """Execute flattening of annotations triggered from FlattenDialog."""
+        if not self.doc:
+            return
+        if scope == "all":
+            page_indices = list(range(self.doc.page_count))
+        else:
+            page_indices = [self.current_page_index]
+        self.flatten_annotations(page_indices=page_indices, include_forms=include_forms)
+
+    def flatten_annotations(self, page_indices: Optional[List[int]] = None, include_forms: bool = False):
+        """Flatten annotations across specified page indices with complete undo/redo support."""
+        if not self.doc:
+            return
+        if page_indices is None:
+            page_indices = [self.current_page_index]
+
+        from .undo_manager import FlattenCommand
+        cmd = FlattenCommand(self, page_indices=page_indices, include_forms=include_forms)
+        cmd.execute()
+        if self.undo_manager:
+            self.undo_manager.record(cmd)
 
     def on_export_as(self, action=None, param=None):
         """Show modern export dialog with format and layout mode options."""

@@ -281,6 +281,8 @@ class UndoManager:
         if hasattr(self.window, 'refresh_annotations_list'):
             self.window.refresh_annotations_list()
 
+    record = add_command
+
     def can_undo(self) -> bool:
         """Check if an undo action is available."""
         return bool(self.undo_stack)
@@ -1135,3 +1137,124 @@ class MoveStickyNoteCommand(Command):
 
     def undo(self):
         self.window._set_sticky_note_pos(self.note, self.old_pos[0], self.old_pos[1])
+
+
+class FlattenCommand(Command):
+    """Command to flatten annotations into page content streams with complete undo/redo support."""
+    def __init__(self, window, page_indices: List[int], include_forms: bool = False):
+        super().__init__(window)
+        self.page_indices = list(page_indices)
+        self.include_forms = include_forms
+
+        # Snapshot full state before flattening
+        self.pre_pdf_bytes = self.window.doc.tobytes() if getattr(self.window, 'doc', None) else None
+        self.pre_editable_strokes = copy.deepcopy(getattr(self.window, 'editable_strokes', []))
+        self.pre_editable_shapes = copy.deepcopy(getattr(self.window, 'editable_shapes', []))
+        self.pre_measurement_objects = copy.deepcopy(getattr(self.window, 'measurement_objects', []))
+        self.pre_editable_texts = copy.deepcopy(getattr(self.window, 'editable_texts', []))
+        self.pre_editable_images = copy.deepcopy(getattr(self.window, 'editable_images', []))
+        self.pre_form_fields = copy.deepcopy(getattr(self.window, 'form_fields', []))
+        self.pre_document_modified = getattr(self.window, 'document_modified', False)
+
+    def execute(self):
+        """Execute flattening on targeted pages."""
+        # Collect in-memory canvas objects for the targeted pages
+        session_objects_by_page = {}
+        for p in self.page_indices:
+            objs = []
+            for stroke in getattr(self.window, 'editable_strokes', []):
+                if getattr(stroke, 'page_number', None) == p:
+                    objs.append(stroke)
+            for shape in getattr(self.window, 'editable_shapes', []):
+                if getattr(shape, 'page_number', None) == p:
+                    objs.append(shape)
+            for m in getattr(self.window, 'measurement_objects', []):
+                if getattr(m, 'page_number', None) == p:
+                    objs.append(m)
+            for t in getattr(self.window, 'editable_texts', []):
+                if getattr(t, 'page_number', None) == p:
+                    objs.append(t)
+            for img in getattr(self.window, 'editable_images', []):
+                if getattr(img, 'page_number', None) == p:
+                    objs.append(img)
+            if objs:
+                session_objects_by_page[p] = objs
+
+        # Call backend flattening in pdf_handler
+        if getattr(self.window, 'doc', None):
+            pdf_handler.flatten_document_annotations(
+                self.window.doc,
+                self.page_indices,
+                include_forms=self.include_forms,
+                session_objects_by_page=session_objects_by_page
+            )
+
+        # Reload page in editor if current page was flattened, or clear in-memory lists
+        if hasattr(self.window, 'load_page') and getattr(self.window, 'current_page_index', None) in self.page_indices:
+            self.window.load_page(self.window.current_page_index, reload_objects=True)
+        else:
+            if hasattr(self.window, 'editable_strokes'):
+                self.window.editable_strokes = [s for s in self.window.editable_strokes if getattr(s, 'page_number', None) not in self.page_indices]
+            if hasattr(self.window, 'editable_shapes'):
+                self.window.editable_shapes = [s for s in self.window.editable_shapes if getattr(s, 'page_number', None) not in self.page_indices]
+            if hasattr(self.window, 'measurement_objects'):
+                self.window.measurement_objects = [m for m in self.window.measurement_objects if getattr(m, 'page_number', None) not in self.page_indices]
+            if hasattr(self.window, 'editable_texts'):
+                self.window.editable_texts = [t for t in self.window.editable_texts if getattr(t, 'page_number', None) not in self.page_indices]
+            if hasattr(self.window, 'editable_images'):
+                self.window.editable_images = [img for img in self.window.editable_images if getattr(img, 'page_number', None) not in self.page_indices]
+            if self.include_forms and hasattr(self.window, 'form_fields'):
+                self.window.form_fields = [f for f in self.window.form_fields if getattr(f, 'page_number', None) not in self.page_indices]
+
+        # Clear active selection if the selected object was on one of the flattened pages
+        sel = getattr(self.window, 'get_selected_object', lambda: None)()
+        if sel and getattr(sel, 'page_number', None) in self.page_indices:
+            if hasattr(self.window, 'clear_selection'):
+                self.window.clear_selection()
+
+        self.window.document_modified = True
+        if hasattr(self.window, '_refresh_thumbnail'):
+            for p in self.page_indices:
+                self.window._refresh_thumbnail(p)
+        if hasattr(self.window, 'refresh_annotations_list'):
+            self.window.refresh_annotations_list()
+        if hasattr(self.window, 'status_label') and self.window.status_label:
+            self.window.status_label.set_text(_("status_flatten_done").format(len(self.page_indices)))
+        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+            self.window.pdf_view.queue_draw()
+
+    def undo(self):
+        """Revert flattening by restoring exact pre-flatten document state and objects."""
+        if self.pre_pdf_bytes and getattr(self.window, 'doc', None):
+            restore_doc = fitz.open(stream=self.pre_pdf_bytes, filetype="pdf")
+            for i in range(self.window.doc.page_count - 1, -1, -1):
+                self.window.doc.delete_page(i)
+            self.window.doc.insert_pdf(restore_doc)
+            pdf_handler.invalidate_page_cache(self.window.doc)
+
+        if hasattr(self.window, 'load_page') and getattr(self.window, 'current_page_index', None) in self.page_indices:
+            self.window.load_page(self.window.current_page_index, reload_objects=True)
+        else:
+            if hasattr(self.window, 'editable_strokes'):
+                self.window.editable_strokes = copy.deepcopy(self.pre_editable_strokes)
+            if hasattr(self.window, 'editable_shapes'):
+                self.window.editable_shapes = copy.deepcopy(self.pre_editable_shapes)
+            if hasattr(self.window, 'measurement_objects'):
+                self.window.measurement_objects = copy.deepcopy(self.pre_measurement_objects)
+            if hasattr(self.window, 'editable_texts'):
+                self.window.editable_texts = copy.deepcopy(self.pre_editable_texts)
+            if hasattr(self.window, 'editable_images'):
+                self.window.editable_images = copy.deepcopy(self.pre_editable_images)
+            if hasattr(self.window, 'form_fields'):
+                self.window.form_fields = copy.deepcopy(self.pre_form_fields)
+        self.window.document_modified = self.pre_document_modified
+
+        if hasattr(self.window, '_refresh_thumbnail'):
+            for p in self.page_indices:
+                self.window._refresh_thumbnail(p)
+        if hasattr(self.window, 'refresh_annotations_list'):
+            self.window.refresh_annotations_list()
+        if hasattr(self.window, 'status_label') and self.window.status_label:
+            self.window.status_label.set_text(_("reverted"))
+        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+            self.window.pdf_view.queue_draw()
