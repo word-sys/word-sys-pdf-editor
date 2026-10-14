@@ -398,8 +398,9 @@ class EditableText:
         return parts
 
 class EditableImage:
-    """Data model representing an extracted or inserted image on a PDF page."""
-    def __init__(self, bbox, page_number, xref, image_bytes, is_new=False, rotation=0.0):
+    """Data model representing an extracted or inserted image or rubber stamp on a PDF page."""
+    def __init__(self, bbox, page_number, xref, image_bytes, is_new=False, rotation=0.0,
+                 opacity=1.0, is_stamp=False, stamp_name=None):
         self.bbox = bbox
         self.original_bbox = bbox
         self.page_number = page_number
@@ -410,6 +411,9 @@ class EditableImage:
         self.modified = False
         self.rotation = float(rotation) % 360.0
         self.original_rotation = self.rotation
+        self.opacity = float(opacity)
+        self.is_stamp = bool(is_stamp)
+        self.stamp_name = stamp_name
 
     def set_rotation(self, angle):
         """Set rotation in degrees (0-360)."""

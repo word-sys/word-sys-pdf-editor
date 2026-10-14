@@ -43,6 +43,7 @@ from .quick_guide_dialog import QuickGuideDialog
 from .annotations_sidebar import AnnotationsSidebar, AnnotationListItem
 from . import utils
 from .utils import point_to_segment_distance, point_in_polygon
+from .stamp_manager import StampLibrary, CustomStamp, StampManagerDialog, StampPopover
 
 
 class StickyNotePopover(Gtk.Popover):
@@ -295,6 +296,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.highlighter_opacity = 0.35
         self.document_modified = False 
         self.tool_mode = "select" 
+        self.stamp_library = StampLibrary()
+        self.active_stamp = self.stamp_library.get_active_stamp()
+        self.temp_stamp_bbox = None
         self.temp_form_field_rect = None
         self.form_builder_field_type = "text"
         self.form_builder_tool_button = None
@@ -1293,6 +1297,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu.append(_("menu_save_as"), "win.save_as")
         menu.append(_("menu_merge_documents"), "win.merge_documents")
         menu.append(_("menu_flatten"), "win.flatten_annotations")
+        menu.append(_("menu_manage_stamps"), "win.manage_stamps")
 
         export_menu = Gio.Menu()
         export_menu.append(_("menu_export_as"), "win.export_as")
@@ -1480,6 +1485,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.measure_area_tool_button = _make_tool_btn("view-grid-symbolic", _("tool_measure_area"), _("tool_measure_area_tip"), "measure_area")
         tools_grid.attach(self.measure_area_tool_button, 1, 6, 1, 1)
+
+        self.stamp_tool_button = _make_tool_btn("tag-symbolic", _("tool_stamp"), _("tool_stamp_tip"), "add_stamp")
+        right_click_stamp = Gtk.GestureClick()
+        right_click_stamp.set_button(3)
+        right_click_stamp.connect("pressed", lambda g, n, x, y: self.stamp_popover.popup() if hasattr(self, 'stamp_popover') else None)
+        self.stamp_tool_button.add_controller(right_click_stamp)
+        tools_grid.attach(self.stamp_tool_button, 0, 7, 1, 1)
+
+        self.stamp_menu_button = Gtk.MenuButton()
+        self.stamp_menu_button.set_icon_name("view-more-symbolic")
+        self.stamp_menu_button.set_tooltip_text(_("menu_manage_stamps"))
+        self.stamp_menu_button.add_css_class("tool-button")
+        self.stamp_popover = StampPopover(
+            self.stamp_library,
+            on_stamp_chosen_callback=self._on_stamp_chosen_from_popover,
+            on_manage_clicked_callback=self.on_manage_stamps
+        )
+        self.stamp_menu_button.set_popover(self.stamp_popover)
+        tools_grid.attach(self.stamp_menu_button, 1, 7, 1, 1)
         
         sidebar_box.append(tools_grid)
 
@@ -2009,6 +2033,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_flatten.connect('activate', self.on_flatten_annotations)
         self.add_action(action_flatten)
 
+        action_manage_stamps = Gio.SimpleAction.new('manage_stamps', None)
+        action_manage_stamps.connect('activate', self.on_manage_stamps)
+        self.add_action(action_manage_stamps)
+
         action_export_as = Gio.SimpleAction.new('export_as', None)
         action_export_as.connect('activate', self.on_export_as)
         self.add_action(action_export_as)
@@ -2141,7 +2169,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          getattr(self, 'form_builder_tool_button', None),
                          getattr(self, 'calibrate_tool_button', None),
                          getattr(self, 'measure_distance_tool_button', None),
-                         getattr(self, 'measure_area_tool_button', None)]
+                         getattr(self, 'measure_area_tool_button', None),
+                         getattr(self, 'stamp_tool_button', None),
+                         getattr(self, 'stamp_menu_button', None)]
         for btn in sidebar_tools:
             if btn:
                 btn.set_sensitive(in_edit and has_doc)
@@ -2315,6 +2345,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.measure_distance_tool_button.get_style_context().remove_class('active')
         if hasattr(self, 'measure_area_tool_button') and self.measure_area_tool_button:
             self.measure_area_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'stamp_tool_button') and self.stamp_tool_button:
+            self.stamp_tool_button.get_style_context().remove_class('active')
 
         if self.view_mode:
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
@@ -2367,6 +2399,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif self.tool_mode == "measure_area":
             if hasattr(self, 'measure_area_tool_button') and self.measure_area_tool_button:
                 self.measure_area_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "add_stamp":
+            if hasattr(self, 'stamp_tool_button') and self.stamp_tool_button:
+                self.stamp_tool_button.get_style_context().add_class('active')
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
 
         if has_doc:
@@ -3391,6 +3427,34 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.fill()
 
             cr.set_source_rgba(img_rgba.red, img_rgba.green, img_rgba.blue, 0.85)
+            cr.set_line_width(2.0 / self.zoom_level)
+            cr.set_dash([5.0 / self.zoom_level, 4.0 / self.zoom_level])
+            cr.rectangle(draw_x, draw_y, draw_w, draw_h)
+            cr.stroke()
+            cr.set_dash([])
+
+        if getattr(self, 'temp_stamp_bbox', None):
+            x1, y1, x2, y2 = self.temp_stamp_bbox
+            draw_x = x1
+            draw_y = y1
+            draw_w = x2 - x1
+            draw_h = y2 - y1
+
+            active_stamp = getattr(self, 'active_stamp', None)
+            if (draw_w < 12 or draw_h < 12) and active_stamp:
+                cx, cy = self.drag_start_page_pos
+                w = getattr(active_stamp, 'default_width', 160.0)
+                h = getattr(active_stamp, 'default_height', 54.0)
+                draw_x = cx - w / 2.0
+                draw_y = cy - h / 2.0
+                draw_w = w
+                draw_h = h
+
+            cr.set_source_rgba(0.2, 0.5, 0.9, 0.2)
+            cr.rectangle(draw_x, draw_y, draw_w, draw_h)
+            cr.fill()
+
+            cr.set_source_rgba(0.2, 0.5, 0.9, 0.85)
             cr.set_line_width(2.0 / self.zoom_level)
             cr.set_dash([5.0 / self.zoom_level, 4.0 / self.zoom_level])
             cr.rectangle(draw_x, draw_y, draw_w, draw_h)
@@ -6568,6 +6632,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.undo_manager:
             self.undo_manager.record(cmd)
 
+    def on_manage_stamps(self, _action=None, _param=None):
+        """Open modern Libadwaita StampManagerDialog."""
+        if not hasattr(self, 'stamp_library') or not self.stamp_library:
+            self.stamp_library = StampLibrary()
+
+        def _on_stamp_chosen(stamp):
+            if stamp:
+                self.active_stamp = stamp
+                self.on_tool_selected(None, "add_stamp")
+                if hasattr(self, 'stamp_popover') and self.stamp_popover:
+                    self.stamp_popover.refresh()
+
+        dialog = StampManagerDialog(self, self.stamp_library, on_stamp_selected_callback=_on_stamp_chosen)
+        dialog.present()
+
+    def _on_stamp_chosen_from_popover(self, stamp):
+        """Callback when a stamp is picked from the quick popover."""
+        if stamp:
+            self.active_stamp = stamp
+            self.on_tool_selected(None, "add_stamp")
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(f"{_('stamp_active_label')}: {stamp.name}")
+
     def on_export_as(self, action=None, param=None):
         """Show modern export dialog with format and layout mode options."""
         self.show_export_dialog(initial_format="DOCX")
@@ -8674,6 +8761,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.drag_start_page_pos = (unrot_px, unrot_py)
             self.temp_image_bbox = (unrot_px, unrot_py, unrot_px, unrot_py)
             return
+        elif self.tool_mode == "add_stamp":
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (unrot_px, unrot_py)
+            self.temp_stamp_bbox = (unrot_px, unrot_py, unrot_px, unrot_py)
+            return
         elif self.tool_mode == "form_builder":
             self._close_active_form_field_editor()
             clicked_form_field = self._find_form_field_at_pos(unrot_px, unrot_py)
@@ -8821,6 +8914,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     y2 = y1 + 20
                     
                 self.temp_image_bbox = (x1, y1, x2, y2)
+                self.pdf_view.queue_draw()
+                return
+            if getattr(self, 'temp_stamp_bbox', None) is not None:
+                start_x, start_y = self.drag_start_page_pos
+                current_x = start_x + delta_x
+                current_y = start_y + delta_y
+                x1 = min(start_x, current_x)
+                y1 = min(start_y, current_y)
+                x2 = max(start_x, current_x)
+                y2 = max(start_y, current_y)
+                if x2 - x1 < 10:
+                    x2 = x1 + 10
+                if y2 - y1 < 10:
+                    y2 = y1 + 10
+                self.temp_stamp_bbox = (x1, y1, x2, y2)
                 self.pdf_view.queue_draw()
                 return
             if self.temp_shape:
@@ -9230,6 +9338,48 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     filters=[filter_img],
                     callback=on_image_selected
                 )
+            elif getattr(self, 'temp_stamp_bbox', None) is not None:
+                x1, y1, x2, y2 = self.temp_stamp_bbox
+                self.temp_stamp_bbox = None
+                active_stamp = getattr(self, 'active_stamp', None)
+                if not active_stamp and hasattr(self, 'stamp_library') and self.stamp_library:
+                    active_stamp = self.stamp_library.get_active_stamp()
+
+                if active_stamp and active_stamp.image_bytes:
+                    if (x2 - x1) < 12 or (y2 - y1) < 12:
+                        cx, cy = self.drag_start_page_pos
+                        w = getattr(active_stamp, 'default_width', 160.0)
+                        h = getattr(active_stamp, 'default_height', 54.0)
+                        final_bbox = (cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0)
+                    else:
+                        final_bbox = (x1, y1, x2, y2)
+
+                    stamp_obj = EditableImage(
+                        bbox=final_bbox,
+                        page_number=self.current_page_index,
+                        xref=None,
+                        image_bytes=active_stamp.image_bytes,
+                        is_new=True,
+                        is_stamp=True,
+                        stamp_name=active_stamp.name,
+                    )
+
+                    self.selected_image = stamp_obj
+                    self.selected_text = None
+                    self.selected_shape = None
+                    self.selected_stroke = None
+
+                    command = AddObjectCommand(self, stamp_obj)
+                    command.execute()
+                    self.undo_manager.add_command(command)
+                    self.document_modified = True
+                    self._refresh_thumbnail(self.current_page_index)
+                    if hasattr(self, 'status_label') and self.status_label:
+                        self.status_label.set_text(_("stamp_placed_status").format(active_stamp.name))
+                    self._update_ui_state()
+
+                self.pdf_view.queue_draw()
+                return
             elif getattr(self, 'temp_form_field_rect', None) is not None:
                 x1, y1, x2, y2 = self.temp_form_field_rect
                 self.temp_form_field_rect = None

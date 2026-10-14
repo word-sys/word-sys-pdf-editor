@@ -479,13 +479,14 @@ class AddObjectCommand(Command):
         self.new_object.is_baked = True
         page_num = getattr(self.new_object, 'page_number', self.window.current_page_index)
         strokes = getattr(self.window, 'editable_strokes', [])
-        pdf_handler.rebuild_page(
-            self.window.doc, page_num,
-            self.window.editable_texts,
-            self.window.editable_shapes,
-            self.window.editable_images,
-            all_strokes=strokes
-        )
+        if getattr(self.window, 'doc', None) is not None:
+            pdf_handler.rebuild_page(
+                self.window.doc, page_num,
+                getattr(self.window, 'editable_texts', []),
+                getattr(self.window, 'editable_shapes', []),
+                getattr(self.window, 'editable_images', []),
+                all_strokes=strokes
+            )
         self._refresh_thumb()
 
         self.window.document_modified = True
@@ -495,24 +496,25 @@ class AddObjectCommand(Command):
 
     def undo(self):
         """Undo the command."""
-        if self.is_text and self.new_object in self.window.editable_texts:
+        if self.is_text and self.new_object in getattr(self.window, 'editable_texts', []):
             self.window.editable_texts.remove(self.new_object)
-        elif self.is_shape and self.new_object in self.window.editable_shapes:
+        elif self.is_shape and self.new_object in getattr(self.window, 'editable_shapes', []):
             self.window.editable_shapes.remove(self.new_object)
         elif self.is_stroke and hasattr(self.window, 'editable_strokes') and self.new_object in self.window.editable_strokes:
             self.window.editable_strokes.remove(self.new_object)
-        elif self.is_image and self.new_object in self.window.editable_images:
+        elif self.is_image and self.new_object in getattr(self.window, 'editable_images', []):
             self.window.editable_images.remove(self.new_object)
 
         page_num = getattr(self.new_object, 'page_number', self.window.current_page_index)
         strokes = getattr(self.window, 'editable_strokes', [])
-        pdf_handler.rebuild_page(
-            self.window.doc, page_num,
-            self.window.editable_texts,
-            self.window.editable_shapes,
-            self.window.editable_images,
-            all_strokes=strokes
-        )
+        if getattr(self.window, 'doc', None) is not None:
+            pdf_handler.rebuild_page(
+                self.window.doc, page_num,
+                getattr(self.window, 'editable_texts', []),
+                getattr(self.window, 'editable_shapes', []),
+                getattr(self.window, 'editable_images', []),
+                all_strokes=strokes
+            )
 
         self.window.document_modified = True
         self.window.status_label.set_text(_("reverted"))
