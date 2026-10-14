@@ -12,12 +12,27 @@ from . import pdf_handler
 from .models import EditableText, EditableShape, EditableStroke, EditableImage, AcroFormField, MeasurementObject, StickyNoteObject
 from .i18n import _
 
-def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=None):
+def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=None, session=None):
     """Redact original object strictly from snapshot without affecting any other objects."""
     if getattr(target_object, 'is_new', True) or getattr(target_object, '_ghost_redacted', False):
         return
 
-    pdf_handler.restore_page_from_snapshot(window.doc, page_num)
+    from .models import DocumentSession
+    sess = session if isinstance(session, DocumentSession) else None
+    if sess is None:
+        active = getattr(window, '_active_session', None)
+        if isinstance(active, DocumentSession):
+            sess = active
+
+    if sess is not None and sess.doc is not None:
+        doc = sess.doc
+    else:
+        doc = getattr(window, 'doc', None)
+
+    if doc is None:
+        return
+
+    pdf_handler.restore_page_from_snapshot(doc, page_num)
 
     props = properties_to_clear or {}
     orig_bbox = props.get('bbox', getattr(target_object, 'original_bbox', target_object.bbox))
@@ -55,7 +70,7 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
         applied_rects.append(redact_rect)
 
     try:
-        page = window.doc.load_page(page_num)
+        page = doc.load_page(page_num)
 
         # Underline and strikethrough strip check for text
         strip_rects = []
@@ -159,7 +174,8 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                     pass
 
             # Check other EditableText on the same page ONLY if PyMuPDF physically destroyed its text
-            for other in getattr(window, 'editable_texts', []):
+            active_texts = (getattr(sess, 'editable_texts', None) if sess else getattr(window, 'editable_texts', [])) or []
+            for other in active_texts:
                 if other is not target_object and getattr(other, 'page_number', None) == page_num:
                     if getattr(other, '_ghost_redacted', False):
                         continue
@@ -190,8 +206,10 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                 page.apply_redactions()
 
             # Check ONLY other shapes and strokes for vector clipping
-            other_graphics = [s for s in getattr(window, 'editable_shapes', []) if s is not target_object and getattr(s, 'page_number', None) == page_num]
-            other_graphics += [st for st in getattr(window, 'editable_strokes', []) if st is not target_object and getattr(st, 'page_number', None) == page_num]
+            active_shapes = getattr(sess, 'editable_shapes', None) if sess else getattr(window, 'editable_shapes', [])
+            active_strokes = getattr(sess, 'editable_strokes', None) if sess else getattr(window, 'editable_strokes', [])
+            other_graphics = [s for s in active_shapes if s is not target_object and getattr(s, 'page_number', None) == page_num]
+            other_graphics += [st for st in active_strokes if st is not target_object and getattr(st, 'page_number', None) == page_num]
             for other in other_graphics:
                 if hasattr(other, 'bbox') and other.bbox:
                     ox0, oy0, ox1, oy1 = other.bbox
@@ -215,7 +233,8 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
             except TypeError:
                 page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
 
-            for other in getattr(window, 'editable_images', []):
+            active_images = getattr(sess, 'editable_images', None) if sess else getattr(window, 'editable_images', [])
+            for other in active_images:
                 if other is not target_object and getattr(other, 'page_number', None) == page_num:
                     if hasattr(other, 'bbox') and other.bbox:
                         other_rect = fitz.Rect(other.bbox)
@@ -235,9 +254,9 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
         except Exception as link_err:
             print(f"Warning: could not delete old link: {link_err}")
 
-        window.doc.load_page(page_num)
-        pdf_handler.save_page_snapshot(window.doc, page_num, force=True)
-        pdf_handler.invalidate_page_cache(window.doc, page_num)
+        doc.load_page(page_num)
+        pdf_handler.save_page_snapshot(doc, page_num, force=True)
+        pdf_handler.invalidate_page_cache(doc, page_num)
         target_object._ghost_redacted = True
     except Exception as e:
         print(f"Warning: could not erase ghost from snapshot for page {page_num}: {e}")
@@ -246,7 +265,41 @@ class Command:
     """Base class for undoable/redoable actions."""
     def __init__(self, window):
         """Initialise command with parent window context."""
+        from .models import DocumentSession
         self.window = window
+        active = getattr(window, '_active_session', None)
+        self.session = active if isinstance(active, DocumentSession) else None
+
+    def _get_target_session(self):
+        from .models import DocumentSession
+        if isinstance(self.session, DocumentSession):
+            return self.session
+        active = getattr(self.window, '_active_session', None)
+        if isinstance(active, DocumentSession):
+            return active
+        return None
+
+    def _get_doc(self):
+        sess = self._get_target_session()
+        if sess is not None and sess.doc is not None:
+            return sess.doc
+        return getattr(self.window, 'doc', None)
+
+    def _get_collection(self, attr_name):
+        sess = self._get_target_session()
+        if sess is not None and hasattr(sess, attr_name):
+            val = getattr(sess, attr_name)
+            if val is not None:
+                return val
+        val = getattr(self.window, attr_name, None)
+        return val if val is not None else []
+
+    def _is_session_active(self):
+        sess = self._get_target_session()
+        if sess is None:
+            return True
+        active = getattr(self.window, '_active_session', None)
+        return active is None or active is sess
 
     def execute(self):
         """Execute the command."""
@@ -262,7 +315,7 @@ class Command:
 
     def _erase_ghost_if_needed(self, target_object, page_num, properties_to_clear=None):
         """Redact original object from snapshot if edited/moved."""
-        _perform_ghost_erasure(self.window, target_object, page_num, properties_to_clear=properties_to_clear)
+        _perform_ghost_erasure(self.window, target_object, page_num, properties_to_clear=properties_to_clear, session=self._get_target_session())
 
 class UndoManager:
     """Manager class that stores undo and redo action stacks."""
@@ -335,7 +388,7 @@ class EditObjectCommand(Command):
 
     def _erase_ghost_if_needed(self, page_num, properties_to_clear):
         """Erase ghost if needed."""
-        _perform_ghost_erasure(self.window, self.target_object, page_num, properties_to_clear)
+        _perform_ghost_erasure(self.window, self.target_object, page_num, properties_to_clear, session=self._get_target_session())
 
     def _apply_properties_to_pdf(self, properties_to_apply, properties_to_clear):
         """Apply properties to PDF."""
@@ -346,21 +399,31 @@ class EditObjectCommand(Command):
         if isinstance(self.target_object, MeasurementObject):
             return True
 
-        strokes = getattr(self.window, 'editable_strokes', [])
+        doc = self._get_doc()
+        if doc is None:
+            return False
+
+        texts = self._get_collection('editable_texts')
+        shapes = self._get_collection('editable_shapes')
+        images = self._get_collection('editable_images')
+        strokes = self._get_collection('editable_strokes')
+        measurements = self._get_collection('measurements')
+        sticky_notes = self._get_collection('sticky_notes')
+
         if isinstance(self.target_object, EditableStroke):
             temp_obj = copy.deepcopy(self.target_object)
             temp_obj.__dict__.update(copy.deepcopy(properties_to_apply))
             temp_obj.original_bbox = properties_to_clear.get('bbox', temp_obj.bbox)
             if page_num is not None:
                 pdf_handler.rebuild_page(
-                    self.window.doc, page_num,
-                    self.window.editable_texts,
-                    self.window.editable_shapes,
-                    self.window.editable_images,
+                    doc, page_num,
+                    texts, shapes, images,
                     exclude_obj=self.target_object,
-                    all_strokes=strokes
+                    all_strokes=strokes,
+                    all_measurements=measurements,
+                    all_sticky_notes=sticky_notes
                 )
-            success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj)
+            success, msg = pdf_handler.apply_object_edit(doc, temp_obj)
             if success:
                 self.target_object.is_baked = True
                 self.target_object._ghost_redacted = True
@@ -375,14 +438,14 @@ class EditObjectCommand(Command):
             temp_obj.original_bbox = properties_to_clear['bbox']
             if page_num is not None:
                 pdf_handler.rebuild_page(
-                    self.window.doc, page_num,
-                    self.window.editable_texts,
-                    self.window.editable_shapes,
-                    self.window.editable_images,
+                    doc, page_num,
+                    texts, shapes, images,
                     exclude_obj=self.target_object,
-                    all_strokes=strokes
+                    all_strokes=strokes,
+                    all_measurements=measurements,
+                    all_sticky_notes=sticky_notes
                 )
-            success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj)
+            success, msg = pdf_handler.apply_object_edit(doc, temp_obj)
             if success:
                 self.target_object.is_baked = True
                 self.target_object._ghost_redacted = True
@@ -398,15 +461,15 @@ class EditObjectCommand(Command):
         page_num_fallback = getattr(self.target_object, 'page_number', None)
         if page_num_fallback is not None:
             pdf_handler.rebuild_page(
-                self.window.doc, page_num_fallback,
-                self.window.editable_texts,
-                self.window.editable_shapes,
-                self.window.editable_images,
+                doc, page_num_fallback,
+                texts, shapes, images,
                 exclude_obj=self.target_object,
-                all_strokes=strokes
+                all_strokes=strokes,
+                all_measurements=measurements,
+                all_sticky_notes=sticky_notes
             )
         
-        success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj_for_pdf)
+        success, msg = pdf_handler.apply_object_edit(doc, temp_obj_for_pdf)
         if success:
             self.target_object.is_baked = True
             self.target_object._ghost_redacted = True
@@ -421,6 +484,9 @@ class EditObjectCommand(Command):
         self.target_object.__dict__.update(copy.deepcopy(properties_to_apply))
         self.target_object.original_bbox = self.target_object.bbox
         self.target_object.modified = False
+        sess = self._get_target_session()
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
 
     def execute(self):
@@ -428,20 +494,30 @@ class EditObjectCommand(Command):
         if self._apply_properties_to_pdf(self.new_properties, self.old_properties):
             self._update_live_object(self.new_properties)
             page_num = getattr(self.target_object, 'page_number', None)
-            if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
-                self.window._refresh_thumbnail(page_num)
-            self.window.status_label.set_text(_("change_applied"))
-            self.window.pdf_view.queue_draw()
+            if self._is_session_active():
+                if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
+                    self.window._refresh_thumbnail(page_num)
+                self.window.status_label.set_text(_("change_applied"))
+                self.window.pdf_view.queue_draw()
+            elif page_num is not None:
+                doc = self._get_doc()
+                if doc:
+                    pdf_handler.invalidate_page_cache(doc, page_num)
 
     def undo(self):
         """Undo the command."""
         if self._apply_properties_to_pdf(self.old_properties, self.new_properties):
             self._update_live_object(self.old_properties)
             page_num = getattr(self.target_object, 'page_number', None)
-            if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
-                self.window._refresh_thumbnail(page_num)
-            self.window.status_label.set_text(_("reverted"))
-            self.window.pdf_view.queue_draw()
+            if self._is_session_active():
+                if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
+                    self.window._refresh_thumbnail(page_num)
+                self.window.status_label.set_text(_("reverted"))
+                self.window.pdf_view.queue_draw()
+            elif page_num is not None:
+                doc = self._get_doc()
+                if doc:
+                    pdf_handler.invalidate_page_cache(doc, page_num)
 
 class AddObjectCommand(Command):
     """Command for newly added canvas objects."""
@@ -456,70 +532,103 @@ class AddObjectCommand(Command):
     def _refresh_thumb(self):
         """Refresh thumb."""
         page_num = getattr(self.new_object, 'page_number', None)
-        if page_num is not None:
+        if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
             self.window._refresh_thumbnail(page_num)
 
     def execute(self):
         """Execute the command."""
+        doc = self._get_doc()
+        texts = self._get_collection('editable_texts')
+        shapes = self._get_collection('editable_shapes')
+        strokes = self._get_collection('editable_strokes')
+        images = self._get_collection('editable_images')
+        measurements = self._get_collection('measurements')
+        sticky_notes = self._get_collection('sticky_notes')
+
         if self.is_text:
-            if self.new_object not in self.window.editable_texts:
-                self.window.editable_texts.append(self.new_object)
+            if self.new_object not in texts:
+                texts.append(self.new_object)
         elif self.is_shape:
-            if self.new_object not in self.window.editable_shapes:
-                self.window.editable_shapes.append(self.new_object)
+            if self.new_object not in shapes:
+                shapes.append(self.new_object)
         elif self.is_stroke:
-            if not hasattr(self.window, 'editable_strokes'):
-                self.window.editable_strokes = []
-            if self.new_object not in self.window.editable_strokes:
-                self.window.editable_strokes.append(self.new_object)
+            if self.new_object not in strokes:
+                strokes.append(self.new_object)
         else:
-            if self.new_object not in self.window.editable_images:
-                self.window.editable_images.append(self.new_object)
+            if self.new_object not in images:
+                images.append(self.new_object)
                 
         self.new_object.is_baked = True
-        page_num = getattr(self.new_object, 'page_number', self.window.current_page_index)
-        strokes = getattr(self.window, 'editable_strokes', [])
-        if getattr(self.window, 'doc', None) is not None:
+        sess = self._get_target_session()
+        fallback_page = getattr(sess, 'current_page_index', getattr(self.window, 'current_page_index', 0))
+        page_num = getattr(self.new_object, 'page_number', fallback_page)
+        if doc is not None:
             pdf_handler.rebuild_page(
-                self.window.doc, page_num,
-                getattr(self.window, 'editable_texts', []),
-                getattr(self.window, 'editable_shapes', []),
-                getattr(self.window, 'editable_images', []),
-                all_strokes=strokes
+                doc, page_num,
+                texts,
+                shapes,
+                images,
+                all_strokes=strokes,
+                all_measurements=measurements,
+                all_sticky_notes=sticky_notes
             )
-        self._refresh_thumb()
 
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        self.window.status_label.set_text(_("object_added"))
-        self.window._update_ui_state()
-        self.window.pdf_view.queue_draw()
+
+        if self._is_session_active():
+            self._refresh_thumb()
+            self.window.status_label.set_text(_("object_added"))
+            self.window._update_ui_state()
+            self.window.pdf_view.queue_draw()
+        elif doc is not None and page_num is not None:
+            pdf_handler.invalidate_page_cache(doc, page_num)
 
     def undo(self):
         """Undo the command."""
-        if self.is_text and self.new_object in getattr(self.window, 'editable_texts', []):
-            self.window.editable_texts.remove(self.new_object)
-        elif self.is_shape and self.new_object in getattr(self.window, 'editable_shapes', []):
-            self.window.editable_shapes.remove(self.new_object)
-        elif self.is_stroke and hasattr(self.window, 'editable_strokes') and self.new_object in self.window.editable_strokes:
-            self.window.editable_strokes.remove(self.new_object)
-        elif self.is_image and self.new_object in getattr(self.window, 'editable_images', []):
-            self.window.editable_images.remove(self.new_object)
+        doc = self._get_doc()
+        texts = self._get_collection('editable_texts')
+        shapes = self._get_collection('editable_shapes')
+        strokes = self._get_collection('editable_strokes')
+        images = self._get_collection('editable_images')
+        measurements = self._get_collection('measurements')
+        sticky_notes = self._get_collection('sticky_notes')
 
-        page_num = getattr(self.new_object, 'page_number', self.window.current_page_index)
-        strokes = getattr(self.window, 'editable_strokes', [])
-        if getattr(self.window, 'doc', None) is not None:
+        if self.is_text and self.new_object in texts:
+            texts.remove(self.new_object)
+        elif self.is_shape and self.new_object in shapes:
+            shapes.remove(self.new_object)
+        elif self.is_stroke and self.new_object in strokes:
+            strokes.remove(self.new_object)
+        elif self.is_image and self.new_object in images:
+            images.remove(self.new_object)
+
+        sess = self._get_target_session()
+        fallback_page = getattr(sess, 'current_page_index', getattr(self.window, 'current_page_index', 0))
+        page_num = getattr(self.new_object, 'page_number', fallback_page)
+        if doc is not None:
             pdf_handler.rebuild_page(
-                self.window.doc, page_num,
-                getattr(self.window, 'editable_texts', []),
-                getattr(self.window, 'editable_shapes', []),
-                getattr(self.window, 'editable_images', []),
-                all_strokes=strokes
+                doc, page_num,
+                texts,
+                shapes,
+                images,
+                all_strokes=strokes,
+                all_measurements=measurements,
+                all_sticky_notes=sticky_notes
             )
 
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        self.window.status_label.set_text(_("reverted"))
-        self.window._refresh_thumbnail(page_num)
-        self.window.pdf_view.queue_draw()
+
+        if self._is_session_active():
+            self.window.status_label.set_text(_("reverted"))
+            if hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(page_num)
+            self.window.pdf_view.queue_draw()
+        elif doc is not None and page_num is not None:
+            pdf_handler.invalidate_page_cache(doc, page_num)
 
 
 
@@ -534,61 +643,97 @@ class DeleteObjectCommand(Command):
 
     def execute(self):
         """Execute the command."""
-        if self.is_text and self.deleted_object in self.window.editable_texts:
-            self.window.editable_texts.remove(self.deleted_object)
-        elif self.is_shape and self.deleted_object in self.window.editable_shapes:
-            self.window.editable_shapes.remove(self.deleted_object)
-        elif self.is_stroke and hasattr(self.window, 'editable_strokes') and self.deleted_object in self.window.editable_strokes:
-            self.window.editable_strokes.remove(self.deleted_object)
-        elif not self.is_text and not self.is_shape and not self.is_stroke and self.deleted_object in self.window.editable_images:
-            self.window.editable_images.remove(self.deleted_object)
+        doc = self._get_doc()
+        texts = self._get_collection('editable_texts')
+        shapes = self._get_collection('editable_shapes')
+        strokes = self._get_collection('editable_strokes')
+        images = self._get_collection('editable_images')
+        measurements = self._get_collection('measurements')
+        sticky_notes = self._get_collection('sticky_notes')
 
-        page_num = getattr(self.deleted_object, 'page_number', self.window.current_page_index)
+        if self.is_text and self.deleted_object in texts:
+            texts.remove(self.deleted_object)
+        elif self.is_shape and self.deleted_object in shapes:
+            shapes.remove(self.deleted_object)
+        elif self.is_stroke and self.deleted_object in strokes:
+            strokes.remove(self.deleted_object)
+        elif not self.is_text and not self.is_shape and not self.is_stroke and self.deleted_object in images:
+            images.remove(self.deleted_object)
+
+        sess = self._get_target_session()
+        fallback_page = getattr(sess, 'current_page_index', getattr(self.window, 'current_page_index', 0))
+        page_num = getattr(self.deleted_object, 'page_number', fallback_page)
         if page_num is not None:
             self._erase_ghost_if_needed(self.deleted_object, page_num)
             
-        strokes = getattr(self.window, 'editable_strokes', [])
-        pdf_handler.rebuild_page(
-            self.window.doc, page_num,
-            self.window.editable_texts,
-            self.window.editable_shapes,
-            self.window.editable_images,
-            all_strokes=strokes
-        )
+        if doc is not None:
+            pdf_handler.rebuild_page(
+                doc, page_num,
+                texts,
+                shapes,
+                images,
+                all_strokes=strokes,
+                all_measurements=measurements,
+                all_sticky_notes=sticky_notes
+            )
 
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        self.window.status_label.set_text(_("object_deleted"))
-        self.window._refresh_thumbnail(page_num)
-        self.window.pdf_view.queue_draw()
+
+        if self._is_session_active():
+            self.window.status_label.set_text(_("object_deleted"))
+            if hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(page_num)
+            self.window.pdf_view.queue_draw()
+        elif doc is not None and page_num is not None:
+            pdf_handler.invalidate_page_cache(doc, page_num)
 
     def undo(self):
         """Undo the command."""
-        if self.is_text and self.deleted_object not in self.window.editable_texts:
-            self.window.editable_texts.append(self.deleted_object)
-        elif self.is_shape and self.deleted_object not in self.window.editable_shapes:
-            self.window.editable_shapes.append(self.deleted_object)
+        doc = self._get_doc()
+        texts = self._get_collection('editable_texts')
+        shapes = self._get_collection('editable_shapes')
+        strokes = self._get_collection('editable_strokes')
+        images = self._get_collection('editable_images')
+        measurements = self._get_collection('measurements')
+        sticky_notes = self._get_collection('sticky_notes')
+
+        if self.is_text and self.deleted_object not in texts:
+            texts.append(self.deleted_object)
+        elif self.is_shape and self.deleted_object not in shapes:
+            shapes.append(self.deleted_object)
         elif self.is_stroke:
-            if not hasattr(self.window, 'editable_strokes'):
-                self.window.editable_strokes = []
-            if self.deleted_object not in self.window.editable_strokes:
-                self.window.editable_strokes.append(self.deleted_object)
-        elif not self.is_text and not self.is_shape and not self.is_stroke and self.deleted_object not in self.window.editable_images:
-            self.window.editable_images.append(self.deleted_object)
+            if self.deleted_object not in strokes:
+                strokes.append(self.deleted_object)
+        elif not self.is_text and not self.is_shape and not self.is_stroke and self.deleted_object not in images:
+            images.append(self.deleted_object)
 
-        page_num = getattr(self.deleted_object, 'page_number', self.window.current_page_index)
-        strokes = getattr(self.window, 'editable_strokes', [])
-        pdf_handler.rebuild_page(
-            self.window.doc, page_num,
-            self.window.editable_texts,
-            self.window.editable_shapes,
-            self.window.editable_images,
-            all_strokes=strokes
-        )
+        sess = self._get_target_session()
+        fallback_page = getattr(sess, 'current_page_index', getattr(self.window, 'current_page_index', 0))
+        page_num = getattr(self.deleted_object, 'page_number', fallback_page)
+        if doc is not None:
+            pdf_handler.rebuild_page(
+                doc, page_num,
+                texts,
+                shapes,
+                images,
+                all_strokes=strokes,
+                all_measurements=measurements,
+                all_sticky_notes=sticky_notes
+            )
 
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        self.window.status_label.set_text(_("delete_reverted"))
-        self.window._refresh_thumbnail(page_num)
-        self.window.pdf_view.queue_draw()
+
+        if self._is_session_active():
+            self.window.status_label.set_text(_("delete_reverted"))
+            if hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(page_num)
+            self.window.pdf_view.queue_draw()
+        elif doc is not None and page_num is not None:
+            pdf_handler.invalidate_page_cache(doc, page_num)
 
 class CompositeCommand(Command):
     """Composite command executing multiple atomic actions in a single undo step."""
@@ -615,38 +760,54 @@ class RotatePageCommand(Command):
 
     def execute(self):
         """Rotate page by angle_delta degrees and update display."""
-        success, _res = pdf_handler.rotate_page(self.window.doc, self.page_index, self.angle_delta)
+        doc = self._get_doc()
+        if not doc:
+            return
+        success, _res = pdf_handler.rotate_page(doc, self.page_index, self.angle_delta)
         if success:
             self._apply_rotation_ui()
 
     def undo(self):
         """Revert page rotation by -angle_delta degrees and update display."""
-        success, _res = pdf_handler.rotate_page(self.window.doc, self.page_index, -self.angle_delta)
+        doc = self._get_doc()
+        if not doc:
+            return
+        success, _res = pdf_handler.rotate_page(doc, self.page_index, -self.angle_delta)
         if success:
             self._apply_rotation_ui()
 
     def _apply_rotation_ui(self):
+        sess = self._get_target_session()
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        if hasattr(self.window, '_refresh_thumbnail'):
-            self.window._refresh_thumbnail(self.page_index)
-        if hasattr(self.window, 'current_page_index') and self.window.current_page_index == self.page_index:
-            try:
-                page = self.window.doc.load_page(self.page_index)
-                zoom = getattr(self.window, 'zoom_level', 1.0)
-                self.window.current_pdf_page_width = int(page.rect.width * zoom)
-                self.window.current_pdf_page_height = int(page.rect.height * zoom)
+        if self._is_session_active():
+            if hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(self.page_index)
+            if hasattr(self.window, 'current_page_index') and self.window.current_page_index == self.page_index:
+                try:
+                    doc = self._get_doc()
+                    page = doc.load_page(self.page_index) if doc else None
+                    if page:
+                        zoom = getattr(self.window, 'zoom_level', 1.0)
+                        self.window.current_pdf_page_width = int(page.rect.width * zoom)
+                        self.window.current_pdf_page_height = int(page.rect.height * zoom)
+                        if hasattr(self.window, 'pdf_view'):
+                            self.window.pdf_view.set_content_width(self.window.current_pdf_page_width)
+                            self.window.pdf_view.set_content_height(self.window.current_pdf_page_height)
+                except Exception as e:
+                    print(f"Warning updating page dimensions on rotation: {e}")
+                if hasattr(self.window, '_update_rotation_controls'):
+                    selected_obj = getattr(self.window, 'get_selected_object', lambda: None)()
+                    self.window._update_rotation_controls(selected_obj)
                 if hasattr(self.window, 'pdf_view'):
-                    self.window.pdf_view.set_content_width(self.window.current_pdf_page_width)
-                    self.window.pdf_view.set_content_height(self.window.current_pdf_page_height)
-            except Exception as e:
-                print(f"Warning updating page dimensions on rotation: {e}")
-            if hasattr(self.window, '_update_rotation_controls'):
-                selected_obj = getattr(self.window, 'get_selected_object', lambda: None)()
-                self.window._update_rotation_controls(selected_obj)
-            if hasattr(self.window, 'pdf_view'):
-                self.window.pdf_view.queue_draw()
-            if hasattr(self.window, '_update_ui_state'):
-                self.window._update_ui_state()
+                    self.window.pdf_view.queue_draw()
+                if hasattr(self.window, '_update_ui_state'):
+                    self.window._update_ui_state()
+        else:
+            doc = self._get_doc()
+            if doc:
+                pdf_handler.invalidate_page_cache(doc, self.page_index)
 
 class RotateObjectCommand(Command):
     """Command to rotate an object (text, image, shape, stroke) with full undo/redo."""
@@ -659,7 +820,8 @@ class RotateObjectCommand(Command):
     def _apply_rotation(self, to_angle: float, from_angle: float):
         """Bake the rotation into the PDF page and update live object and UI."""
         page_num = getattr(self.target_object, 'page_number', None)
-        if page_num is not None and getattr(self.window, 'doc', None):
+        doc = self._get_doc()
+        if page_num is not None and doc:
             orig_rot = from_angle
             orig_bbox = getattr(self.target_object, 'original_bbox', getattr(self.target_object, 'bbox', None))
             props_to_clear = {'rotation': orig_rot, 'bbox': orig_bbox}
@@ -671,20 +833,28 @@ class RotateObjectCommand(Command):
             else:
                 temp_obj.rotation = float(to_angle) % 360.0
 
-            strokes = getattr(self.window, 'editable_strokes', [])
+            texts = self._get_collection('editable_texts')
+            shapes = self._get_collection('editable_shapes')
+            images = self._get_collection('editable_images')
+            strokes = self._get_collection('editable_strokes')
+            measurements = self._get_collection('measurements')
+            sticky_notes = self._get_collection('sticky_notes')
+
             pdf_handler.rebuild_page(
-                self.window.doc, page_num,
-                getattr(self.window, 'editable_texts', []),
-                getattr(self.window, 'editable_shapes', []),
-                getattr(self.window, 'editable_images', []),
+                doc, page_num,
+                texts,
+                shapes,
+                images,
                 exclude_obj=self.target_object,
-                all_strokes=strokes
+                all_strokes=strokes,
+                all_measurements=measurements,
+                all_sticky_notes=sticky_notes
             )
-            success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj)
+            success, msg = pdf_handler.apply_object_edit(doc, temp_obj)
             if success:
                 self.target_object.is_baked = True
                 self.target_object._ghost_redacted = True
-                if hasattr(self.window, '_refresh_thumbnail'):
+                if self._is_session_active() and hasattr(self.window, '_refresh_thumbnail'):
                     self.window._refresh_thumbnail(page_num)
             else:
                 from .ui_components import show_error_dialog
@@ -695,29 +865,36 @@ class RotateObjectCommand(Command):
         else:
             self.target_object.rotation = float(to_angle) % 360.0
 
+        sess = self._get_target_session()
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        if getattr(self.window, 'selected_text', None) == self.target_object:
-            self.window.pending_format_change_obj = self.target_object
-            self.window.before_format_change_state = copy.deepcopy(self.target_object.__dict__)
-            if hasattr(self.window, '_update_text_format_controls'):
-                self.window._update_text_format_controls(self.target_object)
-        if hasattr(self.window, '_update_rotation_controls'):
-            self.window._update_rotation_controls(self.target_object)
-        if hasattr(self.window, '_update_ui_state'):
-            self.window._update_ui_state()
-        if hasattr(self.window, 'pdf_view'):
-            self.window.pdf_view.queue_draw()
+
+        if self._is_session_active():
+            if getattr(self.window, 'selected_text', None) == self.target_object:
+                self.window.pending_format_change_obj = self.target_object
+                self.window.before_format_change_state = copy.deepcopy(self.target_object.__dict__)
+                if hasattr(self.window, '_update_text_format_controls'):
+                    self.window._update_text_format_controls(self.target_object)
+            if hasattr(self.window, '_update_rotation_controls'):
+                self.window._update_rotation_controls(self.target_object)
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+            if hasattr(self.window, 'pdf_view'):
+                self.window.pdf_view.queue_draw()
+        elif doc is not None and page_num is not None:
+            pdf_handler.invalidate_page_cache(doc, page_num)
 
     def execute(self):
         """Apply new rotation angle."""
         self._apply_rotation(self.new_rotation, self.old_rotation)
-        if hasattr(self.window, 'status_label') and self.window.status_label:
+        if self._is_session_active() and hasattr(self.window, 'status_label') and self.window.status_label:
             self.window.status_label.set_text(_("status_object_rotation", f"{self.new_rotation:.1f}°"))
 
     def undo(self):
         """Revert back to old rotation angle."""
         self._apply_rotation(self.old_rotation, self.new_rotation)
-        if hasattr(self.window, 'status_label') and self.window.status_label:
+        if self._is_session_active() and hasattr(self.window, 'status_label') and self.window.status_label:
             self.window.status_label.set_text(_("status_object_rotation", f"{self.old_rotation:.1f}°"))
 
 
@@ -735,25 +912,34 @@ class ReplaceImageCommand(Command):
 
     def execute(self):
         """Execute the image replacement on the PDF page."""
+        doc = self._get_doc()
+        if not doc:
+            return False
         self.target_image.raw_image_bytes = self.new_raw_bytes
         success, err, new_xref = pdf_handler.replace_image_on_page(
-            self.window.doc,
+            doc,
             self.target_image,
             self.new_raw_bytes
         )
         if success:
             self.new_image_bytes = self.target_image.image_bytes
             self.new_xref = new_xref
+            sess = self._get_target_session()
+            if sess is not None:
+                sess.document_modified = True
             self.window.document_modified = True
             page_num = getattr(self.target_image, 'page_number', None)
-            if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
-                self.window._refresh_thumbnail(page_num)
-            if hasattr(self.window, 'status_label') and self.window.status_label:
-                self.window.status_label.set_text(_("change_applied"))
-            if hasattr(self.window, 'pdf_view'):
-                self.window.pdf_view.queue_draw()
-            if hasattr(self.window, '_update_ui_state'):
-                self.window._update_ui_state()
+            if self._is_session_active():
+                if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
+                    self.window._refresh_thumbnail(page_num)
+                if hasattr(self.window, 'status_label') and self.window.status_label:
+                    self.window.status_label.set_text(_("change_applied"))
+                if hasattr(self.window, 'pdf_view'):
+                    self.window.pdf_view.queue_draw()
+                if hasattr(self.window, '_update_ui_state'):
+                    self.window._update_ui_state()
+            elif page_num is not None:
+                pdf_handler.invalidate_page_cache(doc, page_num)
             return True
         else:
             from .ui_components import show_error_dialog
@@ -762,25 +948,34 @@ class ReplaceImageCommand(Command):
 
     def undo(self):
         """Revert the image replacement to the original image bytes."""
+        doc = self._get_doc()
+        if not doc:
+            return False
         self.target_image.raw_image_bytes = self.old_raw_bytes
         success, err, reverted_xref = pdf_handler.replace_image_on_page(
-            self.window.doc,
+            doc,
             self.target_image,
             self.old_image_bytes
         )
         if success:
             if self.old_xref:
                 self.target_image.xref = self.old_xref
+            sess = self._get_target_session()
+            if sess is not None:
+                sess.document_modified = True
             self.window.document_modified = True
             page_num = getattr(self.target_image, 'page_number', None)
-            if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
-                self.window._refresh_thumbnail(page_num)
-            if hasattr(self.window, 'status_label') and self.window.status_label:
-                self.window.status_label.set_text(_("reverted"))
-            if hasattr(self.window, 'pdf_view'):
-                self.window.pdf_view.queue_draw()
-            if hasattr(self.window, '_update_ui_state'):
-                self.window._update_ui_state()
+            if self._is_session_active():
+                if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
+                    self.window._refresh_thumbnail(page_num)
+                if hasattr(self.window, 'status_label') and self.window.status_label:
+                    self.window.status_label.set_text(_("reverted"))
+                if hasattr(self.window, 'pdf_view'):
+                    self.window.pdf_view.queue_draw()
+                if hasattr(self.window, '_update_ui_state'):
+                    self.window._update_ui_state()
+            elif page_num is not None:
+                pdf_handler.invalidate_page_cache(doc, page_num)
             return True
         else:
             from .ui_components import show_error_dialog
@@ -804,20 +999,27 @@ class EditFormFieldCommand(Command):
 
     def _apply_val(self, val):
         self.target_field.set_value(val)
-        if getattr(self.window, 'doc', None):
+        doc = self._get_doc()
+        if doc:
             pdf_handler.update_acroform_field_value(
-                self.window.doc,
+                doc,
                 self.target_field.page_number,
                 self.target_field.xref,
                 val
             )
+        sess = self._get_target_session()
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        if hasattr(self.window, '_refresh_form_field_widget_value'):
-            self.window._refresh_form_field_widget_value(self.target_field)
-        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
-            self.window.pdf_view.queue_draw()
-        if hasattr(self.window, '_update_ui_state'):
-            self.window._update_ui_state()
+        if self._is_session_active():
+            if hasattr(self.window, '_refresh_form_field_widget_value'):
+                self.window._refresh_form_field_widget_value(self.target_field)
+            if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+        elif doc is not None and getattr(self.target_field, 'page_number', None) is not None:
+            pdf_handler.invalidate_page_cache(doc, self.target_field.page_number)
 
 
 class AddFormFieldCommand(Command):
@@ -836,10 +1038,11 @@ class AddFormFieldCommand(Command):
         self.created_xref = None
 
     def execute(self):
-        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+        doc = self._get_doc()
+        if not doc or getattr(doc, 'is_closed', False):
             return
         w = pdf_handler.add_form_widget(
-            self.window.doc,
+            doc,
             self.page_number,
             self.field_type,
             self.rect,
@@ -853,10 +1056,11 @@ class AddFormFieldCommand(Command):
         self._refresh()
 
     def undo(self):
-        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+        doc = self._get_doc()
+        if not doc or getattr(doc, 'is_closed', False):
             return
         pdf_handler.delete_form_widget(
-            self.window.doc,
+            doc,
             self.created_xref or self.field_name,
             page_index=self.page_number
         )
@@ -868,20 +1072,27 @@ class AddFormFieldCommand(Command):
         self._refresh()
 
     def _refresh(self):
+        sess = self._get_target_session()
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        if hasattr(self.window, '_load_acroform_fields_for_page'):
-            self.window._load_acroform_fields_for_page(self.page_number)
-        else:
-            fields, _ = pdf_handler.extract_acroform_fields(self.window.doc, page_index=self.window.current_page_index)
-            self.window.form_fields = fields
-            if hasattr(self.window, '_create_form_field_overlays'):
-                self.window._create_form_field_overlays()
-        if hasattr(self.window, '_refresh_thumbnail'):
-            self.window._refresh_thumbnail(self.page_number)
-        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
-            self.window.pdf_view.queue_draw()
-        if hasattr(self.window, '_update_ui_state'):
-            self.window._update_ui_state()
+        doc = self._get_doc()
+        if self._is_session_active():
+            if hasattr(self.window, '_load_acroform_fields_for_page'):
+                self.window._load_acroform_fields_for_page(self.page_number)
+            elif doc:
+                fields, _ = pdf_handler.extract_acroform_fields(doc, page_index=self.window.current_page_index)
+                self.window.form_fields = fields
+                if hasattr(self.window, '_create_form_field_overlays'):
+                    self.window._create_form_field_overlays()
+            if hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(self.page_number)
+            if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+        elif doc is not None and self.page_number is not None:
+            pdf_handler.invalidate_page_cache(doc, self.page_number)
 
 
 class DeleteFormFieldCommand(Command):
@@ -898,10 +1109,11 @@ class DeleteFormFieldCommand(Command):
         self.xref = getattr(target_field, 'xref', None)
 
     def execute(self):
-        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+        doc = self._get_doc()
+        if not doc or getattr(doc, 'is_closed', False):
             return
         pdf_handler.delete_form_widget(
-            self.window.doc,
+            doc,
             self.xref or self.field_name,
             page_index=self.page_number
         )
@@ -913,10 +1125,11 @@ class DeleteFormFieldCommand(Command):
         self._refresh()
 
     def undo(self):
-        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+        doc = self._get_doc()
+        if not doc or getattr(doc, 'is_closed', False):
             return
         w = pdf_handler.add_form_widget(
-            self.window.doc,
+            doc,
             self.page_number,
             self.field_type,
             self.rect,
@@ -930,20 +1143,27 @@ class DeleteFormFieldCommand(Command):
         self._refresh()
 
     def _refresh(self):
+        sess = self._get_target_session()
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        if hasattr(self.window, '_load_acroform_fields_for_page'):
-            self.window._load_acroform_fields_for_page(self.page_number)
-        else:
-            fields, _ = pdf_handler.extract_acroform_fields(self.window.doc, page_index=self.window.current_page_index)
-            self.window.form_fields = fields
-            if hasattr(self.window, '_create_form_field_overlays'):
-                self.window._create_form_field_overlays()
-        if hasattr(self.window, '_refresh_thumbnail'):
-            self.window._refresh_thumbnail(self.page_number)
-        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
-            self.window.pdf_view.queue_draw()
-        if hasattr(self.window, '_update_ui_state'):
-            self.window._update_ui_state()
+        doc = self._get_doc()
+        if self._is_session_active():
+            if hasattr(self.window, '_load_acroform_fields_for_page'):
+                self.window._load_acroform_fields_for_page(self.page_number)
+            elif doc:
+                fields, _ = pdf_handler.extract_acroform_fields(doc, page_index=self.window.current_page_index)
+                self.window.form_fields = fields
+                if hasattr(self.window, '_create_form_field_overlays'):
+                    self.window._create_form_field_overlays()
+            if hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(self.page_number)
+            if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+        elif doc is not None and self.page_number is not None:
+            pdf_handler.invalidate_page_cache(doc, self.page_number)
 
 
 class MoveResizeFormFieldCommand(Command):
@@ -964,26 +1184,33 @@ class MoveResizeFormFieldCommand(Command):
         self._apply_rect(self.old_rect)
 
     def _apply_rect(self, rect: tuple):
-        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+        doc = self._get_doc()
+        if not doc or getattr(doc, 'is_closed', False):
             return
         self.target_field.rect = rect
         pdf_handler.update_form_widget_geometry(
-            self.window.doc,
+            doc,
             self.xref or self.field_name,
             rect,
             page_index=self.page_number
         )
+        sess = self._get_target_session()
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        if hasattr(self.window, '_update_tab_dirty_state'):
-            self.window._update_tab_dirty_state()
-        if hasattr(self.window, '_update_form_field_overlay_positions'):
-            self.window._update_form_field_overlay_positions()
-        if hasattr(self.window, '_refresh_thumbnail'):
-            self.window._refresh_thumbnail(self.page_number)
-        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
-            self.window.pdf_view.queue_draw()
-        if hasattr(self.window, '_update_ui_state'):
-            self.window._update_ui_state()
+        if self._is_session_active():
+            if hasattr(self.window, '_update_tab_dirty_state'):
+                self.window._update_tab_dirty_state()
+            if hasattr(self.window, '_update_form_field_overlay_positions'):
+                self.window._update_form_field_overlay_positions()
+            if hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(self.page_number)
+            if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+        elif doc is not None and self.page_number is not None:
+            pdf_handler.invalidate_page_cache(doc, self.page_number)
 
 
 class EditFormFieldChoicesCommand(Command):
@@ -1004,35 +1231,42 @@ class EditFormFieldChoicesCommand(Command):
         self._apply_choices(self.old_choices)
 
     def _apply_choices(self, choices: list):
-        if not getattr(self.window, 'doc', None) or getattr(self.window.doc, 'is_closed', False):
+        doc = self._get_doc()
+        if not doc or getattr(doc, 'is_closed', False):
             return
         self.target_field.choice_values = list(choices)
         if getattr(self.target_field, 'value', '') not in choices and choices:
             self.target_field.value = choices[0]
         pdf_handler.update_form_widget_choices(
-            self.window.doc,
+            doc,
             self.xref or self.field_name,
             choices,
             page_index=self.page_number
         )
+        sess = self._get_target_session()
+        if sess is not None:
+            sess.document_modified = True
         self.window.document_modified = True
-        if hasattr(self.window, '_update_tab_dirty_state'):
-            self.window._update_tab_dirty_state()
-        if hasattr(self.window, '_form_field_overlay_widgets'):
-            ed = self.window._form_field_overlay_widgets.get(getattr(self.target_field, 'field_id', None))
-            if ed and isinstance(ed.get("widget"), Gtk.DropDown):
-                dd = ed["widget"]
-                dd.set_model(Gtk.StringList.new(choices))
-                ed["display_items"] = list(choices)
-                ed["export_items"] = list(choices)
-                if dd.get_selected() >= len(choices):
-                    dd.set_selected(0)
-        if hasattr(self.window, '_update_form_builder_controls_for_selected'):
-            self.window._update_form_builder_controls_for_selected()
-        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
-            self.window.pdf_view.queue_draw()
-        if hasattr(self.window, '_update_ui_state'):
-            self.window._update_ui_state()
+        if self._is_session_active():
+            if hasattr(self.window, '_update_tab_dirty_state'):
+                self.window._update_tab_dirty_state()
+            if hasattr(self.window, '_form_field_overlay_widgets'):
+                ed = self.window._form_field_overlay_widgets.get(getattr(self.target_field, 'field_id', None))
+                if ed and isinstance(ed.get("widget"), Gtk.DropDown):
+                    dd = ed["widget"]
+                    dd.set_model(Gtk.StringList.new(choices))
+                    ed["display_items"] = list(choices)
+                    ed["export_items"] = list(choices)
+                    if dd.get_selected() >= len(choices):
+                        dd.set_selected(0)
+            if hasattr(self.window, '_update_form_builder_controls_for_selected'):
+                self.window._update_form_builder_controls_for_selected()
+            if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+        elif doc is not None and self.page_number is not None:
+            pdf_handler.invalidate_page_cache(doc, self.page_number)
 
 
 class CalibrateScaleCommand(Command):
@@ -1092,10 +1326,18 @@ class AddStickyNoteCommand(Command):
         self.note = note
 
     def execute(self):
-        self.window._add_sticky_note_to_session(self.note)
+        sess = self._get_target_session()
+        try:
+            self.window._add_sticky_note_to_session(self.note, session=sess)
+        except TypeError:
+            self.window._add_sticky_note_to_session(self.note)
 
     def undo(self):
-        self.window._remove_sticky_note_from_session(self.note)
+        sess = self._get_target_session()
+        try:
+            self.window._remove_sticky_note_from_session(self.note, session=sess)
+        except TypeError:
+            self.window._remove_sticky_note_from_session(self.note)
 
 
 class DeleteStickyNoteCommand(Command):
@@ -1105,10 +1347,18 @@ class DeleteStickyNoteCommand(Command):
         self.note = note
 
     def execute(self):
-        self.window._remove_sticky_note_from_session(self.note)
+        sess = self._get_target_session()
+        try:
+            self.window._remove_sticky_note_from_session(self.note, session=sess)
+        except TypeError:
+            self.window._remove_sticky_note_from_session(self.note)
 
     def undo(self):
-        self.window._add_sticky_note_to_session(self.note)
+        sess = self._get_target_session()
+        try:
+            self.window._add_sticky_note_to_session(self.note, session=sess)
+        except TypeError:
+            self.window._add_sticky_note_to_session(self.note)
 
 
 class EditStickyNoteCommand(Command):
@@ -1120,10 +1370,18 @@ class EditStickyNoteCommand(Command):
         self.new_state = dict(new_state)
 
     def execute(self):
-        self.window._apply_sticky_note_state(self.note, self.new_state)
+        sess = self._get_target_session()
+        try:
+            self.window._apply_sticky_note_state(self.note, self.new_state, session=sess)
+        except TypeError:
+            self.window._apply_sticky_note_state(self.note, self.new_state)
 
     def undo(self):
-        self.window._apply_sticky_note_state(self.note, self.old_state)
+        sess = self._get_target_session()
+        try:
+            self.window._apply_sticky_note_state(self.note, self.old_state, session=sess)
+        except TypeError:
+            self.window._apply_sticky_note_state(self.note, self.old_state)
 
 
 class MoveStickyNoteCommand(Command):
@@ -1135,10 +1393,18 @@ class MoveStickyNoteCommand(Command):
         self.new_pos = tuple(new_pos)
 
     def execute(self):
-        self.window._set_sticky_note_pos(self.note, self.new_pos[0], self.new_pos[1])
+        sess = self._get_target_session()
+        try:
+            self.window._set_sticky_note_pos(self.note, self.new_pos[0], self.new_pos[1], session=sess)
+        except TypeError:
+            self.window._set_sticky_note_pos(self.note, self.new_pos[0], self.new_pos[1])
 
     def undo(self):
-        self.window._set_sticky_note_pos(self.note, self.old_pos[0], self.old_pos[1])
+        sess = self._get_target_session()
+        try:
+            self.window._set_sticky_note_pos(self.note, self.old_pos[0], self.old_pos[1], session=sess)
+        except TypeError:
+            self.window._set_sticky_note_pos(self.note, self.old_pos[0], self.old_pos[1])
 
 
 class FlattenCommand(Command):
@@ -1149,14 +1415,16 @@ class FlattenCommand(Command):
         self.include_forms = include_forms
 
         # Snapshot full state before flattening
-        self.pre_pdf_bytes = self.window.doc.tobytes() if getattr(self.window, 'doc', None) else None
-        self.pre_editable_strokes = copy.deepcopy(getattr(self.window, 'editable_strokes', []))
-        self.pre_editable_shapes = copy.deepcopy(getattr(self.window, 'editable_shapes', []))
-        self.pre_measurement_objects = copy.deepcopy(getattr(self.window, 'measurement_objects', []))
-        self.pre_editable_texts = copy.deepcopy(getattr(self.window, 'editable_texts', []))
-        self.pre_editable_images = copy.deepcopy(getattr(self.window, 'editable_images', []))
-        self.pre_form_fields = copy.deepcopy(getattr(self.window, 'form_fields', []))
-        self.pre_document_modified = getattr(self.window, 'document_modified', False)
+        doc = self._get_doc()
+        self.pre_pdf_bytes = doc.tobytes() if doc else None
+        self.pre_editable_strokes = copy.deepcopy(self._get_collection('editable_strokes'))
+        self.pre_editable_shapes = copy.deepcopy(self._get_collection('editable_shapes'))
+        self.pre_measurement_objects = copy.deepcopy(self._get_collection('measurement_objects'))
+        self.pre_editable_texts = copy.deepcopy(self._get_collection('editable_texts'))
+        self.pre_editable_images = copy.deepcopy(self._get_collection('editable_images'))
+        self.pre_form_fields = copy.deepcopy(self._get_collection('form_fields'))
+        sess = self._get_target_session()
+        self.pre_document_modified = getattr(sess, 'document_modified', getattr(self.window, 'document_modified', False))
 
     def execute(self):
         """Execute flattening on targeted pages."""
@@ -1164,99 +1432,109 @@ class FlattenCommand(Command):
         session_objects_by_page = {}
         for p in self.page_indices:
             objs = []
-            for stroke in getattr(self.window, 'editable_strokes', []):
+            for stroke in self._get_collection('editable_strokes'):
                 if getattr(stroke, 'page_number', None) == p:
                     objs.append(stroke)
-            for shape in getattr(self.window, 'editable_shapes', []):
+            for shape in self._get_collection('editable_shapes'):
                 if getattr(shape, 'page_number', None) == p:
                     objs.append(shape)
-            for m in getattr(self.window, 'measurement_objects', []):
+            for m in self._get_collection('measurement_objects'):
                 if getattr(m, 'page_number', None) == p:
                     objs.append(m)
-            for t in getattr(self.window, 'editable_texts', []):
+            for t in self._get_collection('editable_texts'):
                 if getattr(t, 'page_number', None) == p:
                     objs.append(t)
-            for img in getattr(self.window, 'editable_images', []):
+            for img in self._get_collection('editable_images'):
                 if getattr(img, 'page_number', None) == p:
                     objs.append(img)
             if objs:
                 session_objects_by_page[p] = objs
 
         # Call backend flattening in pdf_handler
-        if getattr(self.window, 'doc', None):
+        doc = self._get_doc()
+        if doc:
             pdf_handler.flatten_document_annotations(
-                self.window.doc,
+                doc,
                 self.page_indices,
                 include_forms=self.include_forms,
                 session_objects_by_page=session_objects_by_page
             )
 
-        # Reload page in editor if current page was flattened, or clear in-memory lists
-        if hasattr(self.window, 'load_page') and getattr(self.window, 'current_page_index', None) in self.page_indices:
-            self.window.load_page(self.window.current_page_index, reload_objects=True)
-        else:
-            if hasattr(self.window, 'editable_strokes'):
-                self.window.editable_strokes = [s for s in self.window.editable_strokes if getattr(s, 'page_number', None) not in self.page_indices]
-            if hasattr(self.window, 'editable_shapes'):
-                self.window.editable_shapes = [s for s in self.window.editable_shapes if getattr(s, 'page_number', None) not in self.page_indices]
-            if hasattr(self.window, 'measurement_objects'):
-                self.window.measurement_objects = [m for m in self.window.measurement_objects if getattr(m, 'page_number', None) not in self.page_indices]
-            if hasattr(self.window, 'editable_texts'):
-                self.window.editable_texts = [t for t in self.window.editable_texts if getattr(t, 'page_number', None) not in self.page_indices]
-            if hasattr(self.window, 'editable_images'):
-                self.window.editable_images = [img for img in self.window.editable_images if getattr(img, 'page_number', None) not in self.page_indices]
-            if self.include_forms and hasattr(self.window, 'form_fields'):
-                self.window.form_fields = [f for f in self.window.form_fields if getattr(f, 'page_number', None) not in self.page_indices]
+        sess = self._get_target_session()
+        targets = [sess, self.window] if sess else [self.window]
+        for target in targets:
+            if hasattr(target, 'editable_strokes') and getattr(target, 'editable_strokes') is not None:
+                target.editable_strokes = [s for s in target.editable_strokes if getattr(s, 'page_number', None) not in self.page_indices]
+            if hasattr(target, 'editable_shapes') and getattr(target, 'editable_shapes') is not None:
+                target.editable_shapes = [s for s in target.editable_shapes if getattr(s, 'page_number', None) not in self.page_indices]
+            if hasattr(target, 'measurement_objects') and getattr(target, 'measurement_objects') is not None:
+                target.measurement_objects = [m for m in target.measurement_objects if getattr(m, 'page_number', None) not in self.page_indices]
+            if hasattr(target, 'editable_texts') and getattr(target, 'editable_texts') is not None:
+                target.editable_texts = [t for t in target.editable_texts if getattr(t, 'page_number', None) not in self.page_indices]
+            if hasattr(target, 'editable_images') and getattr(target, 'editable_images') is not None:
+                target.editable_images = [img for img in target.editable_images if getattr(img, 'page_number', None) not in self.page_indices]
+            if self.include_forms and hasattr(target, 'form_fields') and getattr(target, 'form_fields') is not None:
+                target.form_fields = [f for f in target.form_fields if getattr(f, 'page_number', None) not in self.page_indices]
 
-        # Clear active selection if the selected object was on one of the flattened pages
-        sel = getattr(self.window, 'get_selected_object', lambda: None)()
-        if sel and getattr(sel, 'page_number', None) in self.page_indices:
-            if hasattr(self.window, 'clear_selection'):
-                self.window.clear_selection()
-
+        if sess:
+            sess.document_modified = True
         self.window.document_modified = True
-        if hasattr(self.window, '_refresh_thumbnail'):
-            for p in self.page_indices:
-                self.window._refresh_thumbnail(p)
-        if hasattr(self.window, 'refresh_annotations_list'):
-            self.window.refresh_annotations_list()
-        if hasattr(self.window, 'status_label') and self.window.status_label:
-            self.window.status_label.set_text(_("status_flatten_done").format(len(self.page_indices)))
-        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
-            self.window.pdf_view.queue_draw()
+
+        if self._is_session_active():
+            if hasattr(self.window, 'load_page') and getattr(self.window, 'current_page_index', None) in self.page_indices:
+                self.window.load_page(self.window.current_page_index, reload_objects=True)
+            # Clear active selection if the selected object was on one of the flattened pages
+            sel = getattr(self.window, 'get_selected_object', lambda: None)()
+            if sel and getattr(sel, 'page_number', None) in self.page_indices:
+                if hasattr(self.window, 'clear_selection'):
+                    self.window.clear_selection()
+            if hasattr(self.window, '_refresh_thumbnail'):
+                for p in self.page_indices:
+                    self.window._refresh_thumbnail(p)
+            if hasattr(self.window, 'refresh_annotations_list'):
+                self.window.refresh_annotations_list()
+            if hasattr(self.window, 'status_label') and self.window.status_label:
+                self.window.status_label.set_text(_("status_flatten_done").format(len(self.page_indices)))
+            if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()
 
     def undo(self):
         """Revert flattening by restoring exact pre-flatten document state and objects."""
-        if self.pre_pdf_bytes and getattr(self.window, 'doc', None):
+        doc = self._get_doc()
+        if self.pre_pdf_bytes and doc:
             restore_doc = fitz.open(stream=self.pre_pdf_bytes, filetype="pdf")
-            for i in range(self.window.doc.page_count - 1, -1, -1):
-                self.window.doc.delete_page(i)
-            self.window.doc.insert_pdf(restore_doc)
-            pdf_handler.invalidate_page_cache(self.window.doc)
+            for i in range(doc.page_count - 1, -1, -1):
+                doc.delete_page(i)
+            doc.insert_pdf(restore_doc)
+            pdf_handler.invalidate_page_cache(doc)
 
-        if hasattr(self.window, 'load_page') and getattr(self.window, 'current_page_index', None) in self.page_indices:
-            self.window.load_page(self.window.current_page_index, reload_objects=True)
-        else:
-            if hasattr(self.window, 'editable_strokes'):
-                self.window.editable_strokes = copy.deepcopy(self.pre_editable_strokes)
-            if hasattr(self.window, 'editable_shapes'):
-                self.window.editable_shapes = copy.deepcopy(self.pre_editable_shapes)
-            if hasattr(self.window, 'measurement_objects'):
-                self.window.measurement_objects = copy.deepcopy(self.pre_measurement_objects)
-            if hasattr(self.window, 'editable_texts'):
-                self.window.editable_texts = copy.deepcopy(self.pre_editable_texts)
-            if hasattr(self.window, 'editable_images'):
-                self.window.editable_images = copy.deepcopy(self.pre_editable_images)
-            if hasattr(self.window, 'form_fields'):
-                self.window.form_fields = copy.deepcopy(self.pre_form_fields)
-        self.window.document_modified = self.pre_document_modified
+        sess = self._get_target_session()
+        targets = [sess, self.window] if sess else [self.window]
+        for target in targets:
+            if hasattr(target, 'editable_strokes'):
+                target.editable_strokes = copy.deepcopy(self.pre_editable_strokes)
+            if hasattr(target, 'editable_shapes'):
+                target.editable_shapes = copy.deepcopy(self.pre_editable_shapes)
+            if hasattr(target, 'measurement_objects'):
+                target.measurement_objects = copy.deepcopy(self.pre_measurement_objects)
+            if hasattr(target, 'editable_texts'):
+                target.editable_texts = copy.deepcopy(self.pre_editable_texts)
+            if hasattr(target, 'editable_images'):
+                target.editable_images = copy.deepcopy(self.pre_editable_images)
+            if hasattr(target, 'form_fields'):
+                target.form_fields = copy.deepcopy(self.pre_form_fields)
+            if hasattr(target, 'document_modified'):
+                target.document_modified = self.pre_document_modified
 
-        if hasattr(self.window, '_refresh_thumbnail'):
-            for p in self.page_indices:
-                self.window._refresh_thumbnail(p)
-        if hasattr(self.window, 'refresh_annotations_list'):
-            self.window.refresh_annotations_list()
-        if hasattr(self.window, 'status_label') and self.window.status_label:
-            self.window.status_label.set_text(_("reverted"))
-        if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
-            self.window.pdf_view.queue_draw()
+        if self._is_session_active():
+            if hasattr(self.window, 'load_page') and getattr(self.window, 'current_page_index', None) in self.page_indices:
+                self.window.load_page(self.window.current_page_index, reload_objects=True)
+            if hasattr(self.window, '_refresh_thumbnail'):
+                for p in self.page_indices:
+                    self.window._refresh_thumbnail(p)
+            if hasattr(self.window, 'refresh_annotations_list'):
+                self.window.refresh_annotations_list()
+            if hasattr(self.window, 'status_label') and self.window.status_label:
+                self.window.status_label.set_text(_("reverted"))
+            if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()

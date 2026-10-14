@@ -2903,30 +2903,37 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
         print(f"Warning: no snapshot for page {page_num}, skipping restore")
     try:
         page = doc.load_page(page_num)
+        seen_objs = set()
         for obj in all_texts:
-            if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+            if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                seen_objs.add(id(obj))
                 if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
                     _apply_single_object_to_page(doc, page, obj)
         for obj in all_images:
-            if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+            if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                seen_objs.add(id(obj))
                 if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
                     _apply_single_object_to_page(doc, page, obj)
         for obj in all_shapes:
-            if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+            if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                seen_objs.add(id(obj))
                 if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
                     _apply_single_object_to_page(doc, page, obj)
         if all_strokes:
             for obj in all_strokes:
-                if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                    seen_objs.add(id(obj))
                     if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
                         _apply_single_object_to_page(doc, page, obj)
         if all_measurements:
             for obj in all_measurements:
-                if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                    seen_objs.add(id(obj))
                     _apply_single_object_to_page(doc, page, obj)
         if all_sticky_notes:
             for obj in all_sticky_notes:
-                if getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                    seen_objs.add(id(obj))
                     _apply_single_object_to_page(doc, page, obj)
         invalidate_page_cache(doc, page_num)
         return True, None

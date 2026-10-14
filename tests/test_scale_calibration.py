@@ -188,10 +188,10 @@ class TestWindowCalibrationInteractions:
         window.show_scale_calibration_dialog.assert_called_once_with(200.0, reference_line=(10.0, 20.0, 210.0, 20.0))
 
     def test_sidebar_grid_layout_side_by_side(self):
-        """Verify that Form Builder and Calibrate buttons are attached side by side in row 5."""
+        """Verify that Form Builder and Stamp buttons are attached side by side in row 5."""
         import inspect
         from word_sys_pdf_editor import window
         src = inspect.getsource(window.PdfEditorWindow._create_sidebar)
         assert 'tools_grid.attach(self.form_builder_tool_button, 0, 5, 1, 1)' in src
-        assert 'tools_grid.attach(self.calibrate_tool_button, 1, 5, 1, 1)' in src
+        assert 'tools_grid.attach(self.stamp_tool_button, 1, 5, 1, 1)' in src
 

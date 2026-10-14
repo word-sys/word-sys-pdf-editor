@@ -327,6 +327,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.measurement_calibrate_btn = None
         self.measurement_hint_lbl = None
         self.measurement_clear_btn = None
+        self.stamp_toolbar_box = None
+        self.stamp_toolbar_sep = None
+        self.stamp_toolbar_pic = None
+        self.stamp_toolbar_name_lbl = None
+        self.stamp_quick_menu_btn = None
+        self.stamp_library_btn = None
+        self.stamp_tool_button = None
+        self.stamp_menu_button = None
         self.selected_sticky_note = None
         self.active_sticky_popover = None
         self.dragged_sticky_note = None
@@ -606,15 +614,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self._active_session.scroll_y = v_adj.get_value()
                     if h_adj:
                         self._active_session.scroll_x = h_adj.get_value()
-                pdf_handler.save_page_snapshot(
-                    self._active_session.doc,
-                    self._active_session.current_page_index,
-                    force=True
-                )
             except Exception:
                 pass
 
         self._active_session = session
+        self.pending_format_change_obj = None
+        self.before_format_change_state = None
+        self.dragged_object = None
+        self.temp_polygon_vertices = []
+        self.temp_measurement_line = None
+        self.temp_measurement_rect = None
+
         if session not in self.sessions:
             self.sessions.append(session)
 
@@ -696,6 +706,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self._update_tab_title(session)
         self._update_ui_state()
+        if hasattr(self, 'refresh_annotations_list'):
+            self.refresh_annotations_list()
+        if hasattr(self, '_update_text_format_controls'):
+            self._update_text_format_controls(self.selected_text)
         if hasattr(self, 'pdf_view') and self.pdf_view:
             self.pdf_view.queue_draw()
 
@@ -1099,8 +1113,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     @selected_text.setter
     def selected_text(self, val):
+        if hasattr(self, 'pending_format_change_obj') and self.pending_format_change_obj and self.pending_format_change_obj is not val:
+            self.commit_pending_format_change()
         if self._active_session:
             self._active_session.selected_text = val
+        if val is not None:
+            self.pending_format_change_obj = val
+            self.before_format_change_state = copy.deepcopy(val.__dict__)
+        else:
+            self.pending_format_change_obj = None
+            self.before_format_change_state = None
 
     @property
     def selected_image(self):
@@ -1477,8 +1499,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.form_builder_tool_button = _make_tool_btn("edit-select-all-symbolic", _("tool_form_builder"), _("tool_form_builder_tip"), "form_builder")
         tools_grid.attach(self.form_builder_tool_button, 0, 5, 1, 1)
 
-        self.calibrate_tool_button = _make_tool_btn("applications-engineering-symbolic", _("tool_calibrate"), _("tool_calibrate_tip"), "calibrate")
-        tools_grid.attach(self.calibrate_tool_button, 1, 5, 1, 1)
+        self.stamp_tool_button = _make_tool_btn("tag-symbolic", _("tool_stamp"), _("tool_stamp_tip"), "add_stamp")
+        tools_grid.attach(self.stamp_tool_button, 1, 5, 1, 1)
 
         self.measure_distance_tool_button = _make_tool_btn("straighten-symbolic", _("tool_measure_distance"), _("tool_measure_distance_tip"), "measure_distance")
         tools_grid.attach(self.measure_distance_tool_button, 0, 6, 1, 1)
@@ -1486,24 +1508,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.measure_area_tool_button = _make_tool_btn("view-grid-symbolic", _("tool_measure_area"), _("tool_measure_area_tip"), "measure_area")
         tools_grid.attach(self.measure_area_tool_button, 1, 6, 1, 1)
 
-        self.stamp_tool_button = _make_tool_btn("tag-symbolic", _("tool_stamp"), _("tool_stamp_tip"), "add_stamp")
-        right_click_stamp = Gtk.GestureClick()
-        right_click_stamp.set_button(3)
-        right_click_stamp.connect("pressed", lambda g, n, x, y: self.stamp_popover.popup() if hasattr(self, 'stamp_popover') else None)
-        self.stamp_tool_button.add_controller(right_click_stamp)
-        tools_grid.attach(self.stamp_tool_button, 0, 7, 1, 1)
-
-        self.stamp_menu_button = Gtk.MenuButton()
-        self.stamp_menu_button.set_icon_name("view-more-symbolic")
-        self.stamp_menu_button.set_tooltip_text(_("menu_manage_stamps"))
-        self.stamp_menu_button.add_css_class("tool-button")
-        self.stamp_popover = StampPopover(
-            self.stamp_library,
-            on_stamp_chosen_callback=self._on_stamp_chosen_from_popover,
-            on_manage_clicked_callback=self.on_manage_stamps
-        )
-        self.stamp_menu_button.set_popover(self.stamp_popover)
-        tools_grid.attach(self.stamp_menu_button, 1, 7, 1, 1)
+        self.calibrate_tool_button = None
+        self.stamp_menu_button = None
         
         sidebar_box.append(tools_grid)
 
@@ -1854,41 +1860,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.toolbar_row2.append(self.form_builder_toolbar_box)
         self.form_builder_toolbar_box.set_visible(False)
 
-        self.calibration_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
-        self.toolbar_row2.append(self.calibration_toolbar_sep)
-        self.calibration_toolbar_sep.set_visible(False)
+        self.calibration_toolbar_sep = None
+        self.calibration_toolbar_box = None
 
-        self.calibration_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        calib_lbl = Gtk.Label(label=_("calibration_toolbar_label"))
-        calib_lbl.add_css_class("heading")
-        self.calibration_toolbar_box.append(calib_lbl)
-
-        self.calibration_scale_label = Gtk.Label(label=_("scale_uncalibrated"))
-        self.calibration_scale_label.add_css_class("dim-label")
-        self.calibration_toolbar_box.append(self.calibration_scale_label)
-
-        preset_strings = [_("scale_preset_custom")] + list(PRESET_SCALES.keys())
-        self.calibration_preset_dropdown = Gtk.DropDown.new_from_strings(preset_strings)
-        self.calibration_preset_dropdown.connect("notify::selected", self.on_calibration_preset_changed)
-        self.calibration_toolbar_box.append(self.calibration_preset_dropdown)
-
-        self.calibrate_dialog_btn = Gtk.Button(label=_("btn_calibrate"))
-        self.calibrate_dialog_btn.connect("clicked", self.on_calibrate_dialog_clicked)
-        self.calibration_toolbar_box.append(self.calibrate_dialog_btn)
-
-        self.calibrate_reset_btn = Gtk.Button(label=_("btn_reset_scale"))
-        self.calibrate_reset_btn.add_css_class("flat")
-        self.calibrate_reset_btn.connect("clicked", self.on_calibration_reset_clicked)
-        self.calibration_toolbar_box.append(self.calibrate_reset_btn)
-
-        calib_hint_lbl = Gtk.Label(label=_("tool_calibrate_tip"))
-        calib_hint_lbl.add_css_class("dim-label")
-        self.calibration_toolbar_box.append(calib_hint_lbl)
-
-        self.toolbar_row2.append(self.calibration_toolbar_box)
-        self.calibration_toolbar_box.set_visible(False)
-
-        # Measurement Toolbar (Distance & Area)
+        # Measurement Toolbar (Distance, Area & Calibration merged)
         self.measurement_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
         self.toolbar_row2.append(self.measurement_toolbar_sep)
         self.measurement_toolbar_sep.set_visible(False)
@@ -1901,11 +1876,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.measurement_scale_indicator = Gtk.Label(label=_("scale_uncalibrated"))
         self.measurement_scale_indicator.add_css_class("dim-label")
         self.measurement_toolbar_box.append(self.measurement_scale_indicator)
+        self.calibration_scale_label = self.measurement_scale_indicator
+
+        preset_strings = [_("scale_preset_custom")] + list(PRESET_SCALES.keys())
+        self.calibration_preset_dropdown = Gtk.DropDown.new_from_strings(preset_strings)
+        self.calibration_preset_dropdown.connect("notify::selected", self.on_calibration_preset_changed)
+        self.measurement_toolbar_box.append(self.calibration_preset_dropdown)
 
         self.measurement_calibrate_btn = Gtk.Button(label=_("btn_calibrate"))
         self.measurement_calibrate_btn.add_css_class("flat")
         self.measurement_calibrate_btn.connect("clicked", self.on_calibrate_dialog_clicked)
         self.measurement_toolbar_box.append(self.measurement_calibrate_btn)
+        self.calibrate_dialog_btn = self.measurement_calibrate_btn
+
+        self.calibrate_reset_btn = Gtk.Button(label=_("btn_reset_scale"))
+        self.calibrate_reset_btn.add_css_class("flat")
+        self.calibrate_reset_btn.connect("clicked", self.on_calibration_reset_clicked)
+        self.measurement_toolbar_box.append(self.calibrate_reset_btn)
 
         sep_m = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=4, margin_end=4)
         self.measurement_toolbar_box.append(sep_m)
@@ -1925,6 +1912,51 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.toolbar_row2.append(self.measurement_toolbar_box)
         self.measurement_toolbar_box.set_visible(False)
+
+        # Stamp Toolbar
+        self.stamp_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
+        self.toolbar_row2.append(self.stamp_toolbar_sep)
+        self.stamp_toolbar_sep.set_visible(False)
+
+        self.stamp_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        stamp_title_lbl = Gtk.Label(label=_("tool_stamp"))
+        stamp_title_lbl.add_css_class("heading")
+        self.stamp_toolbar_box.append(stamp_title_lbl)
+
+        self.stamp_toolbar_pic = Gtk.Picture()
+        self.stamp_toolbar_pic.set_can_shrink(True)
+        self.stamp_toolbar_pic.set_size_request(60, 24)
+        self.stamp_toolbar_box.append(self.stamp_toolbar_pic)
+
+        self.stamp_toolbar_name_lbl = Gtk.Label(label="")
+        self.stamp_toolbar_name_lbl.add_css_class("bold")
+        self.stamp_toolbar_box.append(self.stamp_toolbar_name_lbl)
+
+        self.stamp_popover = StampPopover(
+            self.stamp_library,
+            on_stamp_chosen_callback=self._on_stamp_chosen_from_popover,
+            on_manage_clicked_callback=self.on_manage_stamps
+        )
+        self.stamp_quick_menu_btn = Gtk.MenuButton()
+        self.stamp_quick_menu_btn.set_icon_name("tag-symbolic")
+        self.stamp_quick_menu_btn.set_tooltip_text(_("stamp_quick_menu"))
+        self.stamp_quick_menu_btn.set_popover(self.stamp_popover)
+        self.stamp_toolbar_box.append(self.stamp_quick_menu_btn)
+
+        self.stamp_library_btn = Gtk.Button(label=_("menu_manage_stamps"))
+        self.stamp_library_btn.add_css_class("flat")
+        self.stamp_library_btn.connect("clicked", self.on_manage_stamps)
+        self.stamp_toolbar_box.append(self.stamp_library_btn)
+
+        sep_s = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=4, margin_end=4)
+        self.stamp_toolbar_box.append(sep_s)
+
+        stamp_hint_lbl = Gtk.Label(label=_("tool_stamp_tip"))
+        stamp_hint_lbl.add_css_class("dim-label")
+        self.stamp_toolbar_box.append(stamp_hint_lbl)
+
+        self.toolbar_row2.append(self.stamp_toolbar_box)
+        self.stamp_toolbar_box.set_visible(False)
 
         self.view_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
         self.toolbar_row1.append(self.view_toolbar_sep)
@@ -2167,11 +2199,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          getattr(self, 'checkmark_tool_button', None),
                          getattr(self, 'cross_tool_button', None),
                          getattr(self, 'form_builder_tool_button', None),
-                         getattr(self, 'calibrate_tool_button', None),
-                         getattr(self, 'measure_distance_tool_button', None),
-                         getattr(self, 'measure_area_tool_button', None),
                          getattr(self, 'stamp_tool_button', None),
-                         getattr(self, 'stamp_menu_button', None)]
+                         getattr(self, 'measure_distance_tool_button', None),
+                         getattr(self, 'measure_area_tool_button', None)]
         for btn in sidebar_tools:
             if btn:
                 btn.set_sensitive(in_edit and has_doc)
@@ -2202,10 +2232,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         stroke_controls_active = in_edit and (stroke_selected or self.tool_mode in ("pen", "highlighter"))
         form_builder_active = in_edit and (self.tool_mode == "form_builder")
         calibrate_active = in_edit and (self.tool_mode == "calibrate")
-        measure_active = in_edit and (self.tool_mode in ("measure_distance", "measure_area") or meas_selected)
+        measure_active = in_edit and (self.tool_mode in ("measure_distance", "measure_area", "calibrate") or meas_selected)
+        stamp_active = in_edit and (self.tool_mode == "add_stamp" or (getattr(self, 'selected_image', None) and getattr(self.selected_image, 'is_stamp', False)))
         view_text_selected = self.view_mode and (getattr(self, 'view_sel_rect', None) is not None or getattr(self, 'selected_word', None) is not None)
         format_enabled_base = in_edit and ((text_selected or self.tool_mode == "add_text") and
-                               self.selected_image is None and not shape_selected and not stroke_selected and not form_builder_active and not calibrate_active and not measure_active)
+                               self.selected_image is None and not shape_selected and not stroke_selected and not form_builder_active and not calibrate_active and not measure_active and not stamp_active)
 
         if hasattr(self, 'toolbar_row2'):
             self.toolbar_row2.set_visible(has_doc)
@@ -2230,20 +2261,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, '_update_form_field_overlay_interactivity'):
                 self._update_form_field_overlay_interactivity()
 
-        if hasattr(self, 'calibration_toolbar_box'):
-            self.calibration_toolbar_box.set_visible(calibrate_active)
-            self.calibration_toolbar_sep.set_visible(calibrate_active)
-            if calibrate_active:
-                self._update_calibration_controls()
-
-        if hasattr(self, 'measurement_toolbar_box'):
+        if hasattr(self, 'measurement_toolbar_box') and self.measurement_toolbar_box:
             self.measurement_toolbar_box.set_visible(measure_active)
-            self.measurement_toolbar_sep.set_visible(measure_active)
+            if hasattr(self, 'measurement_toolbar_sep') and self.measurement_toolbar_sep:
+                self.measurement_toolbar_sep.set_visible(measure_active)
             if measure_active:
                 self._update_measurement_controls()
 
+        if hasattr(self, 'stamp_toolbar_box') and self.stamp_toolbar_box:
+            self.stamp_toolbar_box.set_visible(stamp_active)
+            if hasattr(self, 'stamp_toolbar_sep') and self.stamp_toolbar_sep:
+                self.stamp_toolbar_sep.set_visible(stamp_active)
+            if stamp_active:
+                self._update_stamp_controls()
+
         if hasattr(self, 'text_format_box'):
-            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active and not form_builder_active and not calibrate_active and not measure_active and self.selected_image is None)
+            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active and not form_builder_active and not calibrate_active and not measure_active and not stamp_active and self.selected_image is None)
             self.text_format_sep.set_visible(False)
 
         self.font_combo.set_sensitive(format_enabled_base and not self.font_scan_in_progress)
@@ -6641,6 +6674,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if stamp:
                 self.active_stamp = stamp
                 self.on_tool_selected(None, "add_stamp")
+                self._update_stamp_controls()
                 if hasattr(self, 'stamp_popover') and self.stamp_popover:
                     self.stamp_popover.refresh()
 
@@ -6652,6 +6686,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if stamp:
             self.active_stamp = stamp
             self.on_tool_selected(None, "add_stamp")
+            self._update_stamp_controls()
             if hasattr(self, 'status_label') and self.status_label:
                 self.status_label.set_text(f"{_('stamp_active_label')}: {stamp.name}")
 
@@ -7801,9 +7836,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_ui_state()
                 return
 
-        target_text = self.pending_format_change_obj or self.selected_text
+        target_text = self.selected_text
         if target_text:
-            if not self.pending_format_change_obj:
+            if self.pending_format_change_obj is not target_text:
+                if self.pending_format_change_obj:
+                    self.commit_pending_format_change()
                 self.pending_format_change_obj = target_text
                 self.before_format_change_state = copy.deepcopy(target_text.__dict__)
             changed = False
@@ -7897,6 +7934,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.before_format_change_state = copy.deepcopy(obj.__dict__)
                     self.pdf_view.queue_draw()
                     self._update_ui_state()
+        else:
+            if self.pending_format_change_obj:
+                self.commit_pending_format_change()
+            self._update_ui_state()
+            return
 
     def on_shape_format_changed(self, widget, *args):
         """Apply shape fill, stroke color, and line width updates to selection or next shape."""
@@ -8131,12 +8173,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             elif self.selected_image:
                 confirm = show_confirm_dialog(self, _("image_delete_confirm_msg"), _("image_delete_confirm_title"))
                 if confirm:
-                    self.status_label.set_text("Resim siliniyor...")
+                    self.status_label.set_text(_("deleting_image"))
                     success, error_msg = pdf_handler.delete_image_from_page(self.doc, self.selected_image)
                     if success:
                         self.document_modified = True
                         self._load_page(self.current_page_index)
-                        self.status_label.set_text("Resim silindi.")
+                        self.status_label.set_text(_("object_deleted"))
                     else:
                         show_error_dialog(self, _("err_image_delete_msg", error_msg), _("err_image_delete_title"))
                     self.selected_image = None
@@ -8232,6 +8274,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 Gdk.KEY_R: "add_rectangle",
                 Gdk.KEY_f: "form_builder",
                 Gdk.KEY_F: "form_builder",
+                Gdk.KEY_d: "measure_distance",
+                Gdk.KEY_D: "measure_distance",
+                Gdk.KEY_a: "measure_area",
+                Gdk.KEY_A: "measure_area",
+                Gdk.KEY_k: "add_stamp",
+                Gdk.KEY_K: "add_stamp",
             }
             if keyval in tool_shortcuts:
                 self.on_tool_selected(None, tool_shortcuts[keyval])
@@ -8245,15 +8293,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
              print(_("dbg_applying_changes_before_tool"))
              self._apply_and_hide_editor(force_apply=True)
 
-        if self.selected_text:
-            self.selected_text = None
-
-        if self.selected_image:
-            self.selected_image = None
-
-        if self.selected_shape:
-            self.selected_shape = None
-
+        self.commit_pending_format_change()
+        self.selected_text = None
+        self.selected_image = None
+        self.selected_shape = None
         if hasattr(self, 'selected_stroke') and self.selected_stroke:
             self.selected_stroke = None
 
@@ -8403,20 +8446,43 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _update_calibration_controls(self):
         """Update scale label, preset dropdown, and buttons in calibration toolbar."""
-        if not hasattr(self, 'calibration_toolbar_box') or not self.calibration_toolbar_box:
-            return
-        calib = self.get_scale_calibration(self.current_page_index)
+        self._update_measurement_controls()
+        calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
         if calib:
             summary = calib.format_scale_ratio()
-            self.calibration_scale_label.set_text(summary)
-            self.calibration_scale_label.remove_css_class("dim-label")
-            self.calibration_scale_label.add_css_class("accent")
-            self.calibrate_reset_btn.set_sensitive(True)
+            if hasattr(self, 'calibration_scale_label') and self.calibration_scale_label:
+                self.calibration_scale_label.set_text(summary)
+                self.calibration_scale_label.remove_css_class("dim-label")
+                self.calibration_scale_label.add_css_class("accent")
+            if hasattr(self, 'calibrate_reset_btn') and self.calibrate_reset_btn:
+                self.calibrate_reset_btn.set_sensitive(True)
         else:
-            self.calibration_scale_label.set_text(_("scale_uncalibrated"))
-            self.calibration_scale_label.remove_css_class("accent")
-            self.calibration_scale_label.add_css_class("dim-label")
-            self.calibrate_reset_btn.set_sensitive(False)
+            if hasattr(self, 'calibration_scale_label') and self.calibration_scale_label:
+                self.calibration_scale_label.set_text(_("scale_uncalibrated"))
+                self.calibration_scale_label.remove_css_class("accent")
+                self.calibration_scale_label.add_css_class("dim-label")
+            if hasattr(self, 'calibrate_reset_btn') and self.calibrate_reset_btn:
+                self.calibrate_reset_btn.set_sensitive(False)
+
+    def _update_stamp_controls(self):
+        """Update active stamp thumbnail and label in the upper stamp toolbar."""
+        if not hasattr(self, 'stamp_toolbar_box') or not self.stamp_toolbar_box:
+            return
+        active_stamp = getattr(self, 'active_stamp', None)
+        if not active_stamp and hasattr(self, 'stamp_library') and self.stamp_library:
+            active_stamp = self.stamp_library.get_active_stamp()
+
+        if active_stamp:
+            paintable = active_stamp.get_paintable()
+            if paintable and hasattr(self, 'stamp_toolbar_pic') and self.stamp_toolbar_pic:
+                self.stamp_toolbar_pic.set_paintable(paintable)
+                self.stamp_toolbar_pic.set_visible(True)
+            elif hasattr(self, 'stamp_toolbar_pic') and self.stamp_toolbar_pic:
+                self.stamp_toolbar_pic.set_visible(False)
+            if hasattr(self, 'stamp_toolbar_name_lbl') and self.stamp_toolbar_name_lbl:
+                self.stamp_toolbar_name_lbl.set_text(active_stamp.name)
+        if hasattr(self, 'stamp_popover') and self.stamp_popover:
+            self.stamp_popover.refresh()
 
     def on_calibration_preset_changed(self, dropdown, param):
         """Apply selected preset scale from dropdown."""
@@ -9905,38 +9971,43 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Delete sticky note alias."""
         self.delete_sticky_note(note)
 
-    def _add_sticky_note_to_session(self, note):
+    def _add_sticky_note_to_session(self, note, session=None):
         """Add sticky note to active session and trigger canvas/sidebar refresh."""
-        if not self._active_session:
+        sess = session or self._active_session
+        if not sess:
             return
         p = note.page_number
-        if p not in self._active_session.sticky_notes:
-            self._active_session.sticky_notes[p] = []
-        if note not in self._active_session.sticky_notes[p]:
-            self._active_session.sticky_notes[p].append(note)
-        self.selected_sticky_note = note
+        if p not in sess.sticky_notes:
+            sess.sticky_notes[p] = []
+        if note not in sess.sticky_notes[p]:
+            sess.sticky_notes[p].append(note)
+        if sess is self._active_session:
+            self.selected_sticky_note = note
         self.document_modified = True
         if hasattr(self, 'annotations_sidebar'):
             self.annotations_sidebar.refresh()
-            self.annotations_sidebar.sync_selection(note)
+            if sess is self._active_session:
+                self.annotations_sidebar.sync_selection(note)
         self.pdf_view.queue_draw()
 
-    def _remove_sticky_note_from_session(self, note):
+    def _remove_sticky_note_from_session(self, note, session=None):
         """Remove sticky note from active session."""
-        if not self._active_session:
+        sess = session or self._active_session
+        if not sess:
             return
         p = note.page_number
-        if p in self._active_session.sticky_notes and note in self._active_session.sticky_notes[p]:
-            self._active_session.sticky_notes[p].remove(note)
-        if self.selected_sticky_note == note:
+        if p in sess.sticky_notes and note in sess.sticky_notes[p]:
+            sess.sticky_notes[p].remove(note)
+        if sess is self._active_session and self.selected_sticky_note == note:
             self.selected_sticky_note = None
         self.document_modified = True
         if hasattr(self, 'annotations_sidebar'):
             self.annotations_sidebar.refresh()
         self.pdf_view.queue_draw()
 
-    def _apply_sticky_note_state(self, note, state):
+    def _apply_sticky_note_state(self, note, state, session=None):
         """Apply state dictionary to sticky note."""
+        sess = session or self._active_session
         if not note or not state:
             return
         note.content = state.get("content", note.content)
@@ -9951,7 +10022,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.annotations_sidebar.refresh()
         self.pdf_view.queue_draw()
 
-    def _set_sticky_note_pos(self, note, new_x, new_y):
+    def _set_sticky_note_pos(self, note, new_x, new_y, session=None):
         """Reposition sticky note."""
         if not note:
             return
@@ -10120,7 +10191,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 btn_hl.connect("clicked", lambda b: self._handle_context_action("highlight_view", None, x, y))
                 popover_box.append(btn_hl)
 
-            btn_add_note = Gtk.Button(label=_("add_sticky_note"))
+            btn_add_note = Gtk.Button(label=_("menu_add_sticky_note"))
             btn_add_note.connect("clicked", lambda b: (self.context_popover.popdown() if hasattr(self, 'context_popover') else None, self._create_sticky_note_at(page_x, page_y)))
             popover_box.append(btn_add_note)
 
@@ -10892,11 +10963,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             new_text.is_strikethrough = is_strikethrough
             new_text.page_number = self.current_page_index
             
-            self.editable_texts.append(new_text)
             command = AddObjectCommand(self, new_text)
             command.execute()
             self.undo_manager.add_command(command)
             
+            self.selected_text = new_text
+            self._update_text_format_controls(new_text)
             self.document_modified = True
             self._refresh_thumbnail(self.current_page_index)
             self._update_ui_state()

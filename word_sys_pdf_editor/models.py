@@ -1266,6 +1266,12 @@ class DocumentSession:
         """Cleanly close the underlying document and free session resources."""
         if self.doc is not None:
             try:
+                from . import pdf_handler
+                pdf_handler.release_page_snapshots(self.doc)
+                pdf_handler.invalidate_page_cache(self.doc)
+            except Exception:
+                pass
+            try:
                 self.doc.close()
             except Exception:
                 pass

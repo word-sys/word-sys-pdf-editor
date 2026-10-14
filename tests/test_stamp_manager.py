@@ -284,3 +284,70 @@ def test_window_stamp_drag_placement(temp_stamps_dir):
     assert len(win.editable_images) == 0
     win.undo_manager.redo()
     assert len(win.editable_images) == 1
+
+
+def test_stamp_tool_layout_single_box_in_sidebar():
+    """Verify Stamp tool is a single box in row 5 col 1, second box removed, calibrate merged."""
+    import inspect
+    from word_sys_pdf_editor import window
+    src = inspect.getsource(window.PdfEditorWindow._create_sidebar)
+    assert 'tools_grid.attach(self.stamp_tool_button, 1, 5, 1, 1)' in src
+    assert 'tools_grid.attach(self.stamp_menu_button' not in src
+    assert 'tools_grid.attach(self.calibrate_tool_button' not in src
+
+
+def test_stamp_manager_import_invokes_open_file_dialog(temp_stamps_dir, monkeypatch):
+    """Verify import button uses show_open_file_dialog without AttributeError."""
+    from unittest.mock import MagicMock
+    import word_sys_pdf_editor.ui_components as ui_comp
+
+    mock_dialog = MagicMock()
+    monkeypatch.setattr(ui_comp, "show_open_file_dialog", mock_dialog)
+
+    lib = StampLibrary(storage_dir=temp_stamps_dir)
+    dialog = StampManagerDialog(None, lib)
+    dialog._on_import_clicked(None)
+
+    assert mock_dialog.called
+    dialog.destroy()
+
+
+def test_keyboard_shortcuts_stamp_distance_area():
+    """Verify single-key shortcuts: K for Stamp, D for Distance, A for Area."""
+    from gi.repository import Gdk
+    from word_sys_pdf_editor.window import PdfEditorWindow
+    mock_win = MagicMock(spec=PdfEditorWindow)
+    mock_win.view_mode = False
+    mock_win.inline_editor_widget = None
+    mock_win.input_overlay_widget = None
+    mock_win.form_field_builder_overlay = None
+    mock_win.selected_form_field = None
+    mock_win.is_space_pressed = False
+    mock_win.get_focus.return_value = None
+
+    # Test lowercase k and uppercase K for stamp
+    assert PdfEditorWindow.on_key_pressed(mock_win, None, Gdk.KEY_k, 0, 0) is True
+    mock_win.on_tool_selected.assert_called_with(None, "add_stamp")
+
+    mock_win.on_tool_selected.reset_mock()
+    assert PdfEditorWindow.on_key_pressed(mock_win, None, Gdk.KEY_K, 0, 0) is True
+    mock_win.on_tool_selected.assert_called_with(None, "add_stamp")
+
+    # Test d and D for distance
+    mock_win.on_tool_selected.reset_mock()
+    assert PdfEditorWindow.on_key_pressed(mock_win, None, Gdk.KEY_d, 0, 0) is True
+    mock_win.on_tool_selected.assert_called_with(None, "measure_distance")
+
+    mock_win.on_tool_selected.reset_mock()
+    assert PdfEditorWindow.on_key_pressed(mock_win, None, Gdk.KEY_D, 0, 0) is True
+    mock_win.on_tool_selected.assert_called_with(None, "measure_distance")
+
+    # Test a and A for area
+    mock_win.on_tool_selected.reset_mock()
+    assert PdfEditorWindow.on_key_pressed(mock_win, None, Gdk.KEY_a, 0, 0) is True
+    mock_win.on_tool_selected.assert_called_with(None, "measure_area")
+
+    mock_win.on_tool_selected.reset_mock()
+    assert PdfEditorWindow.on_key_pressed(mock_win, None, Gdk.KEY_A, 0, 0) is True
+    mock_win.on_tool_selected.assert_called_with(None, "measure_area")
+

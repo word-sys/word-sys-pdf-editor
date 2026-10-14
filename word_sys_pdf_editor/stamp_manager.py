@@ -547,28 +547,19 @@ class StampManagerDialog(Adw.Window):
         for mime in ["image/png", "image/jpeg", "image/svg+xml", "image/webp", "image/bmp"]:
             filter_img.add_mime_type(mime)
 
-        dialog = Gtk.FileDialog()
-        dialog.set_title(_("stamp_import_title"))
-        filters = Gio.ListStore.new(Gtk.FileFilter)
-        filters.append(filter_img)
-        dialog.set_filters(filters)
+        def _on_file_opened(gfile, *args):
+            if gfile:
+                file_path = gfile.get_path()
+                if file_path:
+                    stamp = self.library.import_stamp_from_file(file_path)
+                    if stamp:
+                        self._build_category_filters()
+                        self._populate_stamps_view()
+                        if self.on_stamp_selected_callback:
+                            self.on_stamp_selected_callback(stamp)
 
-        def _on_file_opened(dlg, result):
-            try:
-                gfile = dlg.open_finish(result)
-                if gfile:
-                    file_path = gfile.get_path()
-                    if file_path:
-                        stamp = self.library.import_stamp_from_file(file_path)
-                        if stamp:
-                            self._build_category_filters()
-                            self._populate_stamps_view()
-                            if self.on_stamp_selected_callback:
-                                self.on_stamp_selected_callback(stamp)
-            except Exception as e:
-                print(f"Error opening image file: {e}")
-
-        dialog.open(self, None, _on_file_opened)
+        from .ui_components import show_open_file_dialog
+        show_open_file_dialog(self, _("stamp_import_title"), filters=[filter_img], callback=_on_file_opened)
 
 
 class StampPopover(Gtk.Popover):
