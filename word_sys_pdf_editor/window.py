@@ -43,7 +43,10 @@ from .quick_guide_dialog import QuickGuideDialog
 from .annotations_sidebar import AnnotationsSidebar, AnnotationListItem
 from . import utils
 from .utils import point_to_segment_distance, point_in_polygon
-from .stamp_manager import StampLibrary, CustomStamp, StampManagerDialog, StampPopover
+from .stamp_manager import (
+    StampLibrary, CustomStamp, StampManagerDialog, StampPopover,
+    StampPasswordDialog, StampVerificationDialog
+)
 
 
 class StickyNotePopover(Gtk.Popover):
@@ -331,6 +334,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.stamp_toolbar_sep = None
         self.stamp_toolbar_pic = None
         self.stamp_toolbar_name_lbl = None
+        self.stamp_toolbar_lock_icon = None
         self.stamp_quick_menu_btn = None
         self.stamp_library_btn = None
         self.stamp_tool_button = None
@@ -1931,6 +1935,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.stamp_toolbar_name_lbl = Gtk.Label(label="")
         self.stamp_toolbar_name_lbl.add_css_class("bold")
         self.stamp_toolbar_box.append(self.stamp_toolbar_name_lbl)
+
+        self.stamp_toolbar_lock_icon = Gtk.Image.new_from_icon_name("channel-secure-symbolic")
+        self.stamp_toolbar_lock_icon.set_visible(False)
+        self.stamp_toolbar_lock_icon.add_css_class("accent")
+        self.stamp_toolbar_box.append(self.stamp_toolbar_lock_icon)
 
         self.stamp_popover = StampPopover(
             self.stamp_library,
@@ -8481,6 +8490,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.stamp_toolbar_pic.set_visible(False)
             if hasattr(self, 'stamp_toolbar_name_lbl') and self.stamp_toolbar_name_lbl:
                 self.stamp_toolbar_name_lbl.set_text(active_stamp.name)
+            if hasattr(self, 'stamp_toolbar_lock_icon') and self.stamp_toolbar_lock_icon:
+                is_prot = active_stamp.has_password()
+                self.stamp_toolbar_lock_icon.set_visible(is_prot)
+                if is_prot:
+                    self.stamp_toolbar_lock_icon.set_tooltip_text(_("stamp_protected_badge"))
         if hasattr(self, 'stamp_popover') and self.stamp_popover:
             self.stamp_popover.refresh()
 
@@ -9420,29 +9434,42 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     else:
                         final_bbox = (x1, y1, x2, y2)
 
-                    stamp_obj = EditableImage(
-                        bbox=final_bbox,
-                        page_number=self.current_page_index,
-                        xref=None,
-                        image_bytes=active_stamp.image_bytes,
-                        is_new=True,
-                        is_stamp=True,
-                        stamp_name=active_stamp.name,
-                    )
+                    def do_place_stamp():
+                        stamp_obj = EditableImage(
+                            bbox=final_bbox,
+                            page_number=self.current_page_index,
+                            xref=None,
+                            image_bytes=active_stamp.image_bytes,
+                            is_new=True,
+                            is_stamp=True,
+                            stamp_name=active_stamp.name,
+                        )
 
-                    self.selected_image = stamp_obj
-                    self.selected_text = None
-                    self.selected_shape = None
-                    self.selected_stroke = None
+                        self.selected_image = stamp_obj
+                        self.selected_text = None
+                        self.selected_shape = None
+                        self.selected_stroke = None
 
-                    command = AddObjectCommand(self, stamp_obj)
-                    command.execute()
-                    self.undo_manager.add_command(command)
-                    self.document_modified = True
-                    self._refresh_thumbnail(self.current_page_index)
-                    if hasattr(self, 'status_label') and self.status_label:
-                        self.status_label.set_text(_("stamp_placed_status").format(active_stamp.name))
-                    self._update_ui_state()
+                        command = AddObjectCommand(self, stamp_obj)
+                        command.execute()
+                        self.undo_manager.add_command(command)
+                        self.document_modified = True
+                        self._refresh_thumbnail(self.current_page_index)
+                        if hasattr(self, 'status_label') and self.status_label:
+                            self.status_label.set_text(_("stamp_placed_status").format(active_stamp.name))
+                        self._update_ui_state()
+                        self.pdf_view.queue_draw()
+
+                    if active_stamp.has_password():
+                        verify_dlg = StampVerificationDialog(
+                            self,
+                            active_stamp,
+                            on_verified_callback=do_place_stamp,
+                            on_cancelled_callback=lambda: self.pdf_view.queue_draw()
+                        )
+                        verify_dlg.present()
+                    else:
+                        do_place_stamp()
 
                 self.pdf_view.queue_draw()
                 return

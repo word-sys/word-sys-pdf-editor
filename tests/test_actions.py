@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath("."))
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk
+from gi.repository import Adw, Gdk, GLib, Gio
 from word_sys_pdf_editor.main import PdfEditorApplication
 from word_sys_pdf_editor.window import PdfEditorWindow
 
@@ -15,7 +15,10 @@ from word_sys_pdf_editor.window import PdfEditorWindow
 @unittest.skipIf(Gdk.Display.get_default() is None, "Screen display not available (headless build environment)")
 class TestActions(unittest.TestCase):
     def test_actions_and_shortcuts(self):
-        app = PdfEditorApplication()
+        app = PdfEditorApplication(
+            application_id=f"org.word_sys.test_actions_{os.getpid()}",
+            flags=Gio.ApplicationFlags.NON_UNIQUE
+        )
 
         def on_startup(a):
             win = PdfEditorWindow(application=a)
@@ -35,7 +38,7 @@ class TestActions(unittest.TestCase):
             self.assertIn("F1", accels_guide)
 
             win.do_close_request()
-            a.quit()
+            GLib.idle_add(a.quit)
 
         app.connect("startup", on_startup)
         app.run([])

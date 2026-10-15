@@ -1,5 +1,8 @@
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +18,34 @@ gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk
 
 from .i18n import _, _CONFIG_DIR
+
+
+def hash_stamp_password(password: str) -> str:
+    """Hash password using PBKDF2-HMAC-SHA256 with a 16-byte random salt."""
+    clean = (password or "").strip()
+    if not clean:
+        raise ValueError("Password cannot be empty")
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", clean.encode("utf-8"), salt, 100000)
+    return f"pbkdf2:sha256:100000:{salt.hex()}:{dk.hex()}"
+
+
+def verify_stamp_password(password: str, stored_hash: Optional[str]) -> bool:
+    """Verify password against stored PBKDF2-HMAC-SHA256 hash using constant-time comparison."""
+    if not stored_hash or not password:
+        return False
+    try:
+        parts = stored_hash.split(":")
+        if len(parts) == 5 and parts[0] == "pbkdf2" and parts[1] == "sha256":
+            rounds = int(parts[2])
+            salt = bytes.fromhex(parts[3])
+            expected_dk = bytes.fromhex(parts[4])
+            clean = password.strip()
+            dk = hashlib.pbkdf2_hmac("sha256", clean.encode("utf-8"), salt, rounds)
+            return hmac.compare_digest(dk, expected_dk)
+        return False
+    except Exception:
+        return False
 
 
 class CustomStamp:
@@ -117,6 +148,26 @@ class CustomStamp:
             except Exception as e:
                 print(f"Error creating texture for stamp: {e}")
         return None
+
+    def set_password(self, password: str) -> None:
+        """Set or update password or PIN protection."""
+        self.password_hash = hash_stamp_password(password)
+        self.is_password_protected = True
+
+    def remove_password(self) -> None:
+        """Remove password protection."""
+        self.password_hash = None
+        self.is_password_protected = False
+
+    def verify_password(self, password: str) -> bool:
+        """Check candidate password against stored hash."""
+        if not self.has_password():
+            return True
+        return verify_stamp_password(password, self.password_hash)
+
+    def has_password(self) -> bool:
+        """Check if stamp requires password verification."""
+        return bool(self.is_password_protected and self.password_hash)
 
 
 def generate_cairo_stamp_png(
@@ -375,6 +426,278 @@ class StampLibrary:
         return cats
 
 
+class StampPasswordDialog(Adw.Window):
+    """Modern Libadwaita modal dialog for setting, changing, or removing stamp password/PIN protection."""
+
+    def __init__(self, parent_window, stamp: CustomStamp, on_success_callback=None):
+        super().__init__()
+        self.parent_window = parent_window
+        self.stamp = stamp
+        self.on_success_callback = on_success_callback
+
+        if parent_window:
+            self.set_transient_for(parent_window)
+            self.set_modal(True)
+        self.set_title(_("stamp_password_dialog_title"))
+        self.set_default_size(460, 380)
+        self.set_resizable(False)
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.set_content(main_box)
+
+        # HeaderBar
+        header = Adw.HeaderBar()
+        self.cancel_btn = Gtk.Button(label=_("btn_cancel"))
+        self.cancel_btn.connect("clicked", lambda b: self.destroy())
+        header.pack_start(self.cancel_btn)
+
+        self.save_btn = Gtk.Button(label=_("btn_confirm"))
+        self.save_btn.add_css_class("suggested-action")
+        self.save_btn.connect("clicked", self._on_save_clicked)
+        header.pack_end(self.save_btn)
+        main_box.append(header)
+
+        # Scrolled Window
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        main_box.append(scrolled)
+
+        clamp = Adw.Clamp(maximum_size=420)
+        clamp.set_margin_top(16)
+        clamp.set_margin_bottom(16)
+        clamp.set_margin_start(16)
+        clamp.set_margin_end(16)
+        scrolled.set_child(clamp)
+
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        clamp.set_child(content_box)
+
+        # Header Card
+        info_group = Adw.PreferencesGroup()
+        info_row = Adw.ActionRow()
+        info_row.set_title(self.stamp.name)
+        info_row.set_subtitle(_("stamp_password_dialog_desc"))
+        info_row.set_subtitle_lines(0)
+
+        paintable = self.stamp.get_paintable()
+        if paintable:
+            pic = Gtk.Picture.new_for_paintable(paintable)
+            pic.set_can_shrink(True)
+            pic.set_size_request(80, 32)
+            pic.set_margin_end(8)
+            info_row.add_prefix(pic)
+        else:
+            icon = Gtk.Image.new_from_icon_name("channel-secure-symbolic")
+            icon.set_pixel_size(24)
+            icon.set_margin_end(8)
+            info_row.add_prefix(icon)
+
+        info_group.add(info_row)
+        content_box.append(info_group)
+
+        # Password Input Fields
+        input_group = Adw.PreferencesGroup()
+        content_box.append(input_group)
+
+        self.curr_entry = None
+        if self.stamp.has_password():
+            curr_row = Adw.ActionRow()
+            curr_row.set_title(_("stamp_current_password"))
+            self.curr_entry = Gtk.PasswordEntry()
+            self.curr_entry.set_show_peek_icon(True)
+            self.curr_entry.set_valign(Gtk.Align.CENTER)
+            self.curr_entry.set_hexpand(True)
+            curr_row.add_suffix(self.curr_entry)
+            input_group.add(curr_row)
+
+        new_row = Adw.ActionRow()
+        new_row.set_title(_("stamp_new_password"))
+        self.new_entry = Gtk.PasswordEntry()
+        self.new_entry.set_show_peek_icon(True)
+        self.new_entry.set_valign(Gtk.Align.CENTER)
+        self.new_entry.set_hexpand(True)
+        new_row.add_suffix(self.new_entry)
+        input_group.add(new_row)
+
+        confirm_row = Adw.ActionRow()
+        confirm_row.set_title(_("stamp_confirm_password"))
+        self.confirm_entry = Gtk.PasswordEntry()
+        self.confirm_entry.set_show_peek_icon(True)
+        self.confirm_entry.set_valign(Gtk.Align.CENTER)
+        self.confirm_entry.set_hexpand(True)
+        confirm_row.add_suffix(self.confirm_entry)
+        input_group.add(confirm_row)
+
+        # Error label
+        self.error_label = Gtk.Label()
+        self.error_label.add_css_class("error")
+        self.error_label.set_visible(False)
+        self.error_label.set_wrap(True)
+        content_box.append(self.error_label)
+
+        # Remove protection button if already protected
+        if self.stamp.has_password():
+            remove_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            remove_box.set_halign(Gtk.Align.END)
+            self.remove_btn = Gtk.Button(label=_("stamp_remove_password"))
+            self.remove_btn.add_css_class("destructive-action")
+            self.remove_btn.connect("clicked", self._on_remove_clicked)
+            remove_box.append(self.remove_btn)
+            content_box.append(remove_box)
+
+        # Keyboard activation
+        if self.curr_entry:
+            self.curr_entry.connect("activate", lambda e: self.new_entry.grab_focus())
+        self.new_entry.connect("activate", lambda e: self.confirm_entry.grab_focus())
+        self.confirm_entry.connect("activate", lambda e: self._on_save_clicked(None))
+
+    def _show_error(self, message: str):
+        self.error_label.set_text(message)
+        self.error_label.set_visible(True)
+
+    def _on_save_clicked(self, btn):
+        if self.stamp.has_password() and self.curr_entry:
+            curr_pass = self.curr_entry.get_text()
+            if not self.stamp.verify_password(curr_pass):
+                self._show_error(_("stamp_incorrect_password"))
+                self.curr_entry.grab_focus()
+                return
+
+        new_pass = self.new_entry.get_text().strip()
+        confirm_pass = self.confirm_entry.get_text().strip()
+
+        if not new_pass:
+            self._show_error(_("stamp_password_empty"))
+            self.new_entry.grab_focus()
+            return
+
+        if new_pass != confirm_pass:
+            self._show_error(_("stamp_passwords_mismatch"))
+            self.confirm_entry.grab_focus()
+            return
+
+        self.stamp.set_password(new_pass)
+        if self.on_success_callback:
+            self.on_success_callback(self.stamp)
+        self.destroy()
+
+    def _on_remove_clicked(self, btn):
+        if self.curr_entry:
+            curr_pass = self.curr_entry.get_text()
+            if not self.stamp.verify_password(curr_pass):
+                self._show_error(_("stamp_incorrect_password"))
+                self.curr_entry.grab_focus()
+                return
+
+        self.stamp.remove_password()
+        if self.on_success_callback:
+            self.on_success_callback(self.stamp)
+        self.destroy()
+
+
+class StampVerificationDialog(Adw.Window):
+    """Modern Libadwaita modal dialog prompting for password/PIN verification before stamp placement."""
+
+    def __init__(self, parent_window, stamp: CustomStamp, on_verified_callback=None, on_cancelled_callback=None):
+        super().__init__()
+        self.parent_window = parent_window
+        self.stamp = stamp
+        self.on_verified_callback = on_verified_callback
+        self.on_cancelled_callback = on_cancelled_callback
+        self._verified = False
+
+        if parent_window:
+            self.set_transient_for(parent_window)
+            self.set_modal(True)
+        self.set_title(_("stamp_verify_title"))
+        self.set_default_size(440, 260)
+        self.set_resizable(False)
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.set_content(main_box)
+
+        # HeaderBar
+        header = Adw.HeaderBar()
+        self.cancel_btn = Gtk.Button(label=_("btn_cancel"))
+        self.cancel_btn.connect("clicked", self._on_cancel_clicked)
+        header.pack_start(self.cancel_btn)
+
+        self.unlock_btn = Gtk.Button(label=_("stamp_verify_btn"))
+        self.unlock_btn.add_css_class("suggested-action")
+        self.unlock_btn.connect("clicked", self._on_unlock_clicked)
+        header.pack_end(self.unlock_btn)
+        main_box.append(header)
+
+        # Content
+        clamp = Adw.Clamp(maximum_size=400)
+        clamp.set_margin_top(16)
+        clamp.set_margin_bottom(16)
+        clamp.set_margin_start(16)
+        clamp.set_margin_end(16)
+        main_box.append(clamp)
+
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        clamp.set_child(content_box)
+
+        # Stamp Info Header
+        info_row = Adw.ActionRow()
+        info_row.set_title(self.stamp.name)
+        info_row.set_subtitle(_("stamp_verify_prompt").format(self.stamp.name))
+        info_row.set_subtitle_lines(0)
+
+        paintable = self.stamp.get_paintable()
+        if paintable:
+            pic = Gtk.Picture.new_for_paintable(paintable)
+            pic.set_can_shrink(True)
+            pic.set_size_request(80, 32)
+            pic.set_margin_end(8)
+            info_row.add_prefix(pic)
+        else:
+            icon = Gtk.Image.new_from_icon_name("channel-secure-symbolic")
+            icon.set_pixel_size(24)
+            icon.set_margin_end(8)
+            info_row.add_prefix(icon)
+
+        content_box.append(info_row)
+
+        # Password Entry
+        self.password_entry = Gtk.PasswordEntry()
+        self.password_entry.set_show_peek_icon(True)
+        self.password_entry.connect("activate", lambda e: self._on_unlock_clicked(None))
+        content_box.append(self.password_entry)
+
+        # Error label
+        self.error_label = Gtk.Label()
+        self.error_label.add_css_class("error")
+        self.error_label.set_visible(False)
+        self.error_label.set_wrap(True)
+        content_box.append(self.error_label)
+
+        self.connect("destroy", self._on_window_destroyed)
+
+    def _on_unlock_clicked(self, btn):
+        candidate = self.password_entry.get_text()
+        if self.stamp.verify_password(candidate):
+            self._verified = True
+            callback = self.on_verified_callback
+            self.destroy()
+            if callback:
+                callback()
+        else:
+            self.error_label.set_text(_("stamp_incorrect_password"))
+            self.error_label.set_visible(True)
+            self.password_entry.set_text("")
+            self.password_entry.grab_focus()
+
+    def _on_cancel_clicked(self, btn):
+        self.destroy()
+
+    def _on_window_destroyed(self, window):
+        if not self._verified and self.on_cancelled_callback:
+            self.on_cancelled_callback()
+
+
 class StampManagerDialog(Adw.Window):
     """Modern Libadwaita modal dialog for browsing, importing, and managing custom stamps."""
 
@@ -518,6 +841,19 @@ class StampManagerDialog(Adw.Window):
                 set_btn.connect("clicked", self._on_set_active_clicked, stamp.id)
                 row.add_suffix(set_btn)
 
+            # Security / Password button
+            sec_btn = Gtk.Button()
+            sec_btn.add_css_class("flat")
+            if stamp.has_password():
+                sec_btn.set_icon_name("channel-secure-symbolic")
+                sec_btn.add_css_class("accent")
+                sec_btn.set_tooltip_text(_("stamp_manage_security_tip"))
+            else:
+                sec_btn.set_icon_name("dialog-password-symbolic")
+                sec_btn.set_tooltip_text(_("stamp_set_password_tip"))
+            sec_btn.connect("clicked", self._on_security_clicked, stamp.id)
+            row.add_suffix(sec_btn)
+
             # Delete button for custom imported stamps
             if not stamp.is_builtin:
                 del_btn = Gtk.Button.new_from_icon_name("user-trash-symbolic")
@@ -528,6 +864,18 @@ class StampManagerDialog(Adw.Window):
                 row.add_suffix(del_btn)
 
             group.add(row)
+
+    def _on_security_clicked(self, btn, stamp_id):
+        stamp = self.library.get_stamp(stamp_id)
+        if stamp:
+            dlg = StampPasswordDialog(self, stamp, on_success_callback=self._on_password_configured)
+            dlg.present()
+
+    def _on_password_configured(self, stamp):
+        self.library.save()
+        self._populate_stamps_view()
+        if hasattr(self.parent_window, "stamp_popover") and self.parent_window.stamp_popover:
+            self.parent_window.stamp_popover.refresh()
 
     def _on_set_active_clicked(self, btn, stamp_id):
         self.library.set_active_stamp(stamp_id)
@@ -630,6 +978,13 @@ class StampPopover(Gtk.Popover):
 
             lbl = Gtk.Label(label=stamp.name, xalign=0.0, hexpand=True)
             hbox.append(lbl)
+
+            if stamp.has_password():
+                lock_img = Gtk.Image.new_from_icon_name("channel-secure-symbolic")
+                lock_img.set_pixel_size(14)
+                lock_img.add_css_class("dim-label")
+                lock_img.set_tooltip_text(_("stamp_protected_badge"))
+                hbox.append(lock_img)
 
             if stamp.id == active_id:
                 check = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")

@@ -9,11 +9,11 @@ from .window import PdfEditorWindow
 
 class PdfEditorApplication(Adw.Application):
     """The main GTK4/libadwaita application class for the PDF Editor."""
-    def __init__(self):
+    def __init__(self, **kwargs):
         """Initialise application and basic menu actions."""
-        app_id = os.environ.get('FLATPAK_ID', 'org.word_sys.pdfeditor')
-        super().__init__(application_id=app_id,
-                         flags=Gio.ApplicationFlags.HANDLES_OPEN)
+        app_id = kwargs.pop('application_id', os.environ.get('FLATPAK_ID', 'org.word_sys.pdfeditor'))
+        flags = kwargs.pop('flags', Gio.ApplicationFlags.HANDLES_OPEN)
+        super().__init__(application_id=app_id, flags=flags, **kwargs)
         self.window = None
 
         quit_action = Gio.SimpleAction.new('quit', None)
