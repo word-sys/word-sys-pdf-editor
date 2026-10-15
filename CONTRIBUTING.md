@@ -49,7 +49,7 @@ sudo pacman -S python python-pip python-gobject gtk4 libadwaita \
 
 3. Install required Python packages:
    ```bash
-   pip install PyMuPDF numpy anyconvert
+   pip install PyMuPDF numpy anyconvert cryptography
    ```
 
 4. Run the editor:

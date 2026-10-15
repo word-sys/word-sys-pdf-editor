@@ -17,7 +17,8 @@ dependencies = [
     "PyMuPDF",
     "numpy",
     "pygobject",
-    "anyconvert>=0.1.9"
+    "anyconvert>=0.1.9",
+    "cryptography"
 ]
 
 [project.urls]

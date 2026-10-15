@@ -191,7 +191,7 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
     sudo apt update
     sudo apt install python3 python3-pip python3-venv \
                      python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 libgirepository1.0-dev \
-                     python3-numpy \
+                     python3-numpy python3-cryptography \
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
     ```
@@ -219,7 +219,7 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 4.  **Instalar dependencias de Python:**
     ```bash
-    pip install PyMuPDF numpy anyconvert pygobject==3.50.0
+    pip install PyMuPDF numpy anyconvert cryptography pygobject==3.50.0
     ```
 
 5.  **Iniciar la aplicación:**
@@ -236,7 +236,7 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
     sudo apt update
     sudo apt install python3 python3-pip python3-venv \
                      python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 libgirepository-2.0-dev \
-                     python3-numpy \
+                     python3-numpy python3-cryptography \
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
     ```
@@ -263,7 +263,7 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 4.  **Instalar dependencias de Python:**
     ```bash
-    pip install PyMuPDF numpy anyconvert pygobject
+    pip install PyMuPDF numpy anyconvert cryptography pygobject
     ```
 
 5.  **Iniciar la aplicación:**
@@ -298,7 +298,7 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 3.  **Instalar dependencias de Python:**
     ```bash
-    pip install PyMuPDF numpy anyconvert pygobject
+    pip install PyMuPDF numpy anyconvert cryptography pygobject
     ```
 
 4.  **Iniciar la aplicación:**

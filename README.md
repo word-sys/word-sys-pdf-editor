@@ -192,7 +192,7 @@ This method is suitable for users who want to run the application directly from 
     sudo apt update
     sudo apt install python3 python3-pip python3-venv \
                      python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 libgirepository1.0-dev \
-                     python3-numpy \
+                     python3-numpy python3-cryptography \
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
     ```
@@ -220,9 +220,9 @@ This method is suitable for users who want to run the application directly from 
     *(You can use `deactivate` later to exit the virtual environment.)*
 
 4.  **Install Python Dependencies:**
-    Install the core Python dependencies (PyMuPDF, numpy, and anyconvert):
+    Install the core Python dependencies (PyMuPDF, numpy, anyconvert, and cryptography):
     ```bash
-    pip install PyMuPDF numpy anyconvert pygobject==3.50.0
+    pip install PyMuPDF numpy anyconvert cryptography pygobject==3.50.0
     ```
 
 5.  **Run the Application:**
@@ -240,7 +240,7 @@ This method is suitable for users who want to run the application directly from 
     sudo apt update
     sudo apt install python3 python3-pip python3-venv \
                      python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 libgirepository-2.0-dev \
-                     python3-numpy \
+                     python3-numpy python3-cryptography \
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
     ```
@@ -268,7 +268,7 @@ This method is suitable for users who want to run the application directly from 
 
 4.  **Install Python Dependencies:**
     ```bash
-    pip install PyMuPDF numpy anyconvert pygobject
+    pip install PyMuPDF numpy anyconvert cryptography pygobject
     ```
 
 5.  **Run the Application:**
@@ -304,7 +304,7 @@ This method is suitable for users who want to run the application directly from 
 
 3.  **Install Python Dependencies:**
     ```bash
-    pip install PyMuPDF numpy anyconvert pygobject
+    pip install PyMuPDF numpy anyconvert cryptography pygobject
     ```
 
 4.  **Run the Application:**
