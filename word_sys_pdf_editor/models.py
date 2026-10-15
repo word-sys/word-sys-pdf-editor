@@ -1223,6 +1223,11 @@ class DocumentSession:
     tab_page: Any = None
     bin_widget: Any = None
 
+    # Security and Vault
+    is_vault: bool = False
+    vault_password: Optional[str] = None
+    pdf_password: Optional[str] = None
+
     def __post_init__(self):
         """Ensure Gio.ListStore for pages_model if not provided."""
         if self.pages_model is None:

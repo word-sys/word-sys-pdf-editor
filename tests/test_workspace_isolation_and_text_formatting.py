@@ -1,5 +1,6 @@
 """Unit and regression tests for workspace multi-tab object isolation and text toolbar selection decoupling."""
 
+import os
 import unittest
 import copy
 import fitz
@@ -388,5 +389,60 @@ class TestContextMenuLocalization(unittest.TestCase):
             i18n_mod._active_lang = orig_lang
 
 
+class TestSavePermissionsSafeguard(unittest.TestCase):
+    """Test saving document with dictionary and integer permissions to prevent C-level TypeError."""
+
+    def test_permissions_to_bitmask_conversion(self):
+        """Verify permissions_to_bitmask correctly parses dict, int, and None."""
+        self.assertEqual(pdf_handler.permissions_to_bitmask(123), 123)
+
+        bitmask = pdf_handler.permissions_to_bitmask({
+            "print": True,
+            "copy": False,
+            "annotate": True,
+            "modify": False,
+            "form": False
+        })
+        self.assertTrue(isinstance(bitmask, int))
+        self.assertTrue(bitmask & getattr(fitz, "PDF_PERM_PRINT", 4))
+        self.assertFalse(bitmask & getattr(fitz, "PDF_PERM_COPY", 16))
+        self.assertTrue(bitmask & getattr(fitz, "PDF_PERM_ANNOTATE", 32))
+        self.assertFalse(bitmask & getattr(fitz, "PDF_PERM_MODIFY", 8))
+
+    def test_save_document_with_dict_permissions(self):
+        """Verify save_document succeeds without throwing TypeError when _pdf_permissions is a dict."""
+        import tempfile
+        doc = fitz.open()
+        doc.new_page(width=300, height=300)
+        doc._pdf_password = "user123"
+        doc._pdf_owner_password = "owner123"
+        doc._pdf_permissions = {
+            "print": True,
+            "copy": True,
+            "annotate": True,
+            "modify": False,
+            "form": True,
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            temp_path = f.name
+
+        try:
+            success, err = pdf_handler.save_document(doc, temp_path)
+            self.assertTrue(success, f"Failed to save document: {err}")
+            self.assertIsNone(err)
+
+            # Re-open with password
+            opened_doc, open_err = pdf_handler.load_pdf_document(temp_path, password="user123")
+            self.assertIsNotNone(opened_doc, f"Failed to open saved protected PDF: {open_err}")
+            if opened_doc:
+                opened_doc.close()
+        finally:
+            doc.close()
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+
 if __name__ == "__main__":
     unittest.main()
+

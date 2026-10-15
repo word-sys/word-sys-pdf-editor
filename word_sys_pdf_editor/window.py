@@ -47,6 +47,7 @@ from .stamp_manager import (
     StampLibrary, CustomStamp, StampManagerDialog, StampPopover,
     StampPasswordDialog, StampVerificationDialog
 )
+from .protect_dialog import ProtectDocumentDialog, DocumentUnlockDialog
 
 
 class StickyNotePopover(Gtk.Popover):
@@ -750,7 +751,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             display_title = session.display_title
             page.set_title(display_title)
             page.set_tooltip(session.pdf_path or _("untitled_document") if "_" in dir() else (session.pdf_path or "Untitled Document"))
-            page.set_icon(Gio.ThemedIcon.new("application-pdf-symbolic"))
+            is_secured = getattr(session, 'is_vault', False) or getattr(session, 'pdf_password', None) is not None
+            page.set_icon(Gio.ThemedIcon.new("channel-secure-symbolic" if is_secured else "application-pdf-symbolic"))
             page.set_needs_attention(session.is_modified)
         except Exception:
             pass
@@ -1321,6 +1323,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         header.pack_end(self.mode_toggle_button)
         menu = Gio.Menu()
         menu.append(_("menu_save_as"), "win.save_as")
+        menu.append(_("protect_document"), "win.protect_document")
         menu.append(_("menu_merge_documents"), "win.merge_documents")
         menu.append(_("menu_flatten"), "win.flatten_annotations")
         menu.append(_("menu_manage_stamps"), "win.manage_stamps")
@@ -2066,6 +2069,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_save_as.connect('activate', self.on_save_as)
         self.add_action(action_save_as)
 
+        action_protect = Gio.SimpleAction.new('protect_document', None)
+        action_protect.connect('activate', self.on_protect_document_clicked)
+        self.add_action(action_protect)
+
         action_merge = Gio.SimpleAction.new('merge_documents', None)
         action_merge.connect('activate', self.on_merge_documents)
         self.add_action(action_merge)
@@ -2548,7 +2555,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         except Exception as e:
             print(f"Warning: Failed to record recent file {filepath}: {e}")
 
-    def load_document(self, filepath, target_page=0, in_new_tab=None):
+    def load_document(self, filepath, target_page=0, in_new_tab=None, password=None):
         """Load document into active session or a new tab."""
         existing_session = self.get_session_by_path(filepath)
         if existing_session:
@@ -2583,8 +2590,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.status_label.set_text(_("loading").format(os.path.basename(filepath)))
         GLib.idle_add(self._show_loading_state)
 
+        pw_to_try = password
+        if pw_to_try is None and target_sess:
+            pw_to_try = getattr(target_sess, 'vault_password', None) or getattr(target_sess, 'pdf_password', None)
+
         def _load_async():
-            doc, error_msg = pdf_handler.load_pdf_document(filepath)
+            doc, error_msg = pdf_handler.load_pdf_document(filepath, password=pw_to_try)
             GLib.idle_add(self._finish_loading, doc, error_msg, filepath, target_page, target_sess)
 
         thread = threading.Thread(target=_load_async)
@@ -2621,7 +2632,46 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def _finish_loading(self, doc, error_msg, filepath, target_page=0, target_session=None):
         """Finalize document loading, set active session state, and start thumbnail generation."""
         sess = target_session or getattr(self, '_active_session', None)
-        if error_msg:
+        if error_msg in ("PASSWORD_REQUIRED_WSPDF", "PASSWORD_REQUIRED_STANDARD", "INVALID_PASSWORD"):
+            is_vault = (error_msg == "PASSWORD_REQUIRED_WSPDF" or filepath.lower().endswith(".wspdf"))
+            from .protect_dialog import DocumentUnlockDialog
+
+            def on_unlock(entered_pw):
+                if hasattr(self, '_current_unlock_dialog') and self._current_unlock_dialog:
+                    self._current_unlock_dialog.destroy()
+                    self._current_unlock_dialog = None
+                def _retry_load():
+                    doc2, err2 = pdf_handler.load_pdf_document(filepath, password=entered_pw)
+                    GLib.idle_add(self._finish_loading, doc2, err2, filepath, target_page, sess)
+                t = threading.Thread(target=_retry_load)
+                t.daemon = True
+                t.start()
+
+            def on_cancel():
+                self._current_unlock_dialog = None
+                self.status_label.set_text(_("doc_load_failed"))
+                if len(self.sessions) > 1 and sess:
+                    self.remove_session(sess)
+                else:
+                    self.close_document()
+                self.open_button.set_sensitive(True)
+                self.select_tool_button.set_sensitive(True)
+                self.add_text_tool_button.set_sensitive(True)
+                self._update_ui_state()
+
+            unlock_dlg = DocumentUnlockDialog(
+                parent_window=self,
+                filepath=filepath,
+                is_vault=is_vault,
+                on_unlock_callback=on_unlock,
+                on_cancel_callback=on_cancel
+            )
+            self._current_unlock_dialog = unlock_dlg
+            if error_msg == "INVALID_PASSWORD":
+                unlock_dlg.show_error()
+            unlock_dlg.present()
+            return
+        elif error_msg:
             show_error_dialog(self, error_msg)
             self.status_label.set_text(_("doc_load_failed"))
             if len(self.sessions) > 1 and sess:
@@ -2647,6 +2697,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             sess.allow_incremental_save = True
             sess.is_modified = False
             sess.current_page_index = target_page
+            sess.pdf_password = getattr(doc, '_pdf_password', None)
+            sess.pdf_owner_password = getattr(doc, '_pdf_owner_password', None)
+            sess.pdf_permissions = getattr(doc, '_pdf_permissions', None)
+            sess.is_vault = getattr(doc, '_is_vault', False)
+            sess.vault_password = getattr(doc, '_vault_password', None)
             self._update_tab_title(sess)
 
             calib_data = pdf_handler.extract_scale_calibration(doc)
@@ -2958,6 +3013,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if all_meas_dicts:
                 pdf_handler.embed_measurements(self.doc, all_meas_dicts)
             pdf_handler.sync_sticky_notes(self.doc, getattr(self._active_session, 'sticky_notes', {}))
+            if hasattr(self._active_session, 'pdf_password'):
+                self.doc._pdf_password = self._active_session.pdf_password
+            if hasattr(self._active_session, 'pdf_owner_password'):
+                self.doc._pdf_owner_password = self._active_session.pdf_owner_password
+            if hasattr(self._active_session, 'pdf_permissions'):
+                self.doc._pdf_permissions = self._active_session.pdf_permissions
+            if getattr(self._active_session, 'is_vault', False):
+                self.doc._is_vault = True
+                self.doc._vault_password = getattr(self._active_session, 'vault_password', None)
 
         success, error_msg = pdf_handler.save_document(self.doc, save_path, incremental=False)
         self.is_saving = False
@@ -6565,6 +6629,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         filter_pdf = Gtk.FileFilter(name=_("filter_pdf"))
         filter_pdf.add_pattern("*.pdf")
         filter_pdf.add_mime_type("application/pdf")
+        filter_wspdf = Gtk.FileFilter(name=_("filter_wspdf"))
+        filter_wspdf.add_pattern("*.wspdf")
         filter_all = Gtk.FileFilter(name=_("filter_all"))
         filter_all.add_pattern("*")
 
@@ -6575,7 +6641,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         show_open_file_dialog(
             self,
             _("open_pdf_title"),
-            filters=[filter_pdf, filter_all],
+            filters=[filter_pdf, filter_wspdf, filter_all],
             default_filter=filter_pdf,
             callback=on_open_finish
         )
@@ -6590,30 +6656,95 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         else:
             self.on_save_as(None, None)
 
-    def on_save_as(self, action, param):
+    def on_save_as(self, action=None, param=None):
         """Prompt save file dialog to write PDF to a new destination."""
         self.commit_pending_format_change()
         if not self.doc: return
 
-        initial_name = os.path.basename(self.current_file_path or "edited_document.pdf")
-        filter_pdf = Gtk.FileFilter(name=_("filter_pdf"))
-        filter_pdf.add_pattern("*.pdf")
-        filter_pdf.add_mime_type("application/pdf")
+        is_vault = bool(getattr(self._active_session, 'is_vault', False) or getattr(self.doc, '_is_vault', False))
+        if is_vault:
+            initial_name = os.path.basename(self.current_file_path or "vault_document.wspdf")
+            if not initial_name.lower().endswith('.wspdf'):
+                initial_name = os.path.splitext(initial_name)[0] + '.wspdf'
+            filter_wspdf = Gtk.FileFilter(name=_("filter_wspdf"))
+            filter_wspdf.add_pattern("*.wspdf")
+            filters = [filter_wspdf]
+            default_filter = filter_wspdf
+        else:
+            initial_name = os.path.basename(self.current_file_path or "edited_document.pdf")
+            filter_pdf = Gtk.FileFilter(name=_("filter_pdf"))
+            filter_pdf.add_pattern("*.pdf")
+            filter_pdf.add_mime_type("application/pdf")
+            filters = [filter_pdf]
+            default_filter = filter_pdf
 
         def on_save_finish(file):
             if file:
                 path = file.get_path()
-                if not path.lower().endswith('.pdf'): path += '.pdf'
+                if is_vault:
+                    if not path.lower().endswith('.wspdf'): path += '.wspdf'
+                else:
+                    if not path.lower().endswith('.pdf'): path += '.pdf'
                 self.save_document(path, incremental=False)
 
         show_save_file_dialog(
             self,
             _("save_as_title"),
             initial_name=initial_name,
-            filters=[filter_pdf],
-            default_filter=filter_pdf,
+            filters=filters,
+            default_filter=default_filter,
             callback=on_save_finish
         )
+
+    def on_protect_document_clicked(self, _action=None, _param=None):
+        """Show Protect Document dialog."""
+        if not self.doc:
+            return
+        from .protect_dialog import ProtectDocumentDialog
+        if getattr(self, "_protect_dialog", None) is not None:
+            self._protect_dialog.present()
+            return
+        self._protect_dialog = ProtectDocumentDialog(
+            parent_window=self,
+            on_protect_callback=self._execute_protect_from_dialog
+        )
+        self._protect_dialog.connect("close-request", self._on_protect_dialog_closed)
+        self._protect_dialog.present()
+
+    def _on_protect_dialog_closed(self, dialog):
+        self._protect_dialog = None
+        return False
+
+    def _execute_protect_from_dialog(self, mode: str, settings: Dict[str, Any]):
+        """Apply encryption/vault protection settings and prompt Save As."""
+        if not self.doc or not self._active_session:
+            return
+        if mode == "standard":
+            user_pw = settings.get("user_pw", "")
+            owner_pw = settings.get("owner_pw", user_pw)
+            perms = {
+                "print": settings.get("allow_print", True),
+                "copy": settings.get("allow_copy", True),
+                "annotate": settings.get("allow_annotate", True),
+                "modify": settings.get("allow_modify", True),
+                "form": settings.get("allow_form_fill", True),
+            }
+            perm_int = pdf_handler.permissions_to_bitmask(perms)
+            self._active_session.pdf_password = user_pw
+            self._active_session.pdf_owner_password = owner_pw
+            self._active_session.pdf_permissions = perm_int
+            self._active_session.is_vault = False
+            self.doc._pdf_password = user_pw
+            self.doc._pdf_owner_password = owner_pw
+            self.doc._pdf_permissions = perm_int
+            self.on_save_as()
+        elif mode == "vault":
+            vault_pw = settings.get("password", "")
+            self._active_session.is_vault = True
+            self._active_session.vault_password = vault_pw
+            self.doc._is_vault = True
+            self.doc._vault_password = vault_pw
+            self.on_save_as()
 
     def on_merge_documents(self, _action=None, _param=None):
         from .merge_dialog import MergeDialog

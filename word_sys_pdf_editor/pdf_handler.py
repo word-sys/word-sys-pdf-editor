@@ -16,6 +16,19 @@ import traceback
 import re
 import uuid
 import json
+import hashlib
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    HAS_CRYPTOGRAPHY = True
+except ImportError:
+    AESGCM = None
+    HAS_CRYPTOGRAPHY = False
+
+WSPDF_MAGIC = b"WSPDF01"
+WSPDF_SALT_LEN = 16
+WSPDF_NONCE_LEN = 12
+WSPDF_TAG_LEN = 16
+WSPDF_PBKDF2_ROUNDS = 100_000
 from typing import Optional, List, Dict, Any, Tuple, Union
 try:
     import anyconvert
@@ -195,13 +208,200 @@ def _get_font_args_for_pymupdf(text_obj):
                  return None, "Cannot save non-ASCII text: No suitable Unicode font found."
             return font_arg, None
 
-def load_pdf_document(filepath):
-    """Load PDF document."""
+def is_wspdf_file(filepath_or_bytes: Union[str, bytes, Path]) -> bool:
+    """Check if given file path or byte buffer is a word-sys Exclusive Vault container."""
+    if isinstance(filepath_or_bytes, (str, Path)):
+        if not os.path.exists(filepath_or_bytes):
+            return False
+        try:
+            with open(filepath_or_bytes, "rb") as f:
+                header = f.read(len(WSPDF_MAGIC))
+                return header == WSPDF_MAGIC
+        except Exception:
+            return False
+    elif isinstance(filepath_or_bytes, (bytes, bytearray)):
+        return filepath_or_bytes.startswith(WSPDF_MAGIC)
+    return False
+
+def encrypt_to_wspdf(pdf_bytes: bytes, password: str) -> bytes:
+    """Encrypt raw PDF bytes into a word-sys Exclusive Vault container (.wspdf)."""
+    if not HAS_CRYPTOGRAPHY or AESGCM is None:
+        raise RuntimeError("Cryptography library is required for word-sys Vault encryption.")
+    if not password:
+        raise ValueError("Password cannot be empty.")
+    
+    salt = os.urandom(WSPDF_SALT_LEN)
+    nonce = os.urandom(WSPDF_NONCE_LEN)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, WSPDF_PBKDF2_ROUNDS, dklen=32)
+    aesgcm = AESGCM(key)
+    ciphertext_and_tag = aesgcm.encrypt(nonce, pdf_bytes, associated_data=WSPDF_MAGIC)
+    return WSPDF_MAGIC + salt + nonce + ciphertext_and_tag
+
+def decrypt_wspdf(vault_bytes: bytes, password: str) -> Tuple[Optional[bytes], Optional[str]]:
+    """Decrypt a word-sys Exclusive Vault container (.wspdf) into raw PDF bytes."""
+    if not HAS_CRYPTOGRAPHY or AESGCM is None:
+        return None, "Cryptography library is required for word-sys Vault decryption."
+    if not vault_bytes.startswith(WSPDF_MAGIC):
+        return None, "Invalid file format: missing word-sys Vault header."
+    
+    min_len = len(WSPDF_MAGIC) + WSPDF_SALT_LEN + WSPDF_NONCE_LEN + WSPDF_TAG_LEN
+    if len(vault_bytes) < min_len:
+        return None, "Corrupted vault container: file size is too small."
+    
+    offset = len(WSPDF_MAGIC)
+    salt = vault_bytes[offset:offset + WSPDF_SALT_LEN]
+    offset += WSPDF_SALT_LEN
+    nonce = vault_bytes[offset:offset + WSPDF_NONCE_LEN]
+    offset += WSPDF_NONCE_LEN
+    ciphertext_and_tag = vault_bytes[offset:]
+    
     try:
+        key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, WSPDF_PBKDF2_ROUNDS, dklen=32)
+        aesgcm = AESGCM(key)
+        pdf_bytes = aesgcm.decrypt(nonce, ciphertext_and_tag, associated_data=WSPDF_MAGIC)
+        return pdf_bytes, None
+    except Exception:
+        return None, "INVALID_PASSWORD"
+
+def save_wspdf_vault(doc, save_path: str, password: str) -> Tuple[bool, Optional[str]]:
+    """Save PyMuPDF document as a word-sys Exclusive Vault container."""
+    if not doc:
+        return False, "No document to save."
+    if not password:
+        return False, "Password cannot be empty."
+    
+    temp_path = f"{save_path}.tmp_save"
+    try:
+        pdf_bytes = doc.tobytes(garbage=4, deflate=True)
+        vault_bytes = encrypt_to_wspdf(pdf_bytes, password)
+        with open(temp_path, "wb") as f:
+            f.write(vault_bytes)
+        os.replace(temp_path, save_path)
+        return True, None
+    except Exception as e:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        return False, str(e)
+
+
+def permissions_to_bitmask(perms: Union[int, Dict[str, Any], None]) -> int:
+    """Convert permission dict, int, or None to PyMuPDF integer bitmask."""
+    if isinstance(perms, int):
+        return perms
+    bitmask = 0
+    if not isinstance(perms, dict):
+        return (
+            getattr(fitz, "PDF_PERM_PRINT", 4) |
+            getattr(fitz, "PDF_PERM_COPY", 16) |
+            getattr(fitz, "PDF_PERM_ANNOTATE", 32) |
+            getattr(fitz, "PDF_PERM_MODIFY", 8) |
+            getattr(fitz, "PDF_PERM_FORM", 256) |
+            getattr(fitz, "PDF_PERM_ACCESSIBILITY", 512) |
+            getattr(fitz, "PDF_PERM_PRINT_HQ", 2048)
+        )
+    if perms.get("print", True):
+        bitmask |= getattr(fitz, "PDF_PERM_PRINT", 4)
+        bitmask |= getattr(fitz, "PDF_PERM_PRINT_HQ", 2048)
+    if perms.get("copy", True):
+        bitmask |= getattr(fitz, "PDF_PERM_COPY", 16)
+        bitmask |= getattr(fitz, "PDF_PERM_ACCESSIBILITY", 512)
+    if perms.get("annotate", True):
+        bitmask |= getattr(fitz, "PDF_PERM_ANNOTATE", 32)
+    if perms.get("modify", False):
+        bitmask |= getattr(fitz, "PDF_PERM_MODIFY", 8)
+        bitmask |= getattr(fitz, "PDF_PERM_ASSEMBLE", 1024)
+    if perms.get("form", True):
+        bitmask |= getattr(fitz, "PDF_PERM_FORM", 256)
+    return bitmask
+
+
+def save_encrypted_standard_pdf(
+    doc,
+    save_path: str,
+    user_password: str,
+    owner_password: Optional[str] = None,
+    allow_print: bool = True,
+    allow_copy: bool = True,
+    allow_annotate: bool = True,
+    allow_modify: bool = False,
+    allow_form_fill: bool = True
+) -> Tuple[bool, Optional[str]]:
+    """Save PyMuPDF document with AES-256 standard encryption and configurable permissions."""
+    if not doc:
+        return False, "No document to save."
+    if not user_password:
+        return False, "User password cannot be empty."
+    
+    permissions = permissions_to_bitmask({
+        "print": allow_print,
+        "copy": allow_copy,
+        "annotate": allow_annotate,
+        "modify": allow_modify,
+        "form": allow_form_fill,
+    })
+        
+    temp_path = f"{save_path}.tmp_save"
+    try:
+        doc.save(
+            temp_path,
+            garbage=4,
+            deflate=True,
+            encryption=fitz.PDF_ENCRYPT_AES_256,
+            user_pw=user_password,
+            owner_pw=owner_password or user_password,
+            permissions=permissions
+        )
+        os.replace(temp_path, save_path)
+        return True, None
+    except Exception as e:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        return False, str(e)
+
+def load_pdf_document(filepath, password=None):
+    """Load PDF document or word-sys Exclusive Vault container (.wspdf).
+    
+    Returns (doc, None) on success.
+    Returns (None, error_code_or_message) on failure or when password is required:
+      - 'PASSWORD_REQUIRED_WSPDF': when a .wspdf vault is loaded without password
+      - 'PASSWORD_REQUIRED_STANDARD': when an encrypted PDF is loaded without password
+      - 'INVALID_PASSWORD': when password provided was rejected
+      - 'Error opening PDF: ...': for general file errors
+    """
+    try:
+        if is_wspdf_file(filepath):
+            if password is None:
+                return None, "PASSWORD_REQUIRED_WSPDF"
+            with open(filepath, "rb") as f:
+                vault_data = f.read()
+            pdf_bytes, err = decrypt_wspdf(vault_data, password)
+            if err:
+                return None, err
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            doc._is_vault = True
+            doc._vault_password = password
+            doc._vault_path = filepath
+            return doc, None
+
         doc = fitz.open(filepath)
         if doc.needs_pass:
-            doc.close()
-            return None, "Password protected PDFs are not supported yet."
+            if password is None:
+                doc.close()
+                return None, "PASSWORD_REQUIRED_STANDARD"
+            auth_res = doc.authenticate(password)
+            if auth_res > 0:
+                doc._pdf_password = password
+                doc._pdf_permissions = getattr(doc, 'permissions', None)
+                return doc, None
+            else:
+                doc.close()
+                return None, "INVALID_PASSWORD"
         return doc, None
     except Exception as e:
         return None, f"Error opening PDF: {e}\nPath: {filepath}"
@@ -1033,16 +1233,38 @@ def save_document(doc, save_path, incremental=False):
     if not doc:
         return False, "Kaydedilecek belge yok."
 
+    # If saving to .wspdf or the doc was opened as a vault container
+    if save_path.lower().endswith(".wspdf") or getattr(doc, '_is_vault', False):
+        vault_pw = getattr(doc, '_vault_password', None)
+        if vault_pw:
+            return save_wspdf_vault(doc, save_path, vault_pw)
+
     temp_path = f"{save_path}.tmp_save"
 
     try:
-        doc.save(
-            temp_path,
-            garbage=4,
-            deflate=True,
-            incremental=False,  
-            encryption=fitz.PDF_ENCRYPT_NONE
-        )
+        pdf_pw = getattr(doc, '_pdf_password', None)
+        owner_pw = getattr(doc, '_pdf_owner_password', None) or pdf_pw
+        perms = getattr(doc, '_pdf_permissions', None)
+        if pdf_pw or owner_pw or perms is not None:
+            save_kwargs = {
+                "garbage": 4,
+                "deflate": True,
+                "incremental": False,
+                "encryption": fitz.PDF_ENCRYPT_AES_256,
+                "user_pw": pdf_pw or "",
+                "owner_pw": owner_pw or pdf_pw or "",
+            }
+            if perms is not None:
+                save_kwargs["permissions"] = permissions_to_bitmask(perms)
+            doc.save(temp_path, **save_kwargs)
+        else:
+            doc.save(
+                temp_path,
+                garbage=4,
+                deflate=True,
+                incremental=False,  
+                encryption=fitz.PDF_ENCRYPT_NONE
+            )
 
         os.replace(temp_path, save_path)
         return True, None

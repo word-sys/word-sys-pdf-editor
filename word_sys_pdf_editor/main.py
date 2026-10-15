@@ -50,6 +50,41 @@ class PdfEditorApplication(Adw.Application):
         print("Quitting application.")
         self.quit()
 
+def _suppress_glib_noise():
+    """Suppress harmless known upstream GLib/GIO file chooser warnings."""
+    def _legacy_handler(log_domain, log_level, message, user_data=None):
+        if message and ("is-backup" in message or "g_file_info_get_is_backup" in message):
+            return
+        GLib.log_default_handler(log_domain, log_level, message, user_data)
+
+    for domain in ["GLib-GIO", "Gtk", "GLib"]:
+        try:
+            GLib.log_set_handler(
+                domain,
+                GLib.LogLevelFlags.LEVEL_CRITICAL | GLib.LogLevelFlags.LEVEL_WARNING,
+                _legacy_handler,
+                None
+            )
+        except Exception:
+            pass
+
+    def _writer_func(*args):
+        try:
+            if len(args) >= 2 and isinstance(args[1], (list, tuple)):
+                for f in args[1]:
+                    val = str(getattr(f, "value", ""))
+                    if "is-backup" in val or "g_file_info_get_is_backup" in val:
+                        return GLib.LogWriterOutput.HANDLED
+        except Exception:
+            pass
+        return GLib.log_writer_default(*args)
+
+    try:
+        GLib.log_set_writer_func(_writer_func)
+    except Exception:
+        pass
+
+
 def main():
     """Run the Adw application."""
     import os, locale
@@ -70,6 +105,7 @@ def main():
     app_id = os.environ.get('FLATPAK_ID', 'word-sys-pdf-editor')
     GLib.set_prgname(app_id)
     GLib.set_application_name("word-sys's PDF Editor")
+    _suppress_glib_noise()
     Adw.init()
 
     try:
