@@ -1300,10 +1300,18 @@ class AddMeasurementCommand(Command):
         self.measurement = measurement
 
     def execute(self):
-        self.window._add_measurement_to_session(self.measurement)
+        sess = self._get_target_session()
+        try:
+            self.window._add_measurement_to_session(self.measurement, session=sess)
+        except TypeError:
+            self.window._add_measurement_to_session(self.measurement)
 
     def undo(self):
-        self.window._remove_measurement_from_session(self.measurement)
+        sess = self._get_target_session()
+        try:
+            self.window._remove_measurement_from_session(self.measurement, session=sess)
+        except TypeError:
+            self.window._remove_measurement_from_session(self.measurement)
 
 
 class DeleteMeasurementCommand(Command):
@@ -1313,10 +1321,18 @@ class DeleteMeasurementCommand(Command):
         self.measurement = measurement
 
     def execute(self):
-        self.window._remove_measurement_from_session(self.measurement)
+        sess = self._get_target_session()
+        try:
+            self.window._remove_measurement_from_session(self.measurement, session=sess)
+        except TypeError:
+            self.window._remove_measurement_from_session(self.measurement)
 
     def undo(self):
-        self.window._add_measurement_to_session(self.measurement)
+        sess = self._get_target_session()
+        try:
+            self.window._add_measurement_to_session(self.measurement, session=sess)
+        except TypeError:
+            self.window._add_measurement_to_session(self.measurement)
 
 
 class AddStickyNoteCommand(Command):

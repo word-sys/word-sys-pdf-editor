@@ -1227,6 +1227,7 @@ class DocumentSession:
     is_vault: bool = False
     vault_password: Optional[str] = None
     pdf_password: Optional[str] = None
+    digital_signatures: Optional[List[Dict[str, Any]]] = None
 
     def __post_init__(self):
         """Ensure Gio.ListStore for pages_model if not provided."""

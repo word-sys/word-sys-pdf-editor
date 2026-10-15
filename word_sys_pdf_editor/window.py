@@ -48,6 +48,7 @@ from .stamp_manager import (
     StampPasswordDialog, StampVerificationDialog
 )
 from .protect_dialog import ProtectDocumentDialog, DocumentUnlockDialog
+from .signature_dialog import DigitalSignatureDialog, SignatureDetailsDialog
 
 
 class StickyNotePopover(Gtk.Popover):
@@ -1324,6 +1325,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu = Gio.Menu()
         menu.append(_("menu_save_as"), "win.save_as")
         menu.append(_("protect_document"), "win.protect_document")
+        menu.append(_("digitally_sign_document"), "win.digitally_sign_document")
+        menu.append(_("inspect_digital_signatures"), "win.inspect_digital_signatures")
         menu.append(_("menu_merge_documents"), "win.merge_documents")
         menu.append(_("menu_flatten"), "win.flatten_annotations")
         menu.append(_("menu_manage_stamps"), "win.manage_stamps")
@@ -1394,6 +1397,27 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0, vexpand=True)
         self._create_main_toolbar()
         content_box.append(self.main_toolbar)
+
+        self.signature_banner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.signature_banner.set_margin_start(12)
+        self.signature_banner.set_margin_end(12)
+        self.signature_banner.set_margin_top(6)
+        self.signature_banner.set_margin_bottom(6)
+        self.signature_banner.add_css_class("card")
+        self.signature_banner_icon = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
+        self.signature_banner_label = Gtk.Label(xalign=0.0, hexpand=True)
+        self.signature_banner_label.set_wrap(True)
+        self.signature_banner_btn = Gtk.Button(label=_("sig_banner_btn_view"))
+        self.signature_banner_btn.connect("clicked", lambda b: self.on_inspect_digital_signatures(None, None))
+        self.signature_banner.append(self.signature_banner_icon)
+        self.signature_banner.append(self.signature_banner_label)
+        self.signature_banner.append(self.signature_banner_btn)
+        close_banner_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
+        close_banner_btn.add_css_class("flat")
+        close_banner_btn.connect("clicked", lambda b: self.signature_banner.set_visible(False))
+        self.signature_banner.append(close_banner_btn)
+        self.signature_banner.set_visible(False)
+        content_box.append(self.signature_banner)
         
         self.pdf_scroll = Gtk.ScrolledWindow(hexpand=True, vexpand=True,
                                             hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
@@ -2072,6 +2096,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_protect = Gio.SimpleAction.new('protect_document', None)
         action_protect.connect('activate', self.on_protect_document_clicked)
         self.add_action(action_protect)
+
+        action_sign = Gio.SimpleAction.new('digitally_sign_document', None)
+        action_sign.connect('activate', self.on_sign_pdf_clicked)
+        self.add_action(action_sign)
+
+        action_inspect_sig = Gio.SimpleAction.new('inspect_digital_signatures', None)
+        action_inspect_sig.connect('activate', self.on_inspect_digital_signatures)
+        self.add_action(action_inspect_sig)
 
         action_merge = Gio.SimpleAction.new('merge_documents', None)
         action_merge.connect('activate', self.on_merge_documents)
@@ -6746,6 +6778,141 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.doc._vault_password = vault_pw
             self.on_save_as()
 
+    def on_sign_pdf_clicked(self, _action=None, _param=None):
+        """Show Digital Signature dialog to configure and apply a digital signature."""
+        if not self.doc:
+            return
+        from .signature_dialog import DigitalSignatureDialog
+        if getattr(self, "_digital_sig_dialog", None) is not None:
+            self._digital_sig_dialog.present()
+            return
+        self._digital_sig_dialog = DigitalSignatureDialog(
+            parent_window=self,
+            page_count=self.doc.page_count,
+            current_page=self.current_page_index,
+            on_sign_callback=self._execute_sign_from_dialog,
+        )
+        self._digital_sig_dialog.connect("close-request", self._on_digital_sig_dialog_closed)
+        self._digital_sig_dialog.present()
+
+    def _on_digital_sig_dialog_closed(self, dialog):
+        self._digital_sig_dialog = None
+        return False
+
+    def on_inspect_digital_signatures(self, _action=None, _param=None):
+        """Show inspection dialog displaying digital signatures in active document."""
+        if not self.doc or not self._active_session:
+            return
+        from .signature_dialog import SignatureDetailsDialog
+        sigs = getattr(self._active_session, "digital_signatures", None)
+        if sigs is None:
+            sigs = pdf_handler.inspect_document_signatures(self.doc)
+            self._active_session.digital_signatures = sigs
+
+        dialog = SignatureDetailsDialog(parent_window=self, signatures=sigs or [])
+        dialog.present()
+
+    def _execute_sign_from_dialog(self, options: Dict[str, Any]):
+        """Execute digital signing of active document and prompt save path."""
+        if not self.doc or not self._active_session:
+            return
+
+        filter_pdf = Gtk.FileFilter(name=_("filter_pdf"))
+        filter_pdf.add_pattern("*.pdf")
+        filter_pdf.add_mime_type("application/pdf")
+
+        base_name = os.path.basename(self.current_file_path or "document.pdf")
+        root, ext = os.path.splitext(base_name)
+        initial_name = f"{root}_signed.pdf"
+
+        def on_signed_save_finish(file, _filter=None):
+            if not file:
+                return
+            save_path = file.get_path()
+            if not save_path.lower().endswith(".pdf"):
+                save_path += ".pdf"
+
+            try:
+                self.commit_pending_format_change()
+                pdf_bytes = self.doc.tobytes()
+
+                target_page_idx = options.get("page_index", 0)
+                page_height = None
+                if target_page_idx < len(self.doc):
+                    page_height = self.doc[target_page_idx].rect.height
+
+                signed_bytes, err = pdf_handler.sign_pdf_document(
+                    pdf_bytes=pdf_bytes,
+                    pfx_data_or_path=options.get("cert_data") or options.get("cert_path"),
+                    passphrase=options.get("passphrase"),
+                    reason=options.get("reason"),
+                    location=options.get("location"),
+                    contact_info=options.get("contact_info"),
+                    signer_name=options.get("signer_name"),
+                    page_index=target_page_idx,
+                    box=options.get("box"),
+                    page_height=page_height,
+                    visual_stamp=options.get("visual_stamp", True),
+                    signature_image_bytes=options.get("signature_image_bytes"),
+                )
+
+                if err or not signed_bytes:
+                    err_msg = _("sig_error_failed", err or "Unknown error")
+                    if hasattr(self, "toast_overlay") and self.toast_overlay:
+                        self.toast_overlay.add_toast(Adw.Toast(title=err_msg))
+                    elif hasattr(self, "status_label") and self.status_label:
+                        self.status_label.set_text(err_msg)
+                    return
+
+                with open(save_path, "wb") as f:
+                    f.write(signed_bytes)
+
+                if hasattr(self, "toast_overlay") and self.toast_overlay:
+                    self.toast_overlay.add_toast(Adw.Toast(title=_("sig_success_signed")))
+                elif hasattr(self, "status_label") and self.status_label:
+                    self.status_label.set_text(_("sig_success_signed"))
+
+                GLib.idle_add(self.load_document, save_path, 0, True)
+
+            except Exception as ex:
+                err_msg = _("sig_error_failed", str(ex))
+                if hasattr(self, "toast_overlay") and self.toast_overlay:
+                    self.toast_overlay.add_toast(Adw.Toast(title=err_msg))
+                elif hasattr(self, "status_label") and self.status_label:
+                    self.status_label.set_text(err_msg)
+
+        show_save_file_dialog(
+            self,
+            _("sig_save_signed_title"),
+            initial_name=initial_name,
+            filters=[filter_pdf],
+            default_filter=filter_pdf,
+            callback=on_signed_save_finish,
+        )
+
+    def _update_signature_banner(self, sigs: Optional[List[Dict[str, Any]]]):
+        """Update top signature notification banner based on active document signatures."""
+        if not hasattr(self, 'signature_banner') or not self.signature_banner:
+            return
+        if not sigs:
+            self.signature_banner.set_visible(False)
+            return
+
+        total = len(sigs)
+        all_intact = all(s.get("intact", False) for s in sigs)
+        if all_intact:
+            if total == 1:
+                signer_name = sigs[0].get("signer_cn") or sigs[0].get("signer_friendly") or "Signer"
+                self.signature_banner_label.set_text(_("sig_banner_single_valid", signer_name))
+            else:
+                self.signature_banner_label.set_text(_("sig_banner_multi_valid", total))
+            self.signature_banner_icon.set_from_icon_name("emblem-ok-symbolic")
+        else:
+            self.signature_banner_label.set_text(_("sig_banner_invalid"))
+            self.signature_banner_icon.set_from_icon_name("dialog-warning-symbolic")
+
+        self.signature_banner.set_visible(True)
+
     def on_merge_documents(self, _action=None, _param=None):
         from .merge_dialog import MergeDialog
         if getattr(self, "_merge_dialog", None) is not None:
@@ -8499,41 +8666,47 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.status_label.set_text(_("scale_reset_success"))
         self.pdf_view.queue_draw()
 
-    def _add_measurement_to_session(self, measurement):
+    def _add_measurement_to_session(self, measurement, session=None):
         """Add measurement to active session storage."""
-        if not self._active_session:
+        sess = session or self._active_session
+        if not sess:
             return
-        p_idx = getattr(measurement, 'page_number', self.current_page_index)
-        if p_idx not in self._active_session.measurements:
-            self._active_session.measurements[p_idx] = []
-        if measurement not in self._active_session.measurements[p_idx]:
-            self._active_session.measurements[p_idx].append(measurement)
-        self.selected_measurement = measurement
+        p_idx = getattr(measurement, 'page_number', getattr(sess, 'current_page_index', self.current_page_index))
+        if p_idx not in sess.measurements:
+            sess.measurements[p_idx] = []
+        if measurement not in sess.measurements[p_idx]:
+            sess.measurements[p_idx].append(measurement)
+        sess.document_modified = True
         self.document_modified = True
-        if hasattr(self, '_update_tab_dirty_state'):
-            self._update_tab_dirty_state()
-        if hasattr(self, '_update_ui_state'):
-            self._update_ui_state()
-        if hasattr(self, 'pdf_view') and self.pdf_view:
-            self.pdf_view.queue_draw()
+        if sess is self._active_session:
+            self.selected_measurement = measurement
+            if hasattr(self, '_update_tab_dirty_state'):
+                self._update_tab_dirty_state()
+            if hasattr(self, '_update_ui_state'):
+                self._update_ui_state()
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
 
-    def _remove_measurement_from_session(self, measurement):
+    def _remove_measurement_from_session(self, measurement, session=None):
         """Remove measurement from active session storage."""
-        if not self._active_session:
+        sess = session or self._active_session
+        if not sess:
             return
-        p_idx = getattr(measurement, 'page_number', self.current_page_index)
-        if p_idx in self._active_session.measurements:
-            if measurement in self._active_session.measurements[p_idx]:
-                self._active_session.measurements[p_idx].remove(measurement)
-        if getattr(self, 'selected_measurement', None) == measurement:
-            self.selected_measurement = None
+        p_idx = getattr(measurement, 'page_number', getattr(sess, 'current_page_index', self.current_page_index))
+        if p_idx in sess.measurements:
+            if measurement in sess.measurements[p_idx]:
+                sess.measurements[p_idx].remove(measurement)
+        sess.document_modified = True
         self.document_modified = True
-        if hasattr(self, '_update_tab_dirty_state'):
-            self._update_tab_dirty_state()
-        if hasattr(self, '_update_ui_state'):
-            self._update_ui_state()
-        if hasattr(self, 'pdf_view') and self.pdf_view:
-            self.pdf_view.queue_draw()
+        if sess is self._active_session:
+            if getattr(self, 'selected_measurement', None) == measurement:
+                self.selected_measurement = None
+            if hasattr(self, '_update_tab_dirty_state'):
+                self._update_tab_dirty_state()
+            if hasattr(self, '_update_ui_state'):
+                self._update_ui_state()
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
 
     def on_clear_measurements_clicked(self, button=None):
         """Clear all measurements on the current page."""

@@ -3937,3 +3937,74 @@ def flatten_document_annotations(doc, page_indices: Optional[List[int]] = None, 
         print(f"Error flattening document annotations: {e}")
         traceback.print_exc()
         return False, str(e)
+
+
+def is_digital_signature_supported() -> bool:
+    """Return True if digital signature backend (pyHanko) is available."""
+    try:
+        from .digital_signature import is_pyhanko_available
+        return is_pyhanko_available()
+    except Exception:
+        return False
+
+
+def sign_pdf_document(
+    pdf_bytes: bytes,
+    pfx_data_or_path: bytes | str,
+    passphrase: str | bytes | None = None,
+    field_name: Optional[str] = None,
+    reason: Optional[str] = None,
+    location: Optional[str] = None,
+    contact_info: Optional[str] = None,
+    signer_name: Optional[str] = None,
+    page_index: int = 0,
+    box: Optional[Tuple[float, float, float, float]] = None,
+    page_height: Optional[float] = None,
+    visual_stamp: bool = True,
+    signature_image_bytes: Optional[bytes] = None,
+    custom_stamp_text: Optional[str] = None,
+) -> Tuple[Optional[bytes], Optional[str]]:
+    """Sign PDF bytes using cryptographic digital signature engine."""
+    from .digital_signature import sign_pdf_bytes
+    return sign_pdf_bytes(
+        pdf_bytes=pdf_bytes,
+        pfx_data_or_path=pfx_data_or_path,
+        passphrase=passphrase,
+        field_name=field_name,
+        reason=reason,
+        location=location,
+        contact_info=contact_info,
+        signer_name=signer_name,
+        page_index=page_index,
+        box=box,
+        page_height=page_height,
+        visual_stamp=visual_stamp,
+        signature_image_bytes=signature_image_bytes,
+        custom_stamp_text=custom_stamp_text,
+    )
+
+
+def inspect_document_signatures(doc_or_bytes_or_path) -> List[Dict[str, Any]]:
+    """
+    Inspect all digital signatures in a document and determine cryptographic integrity.
+    Accepts a PyMuPDF Document instance, file path string, or raw bytes.
+    """
+    from .digital_signature import inspect_pdf_signatures
+    if hasattr(doc_or_bytes_or_path, "name") and doc_or_bytes_or_path.name and os.path.exists(doc_or_bytes_or_path.name):
+        try:
+            with open(doc_or_bytes_or_path.name, "rb") as f:
+                data = f.read()
+            return inspect_pdf_signatures(data)
+        except Exception:
+            pass
+
+    if hasattr(doc_or_bytes_or_path, "tobytes"):
+        try:
+            return inspect_pdf_signatures(doc_or_bytes_or_path.tobytes())
+        except Exception:
+            return []
+
+    return inspect_pdf_signatures(doc_or_bytes_or_path)
+
+
+inspect_digital_signatures = inspect_document_signatures
