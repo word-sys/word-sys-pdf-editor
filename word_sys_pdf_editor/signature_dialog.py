@@ -65,8 +65,8 @@ class DigitalSignatureDialog(Adw.Window):
         self.hw_token_label: str = ""
         self.hw_token_slot_id: Optional[int] = None
         self.hw_pin: str = ""
-        self.hw_cert_label: str = ""
-        self.hw_cert_id: bytes = b""
+        self.hw_cert_label: Optional[str] = None
+        self.hw_cert_id: Optional[bytes] = None
         self.hw_cert_info: Optional[Dict[str, Any]] = None
         self.available_drivers: List[Dict[str, str]] = []
         self.available_tokens: List[Dict[str, Any]] = []
@@ -601,8 +601,8 @@ class DigitalSignatureDialog(Adw.Window):
             self._on_hw_cert_changed(self.hw_cert_combo, None)
         else:
             self.hw_cert_combo.set_model(Gtk.StringList.new([_("sig_hw_no_certs")]))
-            self.hw_cert_label = ""
-            self.hw_cert_id = b""
+            self.hw_cert_label = None
+            self.hw_cert_id = None
             self.hw_cert_info = None
             self.hw_status_icon.set_from_icon_name("dialog-warning-symbolic")
             self.hw_status_row.set_title(_("sig_cert_status_title"))
@@ -613,8 +613,8 @@ class DigitalSignatureDialog(Adw.Window):
         idx = combo.get_selected()
         if 0 <= idx < len(self.available_certs):
             c = self.available_certs[idx]
-            self.hw_cert_label = c.get("label", "")
-            self.hw_cert_id = c.get("id", b"")
+            self.hw_cert_label = c.get("raw_label") or c.get("label") or None
+            self.hw_cert_id = c.get("cert_id_bytes") or c.get("id") or None
             self.hw_cert_info = c
             self.hw_status_icon.set_from_icon_name("emblem-ok-symbolic")
             name = c.get("subject_cn") or "Hardware Signer"
@@ -627,8 +627,8 @@ class DigitalSignatureDialog(Adw.Window):
             self.hw_status_row.set_title(name)
             self.hw_status_row.set_subtitle(sub)
         else:
-            self.hw_cert_label = ""
-            self.hw_cert_id = b""
+            self.hw_cert_label = None
+            self.hw_cert_id = None
             self.hw_cert_info = None
         self._verify_credentials()
 
@@ -850,8 +850,8 @@ class DigitalSignatureDialog(Adw.Window):
             "pkcs11_token_label": self.hw_token_label if self.cert_source == "hardware" else None,
             "pkcs11_slot_id": self.hw_token_slot_id if self.cert_source == "hardware" else None,
             "pkcs11_pin": self.hw_pin if self.cert_source == "hardware" else None,
-            "pkcs11_cert_label": self.hw_cert_label if self.cert_source == "hardware" else None,
-            "pkcs11_cert_id": self.hw_cert_id if self.cert_source == "hardware" else None,
+            "pkcs11_cert_label": self.hw_cert_label if self.cert_source == "hardware" and self.hw_cert_label else None,
+            "pkcs11_cert_id": self.hw_cert_id if self.cert_source == "hardware" and self.hw_cert_id else None,
         }
 
         self.destroy()

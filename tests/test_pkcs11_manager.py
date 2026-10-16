@@ -193,12 +193,14 @@ def test_pkcs11_hardware_signing(softhsm_token):
     pdf_bytes = doc.tobytes()
     doc.close()
 
+    # 1. Test signing with cert_label and empty cert_id (regression test for empty ID query bug)
     signed_bytes, err = sign_pdf_bytes(
         pdf_bytes=pdf_bytes,
         pkcs11_driver=softhsm_token["lib_path"],
         pkcs11_token_label=softhsm_token["token_label"],
         pkcs11_pin=softhsm_token["pin"],
         pkcs11_cert_label=softhsm_token["cert_label"],
+        pkcs11_cert_id=b"",
         signer_name="Jane Doe Qualified",
         reason="Official Approval via Hardware Token",
     )
@@ -211,3 +213,30 @@ def test_pkcs11_hardware_signing(softhsm_token):
     assert sigs[0]["valid"] is True
     assert sigs[0]["signer_cn"] == "Jane Doe Qualified"
     assert sigs[0]["reason"] == "Official Approval via Hardware Token"
+
+    # 2. Test signing with explicit byte cert_id
+    signed_bytes_id, err_id = sign_pdf_bytes(
+        pdf_bytes=pdf_bytes,
+        pkcs11_driver=softhsm_token["lib_path"],
+        pkcs11_token_label=softhsm_token["token_label"],
+        pkcs11_pin=softhsm_token["pin"],
+        pkcs11_cert_label=softhsm_token["cert_label"],
+        pkcs11_cert_id=b"\x01",
+        signer_name="Jane Doe Qualified",
+    )
+    assert err_id is None
+    assert signed_bytes_id is not None
+
+    # 3. Test candidate fallback when label is mismatched but cert_id matches
+    signer, session, create_err = create_pkcs11_signer(
+        module_path=softhsm_token["lib_path"],
+        token_label=softhsm_token["token_label"],
+        user_pin=softhsm_token["pin"],
+        cert_label="NonExistentLabel",
+        cert_id=b"\x01",
+    )
+    assert create_err is None
+    assert signer is not None
+    if session:
+        session.close()
+

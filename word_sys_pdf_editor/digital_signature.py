@@ -232,20 +232,26 @@ def sign_pdf_bytes(
         if hasattr(signer, "signing_cert") and signer.signing_cert:
             cert_info = extract_cert_info_from_asn1(signer.signing_cert, default_cn=signer_name or "Signer")
     elif pkcs11_driver:
+        p11_cid = pkcs11_cert_id if (pkcs11_cert_id is not None and len(pkcs11_cert_id) > 0) else None
+        p11_clbl = str(pkcs11_cert_label).strip() if (pkcs11_cert_label is not None and str(pkcs11_cert_label).strip()) else None
+
         hw_signer, hw_session, hw_err = create_pkcs11_signer(
             module_path=pkcs11_driver,
             slot_id=pkcs11_slot_id,
             token_label=pkcs11_token_label,
             user_pin=pkcs11_pin,
-            cert_label=pkcs11_cert_label,
-            cert_id=pkcs11_cert_id,
+            cert_label=p11_clbl,
+            cert_id=p11_cid,
         )
         if hw_err or hw_signer is None:
             return None, hw_err or "Failed to initialize PKCS#11 hardware signer"
         signer = hw_signer
         session_to_close = hw_session
-        if hasattr(signer, "signing_cert") and signer.signing_cert:
-            cert_info = extract_cert_info_from_asn1(signer.signing_cert, default_cn=signer_name or "Hardware Signer")
+        try:
+            if hasattr(signer, "signing_cert") and signer.signing_cert:
+                cert_info = extract_cert_info_from_asn1(signer.signing_cert, default_cn=signer_name or "Hardware Signer")
+        except Exception as cert_read_exc:
+            logging.warning("Could not extract certificate info from hardware signer: %s", cert_read_exc)
     elif pfx_data_or_path:
         sw_signer, sw_cert_info, sw_err = load_pkcs12_certificate(pfx_data_or_path, passphrase=passphrase)
         if sw_err or sw_signer is None or sw_cert_info is None:

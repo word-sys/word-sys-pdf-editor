@@ -240,8 +240,10 @@ def list_token_certificates(
 
                     certs.append({
                         "label": label or subject_cn,
-                        "cert_id_hex": cert_id_bytes.hex(),
-                        "cert_id_bytes": cert_id_bytes,
+                        "raw_label": label if label else None,
+                        "id": cert_id_bytes if cert_id_bytes else None,
+                        "cert_id_hex": cert_id_bytes.hex() if cert_id_bytes else "",
+                        "cert_id_bytes": cert_id_bytes if cert_id_bytes else None,
                         "subject_cn": subject_cn,
                         "subject_org": subject_org,
                         "subject_friendly": subject_friendly,
@@ -314,6 +316,9 @@ def create_pkcs11_signer(
         except Exception:
             pass
 
+    cleaned_cert_id = cert_id if (cert_id is not None and len(cert_id) > 0) else None
+    cleaned_cert_label = str(cert_label).strip() if (cert_label is not None and str(cert_label).strip()) else None
+
     try:
         session = p11_signer.open_pkcs11_session(
             lib_location=module_path,
@@ -322,13 +327,37 @@ def create_pkcs11_signer(
             user_pin=user_pin,
         )
 
-        signer = p11_signer.PKCS11Signer(
-            pkcs11_session=session,
-            cert_label=cert_label,
-            cert_id=cert_id,
-            key_label=cert_label,
-            key_id=cert_id,
-        )
+        candidates = [
+            (cleaned_cert_label, cleaned_cert_id),
+        ]
+        if cleaned_cert_label and cleaned_cert_id:
+            candidates.append((None, cleaned_cert_id))
+            candidates.append((cleaned_cert_label, None))
+        candidates.append((None, None))
+
+        signer = None
+        last_pull_err = None
+        for cand_label, cand_id in candidates:
+            try:
+                candidate_signer = p11_signer.PKCS11Signer(
+                    pkcs11_session=session,
+                    cert_label=cand_label,
+                    cert_id=cand_id,
+                    key_label=cand_label,
+                    key_id=cand_id,
+                )
+                _ = candidate_signer.signing_cert
+                _ = candidate_signer._pull_signing_key_handle()
+                signer = candidate_signer
+                break
+            except Exception as pull_err:
+                last_pull_err = pull_err
+                continue
+
+        if signer is None:
+            if last_pull_err is not None:
+                raise last_pull_err
+            raise PKCS11Error("No matching signing certificate and private key found on hardware token")
 
         return signer, session, None
 
