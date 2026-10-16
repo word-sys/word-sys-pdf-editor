@@ -157,9 +157,16 @@ class TestWindowExportActions(unittest.TestCase):
             "export_odt",
             "export_odp",
             "export_txt",
+            "protect_document",
+            "digitally_sign_document",
+            "inspect_digital_signatures",
+            "flatten_annotations",
+            "toggle_annotations",
+            "close_tab",
         ]
         for act in expected_actions:
             action_obj = self.win.lookup_action(act)
+            self.assertIsNotNone(action_obj, f"Action {act} not found")
             self.assertFalse(action_obj.get_enabled(), f"Action {act} should be disabled when no doc")
 
     def test_actions_enabled_with_document(self):
@@ -175,9 +182,16 @@ class TestWindowExportActions(unittest.TestCase):
             "export_odt",
             "export_odp",
             "export_txt",
+            "protect_document",
+            "digitally_sign_document",
+            "inspect_digital_signatures",
+            "flatten_annotations",
+            "toggle_annotations",
+            "close_tab",
         ]
         for act in expected_actions:
             action_obj = self.win.lookup_action(act)
+            self.assertIsNotNone(action_obj, f"Action {act} not found")
             self.assertTrue(action_obj.get_enabled(), f"Action {act} should be enabled when doc loaded")
         doc.close()
 

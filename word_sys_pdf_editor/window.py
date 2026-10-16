@@ -2231,12 +2231,48 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.save_button.set_sensitive(has_doc and self.document_modified)
         if self.lookup_action("save"):
             self.lookup_action("save").set_enabled(has_doc and self.document_modified)
-        self.lookup_action("save_as").set_enabled(has_doc)
+        if self.lookup_action("save_as"):
+            self.lookup_action("save_as").set_enabled(has_doc)
         for act_name in ("export_as", "export_docx", "export_pptx", "export_odt", "export_odp", "export_txt"):
             act = self.lookup_action(act_name)
             if act:
                 act.set_enabled(has_doc)
-        self.lookup_action("print").set_enabled(has_doc)
+        if self.lookup_action("print"):
+            self.lookup_action("print").set_enabled(has_doc)
+
+        doc_actions = (
+            "protect_document",
+            "digitally_sign_document",
+            "inspect_digital_signatures",
+            "flatten_annotations",
+            "toggle_annotations",
+            "close_tab",
+        )
+        for act_name in doc_actions:
+            act = self.lookup_action(act_name)
+            if act:
+                act.set_enabled(has_doc)
+
+        has_multiple_tabs = len(getattr(self, "sessions", [])) > 1
+        for tab_act_name in ("next_tab", "prev_tab"):
+            tab_act = self.lookup_action(tab_act_name)
+            if tab_act:
+                tab_act.set_enabled(has_multiple_tabs)
+
+        if hasattr(self, 'toggle_annotations_button') and self.toggle_annotations_button:
+            self.toggle_annotations_button.set_sensitive(has_doc)
+
+        can_undo = has_doc and bool(getattr(self.undo_manager, "undo_stack", []))
+        can_redo = has_doc and bool(getattr(self.undo_manager, "redo_stack", []))
+        if hasattr(self, 'undo_button') and self.undo_button:
+            self.undo_button.set_sensitive(can_undo)
+        if hasattr(self, 'redo_button') and self.redo_button:
+            self.redo_button.set_sensitive(can_redo)
+        if self.lookup_action("undo"):
+            self.lookup_action("undo").set_enabled(can_undo)
+        if self.lookup_action("redo"):
+            self.lookup_action("redo").set_enabled(can_redo)
+
         self.print_button.set_sensitive(has_doc)
         self.prev_button.set_sensitive(can_go_prev)
         self.next_button.set_sensitive(can_go_next)
@@ -2688,11 +2724,40 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Show loading state."""
         self.open_button.set_sensitive(False)
         self.save_button.set_sensitive(False)
-        self.lookup_action("save_as").set_enabled(False)
+        if self.lookup_action("save"):
+            self.lookup_action("save").set_enabled(False)
+        if self.lookup_action("save_as"):
+            self.lookup_action("save_as").set_enabled(False)
         for act_name in ("export_as", "export_docx", "export_pptx", "export_odt", "export_odp", "export_txt"):
             act = self.lookup_action(act_name)
             if act:
                 act.set_enabled(False)
+        for act_name in (
+            "protect_document",
+            "digitally_sign_document",
+            "inspect_digital_signatures",
+            "flatten_annotations",
+            "toggle_annotations",
+            "close_tab",
+            "print",
+        ):
+            act = self.lookup_action(act_name)
+            if act:
+                act.set_enabled(False)
+        if hasattr(self, 'toggle_annotations_button') and self.toggle_annotations_button:
+            self.toggle_annotations_button.set_sensitive(False)
+        if hasattr(self, 'print_button') and self.print_button:
+            self.print_button.set_sensitive(False)
+        if hasattr(self, 'mode_toggle_button') and self.mode_toggle_button:
+            self.mode_toggle_button.set_sensitive(False)
+        if hasattr(self, 'undo_button') and self.undo_button:
+            self.undo_button.set_sensitive(False)
+        if hasattr(self, 'redo_button') and self.redo_button:
+            self.redo_button.set_sensitive(False)
+        if self.lookup_action("undo"):
+            self.lookup_action("undo").set_enabled(False)
+        if self.lookup_action("redo"):
+            self.lookup_action("redo").set_enabled(False)
         self.prev_button.set_sensitive(False)
         self.next_button.set_sensitive(False)
         self.font_combo.set_sensitive(False)
@@ -10160,8 +10225,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _update_undo_redo_buttons(self, *args):
         """Sync undo/redo toolbar button sensitivity with UndoManager stacks."""
-        self.undo_button.set_sensitive(bool(self.undo_manager.undo_stack))
-        self.redo_button.set_sensitive(bool(self.undo_manager.redo_stack))
+        has_doc = self.doc is not None
+        can_undo = has_doc and bool(getattr(self.undo_manager, "undo_stack", []))
+        can_redo = has_doc and bool(getattr(self.undo_manager, "redo_stack", []))
+        if hasattr(self, 'undo_button') and self.undo_button:
+            self.undo_button.set_sensitive(can_undo)
+        if hasattr(self, 'redo_button') and self.redo_button:
+            self.redo_button.set_sensitive(can_redo)
+        if self.lookup_action("undo"):
+            self.lookup_action("undo").set_enabled(can_undo)
+        if self.lookup_action("redo"):
+            self.lookup_action("redo").set_enabled(can_redo)
 
     def _refresh_thumbnail(self, page_index):
         """Regenerate and replace the thumbnail pixbuf for a modified page."""
