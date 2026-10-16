@@ -6891,8 +6891,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 save_path += ".pdf"
 
             try:
-                self.commit_pending_format_change()
-                pdf_bytes = self.doc.tobytes()
+                # Byte-Range Preservation:
+                # If document already contains signatures, preserve raw file bytes to prevent xref mutation
+                orig_path = getattr(self._active_session, "original_file_path", None) or getattr(self._active_session, "pdf_path", None)
+                has_existing_sigs = bool(getattr(self._active_session, "digital_signatures", None))
+                if has_existing_sigs and orig_path and os.path.isfile(orig_path):
+                    with open(orig_path, "rb") as f:
+                        pdf_bytes = f.read()
+                else:
+                    self.commit_pending_format_change()
+                    pdf_bytes = self.doc.tobytes()
 
                 target_page_idx = options.get("page_index", 0)
                 page_height = None
@@ -6928,26 +6936,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     pw = page_width or 595.0
                     ph = page_height or 842.0
                     max_chars = max(len(l) for l in rendered_lines)
-                    max_w = min(360.0, float(pw - 40.0))
-                    if max_chars <= 38:
-                        stamp_w = 210.0
+                    max_w = min(260.0, float(pw - 30.0))
+                    if max_chars <= 34:
+                        stamp_w = 175.0
                     else:
-                        stamp_w = min(max_chars * 4.9 + 18.0, max_w)
-                    stamp_h = max(52.0, 10.0 + len(rendered_lines) * 9.6)
+                        stamp_w = min(max_chars * 4.3 + 12.0, max_w)
+                    stamp_h = max(42.0, 8.0 + len(rendered_lines) * 8.6)
 
                     pos = options.get("position", "bottom_right")
                     if pos == "bottom_left":
-                        bx = 40.0
-                        by = max(20.0, ph - stamp_h - 50.0)
+                        bx = 30.0
+                        by = max(15.0, ph - stamp_h - 35.0)
                     elif pos == "top_right":
-                        bx = max(20.0, pw - stamp_w - 40.0)
-                        by = 40.0
+                        bx = max(15.0, pw - stamp_w - 30.0)
+                        by = 30.0
                     elif pos == "top_left":
-                        bx = 40.0
-                        by = 40.0
+                        bx = 30.0
+                        by = 30.0
                     else:  # bottom_right
-                        bx = max(20.0, pw - stamp_w - 40.0)
-                        by = max(20.0, ph - stamp_h - 50.0)
+                        bx = max(15.0, pw - stamp_w - 30.0)
+                        by = max(15.0, ph - stamp_h - 35.0)
                     box = (bx, by, stamp_w, stamp_h)
 
                 signed_bytes, err = pdf_handler.sign_pdf_document(
@@ -6964,6 +6972,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     page_width=page_width,
                     visual_stamp=options.get("visual_stamp", True),
                     signature_image_bytes=options.get("signature_image_bytes"),
+                    certify=options.get("certify", False),
+                    docmdp_permissions=options.get("docmdp_permissions"),
+                    pades_profile=options.get("pades_profile", "B-B"),
+                    tsa_config=options.get("tsa_config"),
+                    timestamper=options.get("timestamper"),
+                    signer=options.get("signer"),
+                    pkcs11_driver=options.get("pkcs11_driver"),
+                    pkcs11_slot_id=options.get("pkcs11_slot_id"),
+                    pkcs11_token_label=options.get("pkcs11_token_label"),
+                    pkcs11_pin=options.get("pkcs11_pin"),
+                    pkcs11_cert_label=options.get("pkcs11_cert_label"),
+                    pkcs11_cert_id=options.get("pkcs11_cert_id"),
                 )
 
                 if err or not signed_bytes:
@@ -6982,18 +7002,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 elif hasattr(self, "status_label") and self.status_label:
                     self.status_label.set_text(_("sig_success_signed"))
 
+                self.document_modified = False
                 if self._active_session:
                     self._active_session.is_modified = False
-                existing_for_save = self.get_session_by_path(save_path)
-                is_same_file = (self._active_session and self._active_session.pdf_path and
-                                os.path.realpath(self._active_session.pdf_path) == os.path.realpath(save_path))
-                open_in_new_tab = False if (is_same_file or existing_for_save) else True
+                    self._active_session.pdf_path = save_path
+                    self._active_session.original_file_path = save_path
+                    self._update_tab_title(self._active_session)
+                    self.set_title(f"{constants.APP_NAME} - {self._active_session.display_title}")
 
                 def _do_reload():
                     self.load_document(
                         save_path,
                         target_page=target_page_idx,
-                        in_new_tab=open_in_new_tab,
+                        in_new_tab=False,
                         force_reload=True,
                     )
                     return GLib.SOURCE_REMOVE
@@ -7026,13 +7047,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         total = len(sigs)
         all_intact = all(s.get("intact", False) for s in sigs)
+        all_trusted = all(s.get("trusted", False) for s in sigs)
+
         if all_intact:
             if total == 1:
                 signer_name = sigs[0].get("signer_cn") or sigs[0].get("signer_friendly") or "Signer"
-                self.signature_banner_label.set_text(_("sig_banner_single_valid", signer_name))
+                if all_trusted:
+                    self.signature_banner_label.set_text(_("sig_banner_single_valid", signer_name))
+                    self.signature_banner_icon.set_from_icon_name("emblem-ok-symbolic")
+                else:
+                    self.signature_banner_label.set_text(_("sig_banner_untrusted_single", signer_name))
+                    self.signature_banner_icon.set_from_icon_name("dialog-information-symbolic")
             else:
                 self.signature_banner_label.set_text(_("sig_banner_multi_valid", total))
-            self.signature_banner_icon.set_from_icon_name("emblem-ok-symbolic")
+                self.signature_banner_icon.set_from_icon_name("emblem-ok-symbolic" if all_trusted else "dialog-information-symbolic")
         else:
             self.signature_banner_label.set_text(_("sig_banner_invalid"))
             self.signature_banner_icon.set_from_icon_name("dialog-warning-symbolic")

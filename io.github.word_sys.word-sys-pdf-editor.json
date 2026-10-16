@@ -10,7 +10,9 @@
         "--share=ipc",
         "--socket=wayland",
         "--socket=fallback-x11",
-        "--device=dri"
+        "--device=dri",
+        "--socket=pcsc",
+        "--share=network"
     ],
     "modules": [
         "python3-requirements.json",

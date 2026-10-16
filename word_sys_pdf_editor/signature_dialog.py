@@ -1,6 +1,3 @@
-# word-sys-pdf-editor - Digital Signature Dialogs
-# Modal interfaces for configuring digital signatures and viewing signature validation status.
-
 from __future__ import annotations
 
 import os
@@ -170,6 +167,32 @@ class DigitalSignatureDialog(Adw.Window):
         contact_row.add_suffix(self.contact_entry)
         details_group.add(contact_row)
 
+        # Certify Document (DocMDP) row
+        self.certify_row = Adw.ActionRow()
+        self.certify_row.set_title("Certify Document (DocMDP)")
+        self.certify_row.set_subtitle("Apply as primary author certification restricting future document modifications.")
+        self.certify_row.set_subtitle_lines(0)
+        self.certify_switch = Gtk.Switch()
+        self.certify_switch.set_valign(Gtk.Align.CENTER)
+        self.certify_switch.set_active(False)
+        self.certify_switch.connect("notify::active", self._on_certify_toggled)
+        self.certify_row.add_suffix(self.certify_switch)
+        details_group.add(self.certify_row)
+
+        # DocMDP permissions dropdown row
+        self.docmdp_row = Adw.ActionRow()
+        self.docmdp_row.set_title("Permitted Changes")
+        self.docmdp_combo = Gtk.DropDown.new_from_strings([
+            "Level 1: No Changes Permitted (Document Sealed)",
+            "Level 2: Form Filling & Signing Permitted",
+            "Level 3: Annotations, Form Filling & Signing Permitted",
+        ])
+        self.docmdp_combo.set_selected(1)
+        self.docmdp_combo.set_valign(Gtk.Align.CENTER)
+        self.docmdp_row.add_suffix(self.docmdp_combo)
+        self.docmdp_row.set_visible(False)
+        details_group.add(self.docmdp_row)
+
         # --- Group 3: Visual Appearance ---
         appearance_group = Adw.PreferencesGroup()
         appearance_group.set_title(_("sig_group_appearance"))
@@ -235,6 +258,9 @@ class DigitalSignatureDialog(Adw.Window):
     def _on_reason_combo_changed(self, combo):
         is_custom = combo.get_active() == 3
         self.custom_reason_row.set_visible(is_custom)
+
+    def _on_certify_toggled(self, switch, _param):
+        self.docmdp_row.set_visible(switch.get_active())
 
     def _on_visible_toggled(self, switch, gparam):
         active = switch.get_active()
@@ -364,6 +390,8 @@ class DigitalSignatureDialog(Adw.Window):
         target_page = int(self.page_spin.get_value()) - 1
         pos_idx = self.position_combo.get_selected()
         pos_key = self._positions[pos_idx][0] if 0 <= pos_idx < len(self._positions) else "bottom_right"
+        is_certify = self.certify_switch.get_active()
+        docmdp_perm = (self.docmdp_combo.get_selected() + 1) if is_certify else None
         options = {
             "cert_path": self.cert_path,
             "cert_data": self.cert_data,
@@ -377,6 +405,8 @@ class DigitalSignatureDialog(Adw.Window):
             "position": pos_key,
             "box": self.initial_box,
             "signature_image_bytes": self.image_bytes,
+            "certify": is_certify,
+            "docmdp_permissions": docmdp_perm,
         }
 
         self.destroy()
@@ -402,8 +432,13 @@ class SignatureDetailsDialog(Adw.Window):
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_content(main_box)
 
-        # HeaderBar with native window controls
+        # HeaderBar with native window controls and Trust Store button
         header = Adw.HeaderBar()
+        trust_btn = Gtk.Button()
+        trust_btn.set_icon_name("channel-secure-symbolic")
+        trust_btn.set_tooltip_text("Certificate Trust Store")
+        trust_btn.connect("clicked", self._open_trust_store)
+        header.pack_end(trust_btn)
         main_box.append(header)
 
         # Scrolled container
@@ -439,12 +474,21 @@ class SignatureDetailsDialog(Adw.Window):
             # Integrity / Validity Status Row
             status_row = Adw.ActionRow()
             is_intact = sig.get("intact", False)
-            if is_intact:
-                icon = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
-                icon.add_css_class("success")
-                status_row.add_prefix(icon)
-                status_row.set_title(_("sig_status_valid"))
-                status_row.set_subtitle(_("sig_status_valid_desc"))
+            is_valid = sig.get("valid", False)
+            is_trusted = sig.get("trusted", False)
+
+            if is_intact and is_valid:
+                if is_trusted:
+                    icon = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
+                    icon.add_css_class("success")
+                    status_row.add_prefix(icon)
+                    status_row.set_title(_("sig_status_valid"))
+                    status_row.set_subtitle("Cryptographically intact and verified against trusted roots.")
+                else:
+                    icon = Gtk.Image.new_from_icon_name("dialog-information-symbolic")
+                    status_row.add_prefix(icon)
+                    status_row.set_title("Cryptographically Valid (Untrusted Root)")
+                    status_row.set_subtitle("Signature is intact, but the certificate authority is not in the trusted store.")
             else:
                 icon = Gtk.Image.new_from_icon_name("dialog-error-symbolic")
                 icon.add_css_class("error")
@@ -453,6 +497,15 @@ class SignatureDetailsDialog(Adw.Window):
                 status_row.set_subtitle(_("sig_status_invalid_desc"))
             status_row.set_subtitle_lines(0)
             group.add(status_row)
+
+            # Certification / DocMDP Row
+            if sig.get("is_certification", False):
+                cert_row = Adw.ActionRow()
+                cert_row.set_title("Document Certification (DocMDP)")
+                perm_name = sig.get("docmdp_permission_name") or "NO_CHANGES"
+                perm_level = sig.get("docmdp_permission") or 1
+                cert_row.set_subtitle(f"Level {perm_level}: {perm_name}")
+                group.add(cert_row)
 
             # Signer Details
             signer_row = Adw.ActionRow()
@@ -504,6 +557,17 @@ class SignatureDetailsDialog(Adw.Window):
                 contact_row.set_subtitle(contact)
                 group.add(contact_row)
 
+            # Adobe LTV Status
+            ltv_row = Adw.ActionRow()
+            ltv_row.set_title("Long-Term Validation (LTV)")
+            if sig.get("has_ltv", False):
+                ltv_row.set_subtitle("Enabled (Embedded revocation information in /DSS)")
+            elif sig.get("has_dss", False):
+                ltv_row.set_subtitle("Present in Document Security Store (/DSS)")
+            else:
+                ltv_row.set_subtitle("Not embedded (Document valid at time of signing)")
+            group.add(ltv_row)
+
             # Scope / Coverage
             cov_row = Adw.ActionRow()
             cov_row.set_title(_("sig_detail_coverage"))
@@ -535,3 +599,10 @@ class SignatureDetailsDialog(Adw.Window):
                 fp_row.set_subtitle(formatted_fp)
                 fp_row.set_subtitle_lines(0)
                 group.add(fp_row)
+
+    def _open_trust_store(self, _button):
+        """Open the Certificate Trust Store dialog."""
+        from .trust_dialog import TrustStoreDialog
+        dlg = TrustStoreDialog(parent_window=self)
+        dlg.present()
+

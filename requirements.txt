@@ -4,5 +4,11 @@
 numpy
 PyMuPDF
 anyconvert
-cryptography
+cryptography>=41.0.0
+pyHanko[image-support,opentype]>=0.21.0
+pyhanko-certvalidator>=0.24.0
+python-pkcs11>=0.7.0
+asn1crypto>=1.5.1
+certifi
+
 

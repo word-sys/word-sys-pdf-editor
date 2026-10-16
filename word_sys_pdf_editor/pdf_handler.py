@@ -3952,7 +3952,7 @@ def is_digital_signature_supported() -> bool:
 
 def sign_pdf_document(
     pdf_bytes: bytes,
-    pfx_data_or_path: bytes | str,
+    pfx_data_or_path: Optional[bytes | str] = None,
     passphrase: str | bytes | None = None,
     field_name: Optional[str] = None,
     reason: Optional[str] = None,
@@ -3966,6 +3966,19 @@ def sign_pdf_document(
     visual_stamp: bool = True,
     signature_image_bytes: Optional[bytes] = None,
     custom_stamp_text: Optional[str] = None,
+    certify: bool = False,
+    docmdp_permissions: Optional[int] = None,
+    validation_context: Optional[Any] = None,
+    pades_profile: str = "B-B",
+    tsa_config: Optional[Any] = None,
+    timestamper: Optional[Any] = None,
+    signer: Optional[Any] = None,
+    pkcs11_driver: Optional[str] = None,
+    pkcs11_slot_id: Optional[int] = None,
+    pkcs11_token_label: Optional[str] = None,
+    pkcs11_pin: Optional[str] = None,
+    pkcs11_cert_label: Optional[str] = None,
+    pkcs11_cert_id: Optional[bytes] = None,
 ) -> Tuple[Optional[bytes], Optional[str]]:
     """Sign PDF bytes using cryptographic digital signature engine."""
     from .digital_signature import sign_pdf_bytes
@@ -3985,7 +3998,21 @@ def sign_pdf_document(
         visual_stamp=visual_stamp,
         signature_image_bytes=signature_image_bytes,
         custom_stamp_text=custom_stamp_text,
+        certify=certify,
+        docmdp_permissions=docmdp_permissions,
+        validation_context=validation_context,
+        pades_profile=pades_profile,
+        tsa_config=tsa_config,
+        timestamper=timestamper,
+        signer=signer,
+        pkcs11_driver=pkcs11_driver,
+        pkcs11_slot_id=pkcs11_slot_id,
+        pkcs11_token_label=pkcs11_token_label,
+        pkcs11_pin=pkcs11_pin,
+        pkcs11_cert_label=pkcs11_cert_label,
+        pkcs11_cert_id=pkcs11_cert_id,
     )
+
 
 
 def inspect_document_signatures(doc_or_bytes_or_path) -> List[Dict[str, Any]]:
