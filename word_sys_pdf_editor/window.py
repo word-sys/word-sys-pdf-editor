@@ -695,7 +695,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                 h.set_value(min(sx, max_h))
                         return GLib.SOURCE_REMOVE
                     GLib.idle_add(_restore_tab_scroll)
+            self._update_signature_banner(getattr(session, "digital_signatures", None))
         else:
+            self._update_signature_banner(None)
             self.set_title(constants.APP_NAME)
             if hasattr(self, 'stack') and self.stack:
                 any_docs = any(s.doc is not None for s in self.sessions)
@@ -2761,8 +2763,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             if getattr(sess, 'is_repaired_file', False):
                 print(_("dbg_repaired_while_opening"))
-            self._record_recent_file(filepath)
+            # Check digital signatures
+            try:
+                sigs = pdf_handler.inspect_document_signatures(doc)
+                sess.digital_signatures = sigs
+                self._update_signature_banner(sigs)
+            except Exception:
+                sess.digital_signatures = []
+                self._update_signature_banner(None)
 
+            self._record_recent_file(filepath)
             self.set_active_session(sess)
 
             self.target_page_after_load = target_page
@@ -6838,8 +6848,32 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
                 target_page_idx = options.get("page_index", 0)
                 page_height = None
+                page_width = None
                 if target_page_idx < len(self.doc):
-                    page_height = self.doc[target_page_idx].rect.height
+                    page_rect = self.doc[target_page_idx].rect
+                    page_height = page_rect.height
+                    page_width = page_rect.width
+
+                box = options.get("box")
+                if box is None and options.get("visual_stamp", True):
+                    stamp_w = 220.0
+                    stamp_h = 65.0
+                    pos = options.get("position", "bottom_right")
+                    pw = page_width or 595.0
+                    ph = page_height or 842.0
+                    if pos == "bottom_left":
+                        bx = 40.0
+                        by = max(20.0, ph - stamp_h - 50.0)
+                    elif pos == "top_right":
+                        bx = max(20.0, pw - stamp_w - 40.0)
+                        by = 40.0
+                    elif pos == "top_left":
+                        bx = 40.0
+                        by = 40.0
+                    else:  # bottom_right
+                        bx = max(20.0, pw - stamp_w - 40.0)
+                        by = max(20.0, ph - stamp_h - 50.0)
+                    box = (bx, by, stamp_w, stamp_h)
 
                 signed_bytes, err = pdf_handler.sign_pdf_document(
                     pdf_bytes=pdf_bytes,
@@ -6850,8 +6884,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     contact_info=options.get("contact_info"),
                     signer_name=options.get("signer_name"),
                     page_index=target_page_idx,
-                    box=options.get("box"),
+                    box=box,
                     page_height=page_height,
+                    page_width=page_width,
                     visual_stamp=options.get("visual_stamp", True),
                     signature_image_bytes=options.get("signature_image_bytes"),
                 )
@@ -6872,7 +6907,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 elif hasattr(self, "status_label") and self.status_label:
                     self.status_label.set_text(_("sig_success_signed"))
 
-                GLib.idle_add(self.load_document, save_path, 0, True)
+                GLib.idle_add(self.load_document, save_path, target_page_idx, True)
 
             except Exception as ex:
                 err_msg = _("sig_error_failed", str(ex))

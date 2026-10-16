@@ -523,6 +523,7 @@ class AnnotationsSidebar(Gtk.Box):
                         ftype = getattr(ff, "field_type", "text")
                         title = f"Field: {fname}" if fname else f"Form {ftype.capitalize()}"
                         rect = getattr(ff, "rect", None)
+                        icon_name = "channel-secure-symbolic" if ftype.lower() == "signature" else "edit-select-all-symbolic"
                         items.append(
                             AnnotationListItem(
                                 item_id=f"field_{p}_{id(ff)}",
@@ -531,7 +532,7 @@ class AnnotationsSidebar(Gtk.Box):
                                 title=title,
                                 subtitle=f"Type: {ftype.capitalize()}",
                                 page_number=p,
-                                icon_name="edit-select-all-symbolic",
+                                icon_name=icon_name,
                                 target_obj=ff,
                                 bbox=rect,
                             )

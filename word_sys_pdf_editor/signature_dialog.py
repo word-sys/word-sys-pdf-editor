@@ -196,6 +196,20 @@ class DigitalSignatureDialog(Adw.Window):
         self.page_row.add_suffix(self.page_spin)
         appearance_group.add(self.page_row)
 
+        # Position row
+        self.position_row = Adw.ActionRow()
+        self.position_row.set_title(_("sig_position"))
+        self._positions = [
+            ("bottom_right", _("sig_pos_bottom_right")),
+            ("bottom_left", _("sig_pos_bottom_left")),
+            ("top_right", _("sig_pos_top_right")),
+            ("top_left", _("sig_pos_top_left")),
+        ]
+        self.position_combo = Gtk.DropDown.new_from_strings([label for _, label in self._positions])
+        self.position_combo.set_valign(Gtk.Align.CENTER)
+        self.position_row.add_suffix(self.position_combo)
+        appearance_group.add(self.position_row)
+
         # Handwritten image row
         self.image_row = Adw.ActionRow()
         self.image_row.set_title(_("sig_image_optional"))
@@ -225,6 +239,7 @@ class DigitalSignatureDialog(Adw.Window):
     def _on_visible_toggled(self, switch, gparam):
         active = switch.get_active()
         self.page_row.set_sensitive(active)
+        self.position_row.set_sensitive(active)
         self.image_row.set_sensitive(active)
 
     def _on_browse_cert_clicked(self, button):
@@ -264,7 +279,7 @@ class DigitalSignatureDialog(Adw.Window):
 
     def _on_browse_image_clicked(self, button):
         f_img = Gtk.FileFilter()
-        f_img.set_name(_("image_filter_images"))
+        f_img.set_name(_("image_filter_label"))
         f_img.add_pixbuf_formats()
 
         def on_image_selected(gfile):
@@ -347,6 +362,8 @@ class DigitalSignatureDialog(Adw.Window):
             return
 
         target_page = int(self.page_spin.get_value()) - 1
+        pos_idx = self.position_combo.get_selected()
+        pos_key = self._positions[pos_idx][0] if 0 <= pos_idx < len(self._positions) else "bottom_right"
         options = {
             "cert_path": self.cert_path,
             "cert_data": self.cert_data,
@@ -357,6 +374,7 @@ class DigitalSignatureDialog(Adw.Window):
             "contact_info": self.contact_entry.get_text().strip(),
             "visual_stamp": self.visible_switch.get_active(),
             "page_index": target_page,
+            "position": pos_key,
             "box": self.initial_box,
             "signature_image_bytes": self.image_bytes,
         }
@@ -384,11 +402,8 @@ class SignatureDetailsDialog(Adw.Window):
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_content(main_box)
 
-        # HeaderBar
+        # HeaderBar with native window controls
         header = Adw.HeaderBar()
-        close_btn = Gtk.Button(label=_("btn_close"))
-        close_btn.connect("clicked", lambda b: self.destroy())
-        header.pack_end(close_btn)
         main_box.append(header)
 
         # Scrolled container

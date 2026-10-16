@@ -2280,6 +2280,8 @@ def ensure_form_widgets_have_appearance(doc) -> int:
             page = doc.load_page(p_idx)
             page_changed = False
             for w in list(page.widgets()):
+                if getattr(w, 'field_type', None) == getattr(fitz, 'PDF_WIDGET_TYPE_SIGNATURE', 6):
+                    continue
                 needs_update = False
                 if not getattr(w, 'border_color', None):
                     w.border_color = (0.35, 0.35, 0.35)
@@ -3960,6 +3962,7 @@ def sign_pdf_document(
     page_index: int = 0,
     box: Optional[Tuple[float, float, float, float]] = None,
     page_height: Optional[float] = None,
+    page_width: Optional[float] = None,
     visual_stamp: bool = True,
     signature_image_bytes: Optional[bytes] = None,
     custom_stamp_text: Optional[str] = None,
@@ -3978,6 +3981,7 @@ def sign_pdf_document(
         page_index=page_index,
         box=box,
         page_height=page_height,
+        page_width=page_width,
         visual_stamp=visual_stamp,
         signature_image_bytes=signature_image_bytes,
         custom_stamp_text=custom_stamp_text,

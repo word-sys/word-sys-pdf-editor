@@ -140,6 +140,7 @@ def sign_pdf_bytes(
     page_index: int = 0,
     box: Optional[Tuple[float, float, float, float]] = None,
     page_height: Optional[float] = None,
+    page_width: Optional[float] = None,
     visual_stamp: bool = True,
     signature_image_bytes: Optional[bytes] = None,
     custom_stamp_text: Optional[str] = None,
@@ -159,7 +160,8 @@ def sign_pdf_bytes(
         page_index: 0-indexed page number for visible stamp.
         box: (x, y, width, height) in canvas/screen top-left coordinates.
         page_height: Height of target page in points (needed for coordinate conversion).
-        visual_stamp: If True and box is provided, render visual signature stamp.
+        page_width: Width of target page in points (needed for default position layout).
+        visual_stamp: If True, render visible cryptographic stamp on target page.
         signature_image_bytes: Optional PNG/JPEG image bytes for handwritten signature.
         custom_stamp_text: Optional override for stamp text format string.
 
@@ -197,7 +199,31 @@ def sign_pdf_bytes(
         stamp_style = None
         new_field_spec = None
 
-        if visual_stamp and box is not None and page_height is not None:
+        if visual_stamp:
+            if page_height is None or page_width is None:
+                try:
+                    import pymupdf
+                    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as tmp_doc:
+                        if 0 <= page_index < len(tmp_doc):
+                            page_rect = tmp_doc[page_index].rect
+                            if page_height is None:
+                                page_height = page_rect.height
+                            if page_width is None:
+                                page_width = page_rect.width
+                except Exception:
+                    pass
+            if page_height is None:
+                page_height = 842.0
+            if page_width is None:
+                page_width = 595.0
+
+            if box is None:
+                stamp_w = 220.0
+                stamp_h = 65.0
+                stamp_x = max(20.0, page_width - stamp_w - 40.0)
+                stamp_y = max(20.0, page_height - stamp_h - 50.0)
+                box = (stamp_x, stamp_y, stamp_w, stamp_h)
+
             bx, by, bw, bh = box
             # Convert screen top-left coordinates to PDF user-space bottom-left coordinates
             pdf_x0 = int(bx)
@@ -243,7 +269,7 @@ def sign_pdf_bytes(
                 background=bg_image,
                 background_opacity=0.35 if bg_image else 1.0,
             )
-        elif not visual_stamp or box is None:
+        else:
             # Invisible signature
             new_field_spec = fields.SigFieldSpec(
                 sig_field_name=field_name,
