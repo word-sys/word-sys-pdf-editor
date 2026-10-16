@@ -304,6 +304,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.stamp_library = StampLibrary()
         self.active_stamp = self.stamp_library.get_active_stamp()
         self.temp_stamp_bbox = None
+        self.temp_sig_bbox = None
         self.temp_form_field_rect = None
         self.form_builder_field_type = "text"
         self.form_builder_tool_button = None
@@ -340,6 +341,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.stamp_quick_menu_btn = None
         self.stamp_library_btn = None
         self.stamp_tool_button = None
+        self.signature_tool_button = None
         self.stamp_menu_button = None
         self.selected_sticky_note = None
         self.active_sticky_popover = None
@@ -1548,6 +1550,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.measure_area_tool_button = _make_tool_btn("view-grid-symbolic", _("tool_measure_area"), _("tool_measure_area_tip"), "measure_area")
         tools_grid.attach(self.measure_area_tool_button, 1, 6, 1, 1)
 
+        self.signature_tool_button = _make_tool_btn("channel-secure-symbolic", _("tool_place_signature"), _("tool_place_signature_tip"), "place_signature")
+        tools_grid.attach(self.signature_tool_button, 0, 7, 2, 1)
+
         self.calibrate_tool_button = None
         self.stamp_menu_button = None
         
@@ -2294,7 +2299,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          getattr(self, 'form_builder_tool_button', None),
                          getattr(self, 'stamp_tool_button', None),
                          getattr(self, 'measure_distance_tool_button', None),
-                         getattr(self, 'measure_area_tool_button', None)]
+                         getattr(self, 'measure_area_tool_button', None),
+                         getattr(self, 'signature_tool_button', None)]
         for btn in sidebar_tools:
             if btn:
                 btn.set_sensitive(in_edit and has_doc)
@@ -2473,6 +2479,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.measure_area_tool_button.get_style_context().remove_class('active')
         if hasattr(self, 'stamp_tool_button') and self.stamp_tool_button:
             self.stamp_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'signature_tool_button') and self.signature_tool_button:
+            self.signature_tool_button.get_style_context().remove_class('active')
 
         if self.view_mode:
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
@@ -2529,6 +2537,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif self.tool_mode == "add_stamp":
             if hasattr(self, 'stamp_tool_button') and self.stamp_tool_button:
                 self.stamp_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "place_signature":
+            if hasattr(self, 'signature_tool_button') and self.signature_tool_button:
+                self.signature_tool_button.get_style_context().add_class('active')
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
 
         if has_doc:
@@ -3718,6 +3730,30 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.set_source_rgba(0.2, 0.5, 0.9, 0.85)
             cr.set_line_width(2.0 / self.zoom_level)
             cr.set_dash([5.0 / self.zoom_level, 4.0 / self.zoom_level])
+            cr.rectangle(draw_x, draw_y, draw_w, draw_h)
+            cr.stroke()
+            cr.set_dash([])
+
+        if getattr(self, 'temp_sig_bbox', None):
+            x1, y1, x2, y2 = self.temp_sig_bbox
+            draw_x = x1
+            draw_y = y1
+            draw_w = x2 - x1
+            draw_h = y2 - y1
+
+            style_context = area.get_style_context()
+            found_col, col_rgba = style_context.lookup_color("accent_color")
+            if not found_col:
+                col_rgba = Gdk.RGBA()
+                col_rgba.parse("#1c71d8")
+
+            cr.set_source_rgba(col_rgba.red, col_rgba.green, col_rgba.blue, 0.18)
+            cr.rectangle(draw_x, draw_y, draw_w, draw_h)
+            cr.fill()
+
+            cr.set_source_rgba(col_rgba.red, col_rgba.green, col_rgba.blue, 0.90)
+            cr.set_line_width(2.0 / self.zoom_level)
+            cr.set_dash([6.0 / self.zoom_level, 4.0 / self.zoom_level])
             cr.rectangle(draw_x, draw_y, draw_w, draw_h)
             cr.stroke()
             cr.set_dash([])
@@ -6914,9 +6950,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             page_count=self.doc.page_count,
             current_page=self.current_page_index,
             on_sign_callback=self._execute_sign_from_dialog,
+            on_draw_canvas_requested=self._on_draw_signature_on_canvas_requested,
         )
         self._digital_sig_dialog.connect("close-request", self._on_digital_sig_dialog_closed)
         self._digital_sig_dialog.present()
+
+    def _on_draw_signature_on_canvas_requested(self):
+        """Switch to interactive signature canvas placement tool."""
+        self.on_tool_selected(None, "place_signature")
 
     def _on_digital_sig_dialog_closed(self, dialog):
         self._digital_sig_dialog = None
@@ -7410,7 +7451,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
         elif self.tool_mode == "select":
             self.pdf_view.set_cursor(None)
-        elif self.tool_mode in ("add_text", "add_ellipse", "add_rectangle", "add_checkmark", "add_cross", "pen", "highlighter", "form_builder", "calibrate"):
+        elif self.tool_mode in ("add_text", "add_ellipse", "add_rectangle", "add_checkmark", "add_cross", "pen", "highlighter", "form_builder", "calibrate", "place_signature"):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
         elif self.tool_mode == "add_image":
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("cell"))
@@ -8806,6 +8847,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 Gdk.KEY_A: "measure_area",
                 Gdk.KEY_k: "add_stamp",
                 Gdk.KEY_K: "add_stamp",
+                Gdk.KEY_g: "place_signature",
+                Gdk.KEY_G: "place_signature",
             }
             if keyval in tool_shortcuts:
                 self.on_tool_selected(None, tool_shortcuts[keyval])
@@ -8840,6 +8883,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._update_stroke_format_controls(None)
         elif self.tool_mode == "calibrate":
             self._update_calibration_controls()
+        elif self.tool_mode == "place_signature":
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(_("tool_place_signature_tip"))
 
     def get_scale_calibration(self, page_index: Optional[int] = None) -> Optional[ScaleCalibration]:
         """Return the active scale calibration for the specified page or whole document."""
@@ -9370,6 +9416,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.drag_start_page_pos = (unrot_px, unrot_py)
             self.temp_stamp_bbox = (unrot_px, unrot_py, unrot_px, unrot_py)
             return
+        elif self.tool_mode == "place_signature":
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (unrot_px, unrot_py)
+            self.temp_sig_bbox = (unrot_px, unrot_py, unrot_px, unrot_py)
+            self.pdf_view.queue_draw()
+            return
         elif self.tool_mode == "form_builder":
             self._close_active_form_field_editor()
             clicked_form_field = self._find_form_field_at_pos(unrot_px, unrot_py)
@@ -9532,6 +9585,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if y2 - y1 < 10:
                     y2 = y1 + 10
                 self.temp_stamp_bbox = (x1, y1, x2, y2)
+                self.pdf_view.queue_draw()
+                return
+            if getattr(self, 'temp_sig_bbox', None) is not None:
+                start_x, start_y = self.drag_start_page_pos
+                current_x = start_x + delta_x
+                current_y = start_y + delta_y
+                x1 = min(start_x, current_x)
+                y1 = min(start_y, current_y)
+                x2 = max(start_x, current_x)
+                y2 = max(start_y, current_y)
+                if x2 - x1 < 10:
+                    x2 = x1 + 10
+                if y2 - y1 < 10:
+                    y2 = y1 + 10
+                self.temp_sig_bbox = (x1, y1, x2, y2)
                 self.pdf_view.queue_draw()
                 return
             if self.temp_shape:
@@ -9995,6 +10063,37 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         do_place_stamp()
 
                 self.pdf_view.queue_draw()
+                return
+            elif getattr(self, 'temp_sig_bbox', None) is not None:
+                x1, y1, x2, y2 = self.temp_sig_bbox
+                self.temp_sig_bbox = None
+                w = x2 - x1
+                h = y2 - y1
+                if w < 10 or h < 10:
+                    w, h = 180.0, 50.0
+                    x2 = x1 + w
+                    y2 = y1 + h
+                initial_box = (x1, y1, w, h)
+                self.tool_mode = "select"
+                self._update_ui_state()
+                self.pdf_view.queue_draw()
+
+                from .signature_dialog import DigitalSignatureDialog
+                if getattr(self, "_digital_sig_dialog", None) is not None:
+                    try:
+                        self._digital_sig_dialog.destroy()
+                    except Exception:
+                        pass
+                self._digital_sig_dialog = DigitalSignatureDialog(
+                    parent_window=self,
+                    page_count=self.doc.page_count,
+                    current_page=self.current_page_index,
+                    initial_box=initial_box,
+                    on_sign_callback=self._execute_sign_from_dialog,
+                    on_draw_canvas_requested=self._on_draw_signature_on_canvas_requested,
+                )
+                self._digital_sig_dialog.connect("close-request", self._on_digital_sig_dialog_closed)
+                self._digital_sig_dialog.present()
                 return
             elif getattr(self, 'temp_form_field_rect', None) is not None:
                 x1, y1, x2, y2 = self.temp_form_field_rect

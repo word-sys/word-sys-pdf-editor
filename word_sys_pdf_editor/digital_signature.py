@@ -652,6 +652,15 @@ def inspect_pdf_signatures(pdf_bytes_or_path: bytes | str) -> List[Dict[str, Any
                         email = subj.get("email_address") or subj.get("email")
                         if email:
                             info["contact_info"] = str(email)
+
+                    try:
+                        raw_der = cert.dump()
+                        info["cert_der"] = raw_der
+                        import base64
+                        b64 = base64.encodebytes(raw_der).decode("ascii")
+                        info["cert_pem"] = f"-----BEGIN CERTIFICATE-----\n{b64}-----END CERTIFICATE-----\n"
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
