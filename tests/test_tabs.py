@@ -214,6 +214,20 @@ class TestTabBarAndTabView(unittest.TestCase):
         self.win.load_document("/tmp/unique.pdf")
         self.assertEqual(self.win.active_session, s1)
 
+    def test_open_same_document_force_reload(self):
+        """Verify that loading an already open file path with force_reload=True reloads the session."""
+        doc = fitz.open()
+        doc.new_page()
+        s1 = self.win.create_session(doc=doc, filepath="/tmp/unique.pdf")
+        self.win.add_session(s1, switch_to=True)
+        s1.is_modified = True
+
+        with patch.object(self.win, "_finish_loading"):
+            with patch("word_sys_pdf_editor.pdf_handler.load_pdf_document", return_value=(doc, None)):
+                self.win.load_document("/tmp/unique.pdf", force_reload=True)
+                self.assertFalse(s1.is_modified)
+                self.assertEqual(self.win.active_session, s1)
+
     def test_tab_zoom_label_sync(self):
         """Verify that zoom_label updates correctly when switching between tabs with different zoom levels."""
         doc1 = fitz.open()

@@ -20,6 +20,7 @@ try:
     from pyhanko.sign import fields, signers, validation
     from pyhanko.sign.signers import SimpleSigner, PdfSignatureMetadata, PdfSigner
     from pyhanko.stamp import TextStampStyle
+    from pyhanko.pdf_utils.text import TextBoxStyle
     PYHANKO_AVAILABLE = True
 except ImportError:
     PYHANKO_AVAILABLE = False
@@ -222,9 +223,9 @@ def sign_pdf_bytes(
 
     # Sanitize visual appearance texts to prevent Type-1 UTF-16 BOM (\xfe\xff) corruption
     stamp_signer = _sanitize_visual_stamp_text(display_name)
-    stamp_reason, _ = _wrap_stamp_field("Reason", _sanitize_visual_stamp_text(display_reason))
-    stamp_location, _ = _wrap_stamp_field("Location", _sanitize_visual_stamp_text(display_location))
-    stamp_contact, _ = _wrap_stamp_field("Contact", _sanitize_visual_stamp_text(display_contact))
+    stamp_reason, _lines_r = _wrap_stamp_field("Reason", _sanitize_visual_stamp_text(display_reason))
+    stamp_location, _lines_l = _wrap_stamp_field("Location", _sanitize_visual_stamp_text(display_location))
+    stamp_contact, _lines_c = _wrap_stamp_field("Contact", _sanitize_visual_stamp_text(display_contact))
 
     try:
         in_stream = io.BytesIO(pdf_bytes)
@@ -272,12 +273,12 @@ def sign_pdf_bytes(
 
             if box is None:
                 max_chars = max(len(l) for l in rendered_lines)
-                max_w = min(420.0, float(page_width - 40.0))
-                if max_chars <= 34:
-                    stamp_w = 220.0
+                max_w = min(360.0, float(page_width - 40.0))
+                if max_chars <= 38:
+                    stamp_w = 210.0
                 else:
-                    stamp_w = min(max_chars * 6.2 + 20.0, max_w)
-                stamp_h = max(65.0, 16.0 + len(rendered_lines) * 14.0)
+                    stamp_w = min(max_chars * 4.9 + 18.0, max_w)
+                stamp_h = max(52.0, 10.0 + len(rendered_lines) * 9.6)
                 stamp_x = max(20.0, page_width - stamp_w - 40.0)
                 stamp_y = max(20.0, page_height - stamp_h - 50.0)
                 box = (stamp_x, stamp_y, stamp_w, stamp_h)
@@ -328,6 +329,7 @@ def sign_pdf_bytes(
                 border_width=1,
                 background=bg_image,
                 background_opacity=0.35 if bg_image else 1.0,
+                text_box_style=TextBoxStyle(font_size=8),
             )
         else:
             # Invisible signature

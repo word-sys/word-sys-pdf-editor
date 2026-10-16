@@ -605,6 +605,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     if old_parent:
                         old_parent.set_child(None)
                     session.bin_widget.set_child(self.paned)
+            if hasattr(self, 'tab_view') and self.tab_view and getattr(session, 'tab_page', None):
+                if self.tab_view.get_selected_page() != session.tab_page:
+                    self._is_switching_tabs = True
+                    try:
+                        self.tab_view.set_selected_page(session.tab_page)
+                    finally:
+                        self._is_switching_tabs = False
             return
 
         if self._active_session and self._active_session.doc:
@@ -2589,36 +2596,55 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         except Exception as e:
             print(f"Warning: Failed to record recent file {filepath}: {e}")
 
-    def load_document(self, filepath, target_page=0, in_new_tab=None, password=None):
+    def load_document(self, filepath, target_page=0, in_new_tab=None, password=None, force_reload=False):
         """Load document into active session or a new tab."""
         existing_session = self.get_session_by_path(filepath)
-        if existing_session:
+        if existing_session and not force_reload:
             self.set_active_session(existing_session)
             if target_page != 0:
                 self._load_page(target_page)
             return
 
-        if in_new_tab is None:
-            in_new_tab = (self._active_session is not None and self._active_session.doc is not None)
-
-        if in_new_tab:
-            new_session = self.create_session(filepath=filepath)
-            self.add_session(new_session, switch_to=True)
-            target_sess = new_session
+        if existing_session and force_reload:
+            target_sess = existing_session
+            self.set_active_session(target_sess)
+            if target_sess.doc:
+                pdf_handler.release_page_snapshots(target_sess.doc)
+                pdf_handler.close_pdf_document(target_sess.doc)
+                target_sess.doc = None
+            target_sess.page_cache.clear()
+            target_sess.editable_texts.clear()
+            target_sess.editable_shapes.clear()
+            target_sess.editable_strokes.clear()
+            target_sess.editable_images.clear()
+            target_sess.form_fields.clear()
+            target_sess.measurements.clear()
+            target_sess.sticky_notes.clear()
+            target_sess.is_modified = False
+            if target_sess.undo_manager:
+                target_sess.undo_manager.clear()
         else:
-            if self.check_unsaved_changes():
-                return
-            self.close_document()
-            if self._active_session is None:
-                self._active_session = self.create_session(filepath=filepath)
-                self.sessions = [self._active_session]
-            target_sess = self._active_session
-            target_sess.pdf_path = filepath
-            target_sess.original_file_path = filepath
-            if hasattr(self, 'tab_view') and self.tab_view:
-                if getattr(target_sess, 'tab_page', None) is None:
-                    self._create_tab_for_session(target_sess)
-            self._update_tab_title(target_sess)
+            if in_new_tab is None:
+                in_new_tab = (self._active_session is not None and self._active_session.doc is not None)
+
+            if in_new_tab:
+                new_session = self.create_session(filepath=filepath)
+                self.add_session(new_session, switch_to=True)
+                target_sess = new_session
+            else:
+                if self.check_unsaved_changes():
+                    return
+                self.close_document()
+                if self._active_session is None:
+                    self._active_session = self.create_session(filepath=filepath)
+                    self.sessions = [self._active_session]
+                target_sess = self._active_session
+                target_sess.pdf_path = filepath
+                target_sess.original_file_path = filepath
+                if hasattr(self, 'tab_view') and self.tab_view:
+                    if getattr(target_sess, 'tab_page', None) is None:
+                        self._create_tab_for_session(target_sess)
+                self._update_tab_title(target_sess)
 
         self._record_recent_file(filepath)
         self.status_label.set_text(_("loading").format(os.path.basename(filepath)))
@@ -6863,9 +6889,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     display_rsn = options.get("reason") or ""
 
                     s_signer = _sanitize_visual_stamp_text(display_name)
-                    s_rsn, _ = _wrap_stamp_field("Reason", _sanitize_visual_stamp_text(display_rsn))
-                    s_loc, _ = _wrap_stamp_field("Location", _sanitize_visual_stamp_text(display_loc))
-                    s_cnt, _ = _wrap_stamp_field("Contact", _sanitize_visual_stamp_text(display_cnt))
+                    s_rsn, _lines_r = _wrap_stamp_field("Reason", _sanitize_visual_stamp_text(display_rsn))
+                    s_loc, _lines_l = _wrap_stamp_field("Location", _sanitize_visual_stamp_text(display_loc))
+                    s_cnt, _lines_c = _wrap_stamp_field("Contact", _sanitize_visual_stamp_text(display_cnt))
 
                     rendered_lines = [
                         f"Digitally signed by: {s_signer}",
@@ -6880,12 +6906,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     pw = page_width or 595.0
                     ph = page_height or 842.0
                     max_chars = max(len(l) for l in rendered_lines)
-                    max_w = min(420.0, float(pw - 40.0))
-                    if max_chars <= 34:
-                        stamp_w = 220.0
+                    max_w = min(360.0, float(pw - 40.0))
+                    if max_chars <= 38:
+                        stamp_w = 210.0
                     else:
-                        stamp_w = min(max_chars * 6.2 + 20.0, max_w)
-                    stamp_h = max(65.0, 16.0 + len(rendered_lines) * 14.0)
+                        stamp_w = min(max_chars * 4.9 + 18.0, max_w)
+                    stamp_h = max(52.0, 10.0 + len(rendered_lines) * 9.6)
 
                     pos = options.get("position", "bottom_right")
                     if pos == "bottom_left":
@@ -6934,7 +6960,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 elif hasattr(self, "status_label") and self.status_label:
                     self.status_label.set_text(_("sig_success_signed"))
 
-                GLib.idle_add(self.load_document, save_path, target_page_idx, True)
+                if self._active_session:
+                    self._active_session.is_modified = False
+                existing_for_save = self.get_session_by_path(save_path)
+                is_same_file = (self._active_session and self._active_session.pdf_path and
+                                os.path.realpath(self._active_session.pdf_path) == os.path.realpath(save_path))
+                open_in_new_tab = False if (is_same_file or existing_for_save) else True
+
+                def _do_reload():
+                    self.load_document(
+                        save_path,
+                        target_page=target_page_idx,
+                        in_new_tab=open_in_new_tab,
+                        force_reload=True,
+                    )
+                    return GLib.SOURCE_REMOVE
+
+                GLib.idle_add(_do_reload)
 
             except Exception as ex:
                 err_msg = _("sig_error_failed", str(ex))

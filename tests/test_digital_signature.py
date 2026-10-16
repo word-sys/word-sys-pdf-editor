@@ -107,8 +107,8 @@ def test_visible_signature_default_box(pfx_cert_and_password):
     sig_w = widgets[0]
     assert sig_w.field_type_string == "Signature"
     rect = sig_w.rect
-    assert rect.width == 220.0
-    assert rect.height == 65.0
+    assert rect.width == 210.0
+    assert rect.height == 52.0
     assert rect.x0 > 300.0
     assert rect.y0 > 700.0
 
