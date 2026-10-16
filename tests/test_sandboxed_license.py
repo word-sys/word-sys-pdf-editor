@@ -56,6 +56,36 @@ class TestSandboxedLicenseEmbedding(unittest.TestCase):
         content = pkg_license.read_text(encoding="utf-8")
         self.assertIn("GNU GENERAL PUBLIC LICENSE", content)
 
+    def test_third_party_licenses_file_and_debian_copyright(self):
+        root_dir = Path(__file__).resolve().parent.parent
+        third_party = root_dir / "THIRD_PARTY_LICENSES.md"
+        self.assertTrue(third_party.is_file(), "THIRD_PARTY_LICENSES.md must exist in root directory")
+        tp_text = third_party.read_text(encoding="utf-8")
+        for pkg in ["pyHanko", "cryptography", "certifi", "anyconvert", "NumPy", "PyMuPDF", "Pillow"]:
+            self.assertIn(pkg, tp_text, f"Missing attribution for {pkg} in THIRD_PARTY_LICENSES.md")
+
+        deb_copyright = root_dir / "debian" / "copyright"
+        self.assertTrue(deb_copyright.is_file(), "debian/copyright must exist")
+        deb_text = deb_copyright.read_text(encoding="utf-8")
+        self.assertIn("Format:", deb_text)
+        self.assertIn("GPL-3.0-or-later", deb_text)
+        self.assertIn("pyHanko", deb_text)
+
+    def test_about_credit_libraries_localization(self):
+        from word_sys_pdf_editor.i18n import _STRINGS
+        from word_sys_pdf_editor.locales import STRINGS_FR, STRINGS_DE, STRINGS_ES, STRINGS_IT, STRINGS_RU
+        dicts = [
+            ("en", _STRINGS["en"]),
+            ("tr", _STRINGS["tr"]),
+            ("fr", STRINGS_FR),
+            ("de", STRINGS_DE),
+            ("es", STRINGS_ES),
+            ("it", STRINGS_IT),
+            ("ru", STRINGS_RU),
+        ]
+        for lang, d in dicts:
+            self.assertIn("about_credit_libraries", d, f"Missing about_credit_libraries key in language {lang}")
+
 
 if __name__ == "__main__":
     unittest.main()

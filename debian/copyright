@@ -3,29 +3,14 @@ Upstream-Name: word-sys PDF Editor
 Source: https://github.com/word-sys/word-sys-pdf-editor
 
 Files: *
-Copyright: 2026 Barın Güzeldemirci <baringuzeldemir@gmail.com>
+Copyright: 2024-2026 Barın Güzeldemirci <baringuzeldemir@gmail.com>
 License: GPL-3.0-or-later
-
-License: GPL-3.0-or-later
- This program is free software: you can redistribute it and/or modify
- it under the terms of the GNU General Public License as published by
- the Free Software Foundation, either version 3 of the License, or
- (at your option) any later version.
- .
- This program is distributed in the hope that it will be useful,
- but WITHOUT ANY WARRANTY; without even the implied warranty of
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- GNU General Public License for more details.
- .
- You should have received a copy of the GNU General Public License
- along with this program.  If not, see <https://www.gnu.org/licenses/>.
- .
- On Debian systems, the full text of the GNU General Public
- License version 3 can be found in '/usr/share/common-licenses/GPL-3'.
 
 Files: debian/*
 Copyright: 2026 Barın Güzeldemirci <baringuzeldemir@gmail.com>
 License: GPL-3.0-or-later
+
+License: GPL-3.0-or-later
  This program is free software: you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
  the Free Software Foundation, either version 3 of the License, or
@@ -41,3 +26,43 @@ License: GPL-3.0-or-later
  .
  On Debian systems, the full text of the GNU General Public
  License version 3 can be found in '/usr/share/common-licenses/GPL-3'.
+
+Comment: Third-Party Dependencies and Compatibility
+ word-sys PDF Editor combines and dynamically interfaces with the following
+ third-party libraries, each licensed under GPLv3-compatible terms:
+ .
+  - PyMuPDF (MuPDF): GNU AGPLv3 or Artifex Commercial License
+    Copyright (c) 2014-2026 Artifex Software, Inc.
+    Combined under Section 13 of the GNU GPLv3.
+ .
+  - pyHanko: MIT License
+    Copyright (c) 2020-2026 Matthias Valvekens <dev@mvalvekens.be>
+ .
+  - pyhanko-certvalidator: MIT License
+    Copyright (c) 2015-2018 Will Bond, 2020-2026 Matthias Valvekens
+ .
+  - asn1crypto: MIT License
+    Copyright (c) 2015-2026 Will Bond <will@wbond.net>
+ .
+  - cryptography: Apache-2.0 or BSD-3-Clause
+    Copyright (c) The Python Cryptographic Authority
+ .
+  - certifi: MPL-2.0
+    Copyright (c) Kenneth Reitz and Mozilla Contributors
+ .
+  - anyconvert: GPL-3.0-or-later
+    Copyright (c) 2026 Barın Güzeldemirci
+ .
+  - NumPy: BSD-3-Clause
+    Copyright (c) 2005-2026 NumPy Developers
+ .
+  - Pillow: HPND / MIT-CMU
+    Copyright (c) 1997-2011 Secret Labs AB, 2010-2026 Jeffrey 'Alex' Clark
+ .
+  - python-pkcs11: MIT License
+    Copyright (c) Danielle Madeley
+ .
+  - fonttools: MIT License
+    Copyright (c) 1999-2026 Just van Rossum, Letterror
+ .
+ Full third-party copyright texts and notices are documented in THIRD_PARTY_LICENSES.md.

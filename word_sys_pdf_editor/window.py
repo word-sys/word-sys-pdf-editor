@@ -2526,6 +2526,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Show the application About dialog."""
         about_dialog = Gtk.AboutDialog(transient_for=self, modal=True)
 
+        about_dialog.set_default_size(560, 450)
         about_dialog.set_program_name(constants.APP_NAME)
         about_dialog.set_version(constants.APP_VERSION)
         about_dialog.set_authors(["Barın Güzeldemirci (word-sys)"])
@@ -2556,6 +2557,27 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             about_dialog.set_logo_icon_name("application-x-executable")
 
         about_dialog.set_copyright("© 2024-2026 Barın Güzeldemirci (word-sys)")
+
+        if hasattr(about_dialog, "add_credit_section"):
+            raw_title = _("about_credit_libraries")
+            safe_title = GLib.markup_escape_text(raw_title)
+            library_items = [
+                "PyMuPDF / MuPDF (AGPL-3.0 / Artifex Software)",
+                "pyHanko (MIT / Matthias Valvekens)",
+                "pyhanko-certvalidator (MIT / Will Bond, Matthias Valvekens)",
+                "cryptography (Apache-2.0 or BSD-3-Clause / PyCA)",
+                "certifi (MPL-2.0 / Kenneth Reitz, Mozilla)",
+                "anyconvert (GPL-3.0-or-later / Barın Güzeldemirci)",
+                "NumPy (BSD-3-Clause / NumPy Developers)",
+                "Pillow (HPND / Jeffrey 'Alex' Clark, Secret Labs)",
+                "asn1crypto (MIT / Will Bond)",
+                "python-pkcs11 (MIT / Danielle Madeley)",
+                "fonttools (MIT / Just van Rossum)",
+            ]
+            about_dialog.add_credit_section(
+                safe_title,
+                [GLib.markup_escape_text(item) for item in library_items]
+            )
 
         tab_map = {
             "About": _("about_tab_about"),
