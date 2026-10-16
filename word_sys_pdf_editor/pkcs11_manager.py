@@ -93,12 +93,30 @@ def find_available_pkcs11_drivers(custom_path: Optional[str] = None) -> List[Dic
     return drivers
 
 
+def _ensure_softhsm_env(module_path: str):
+    if "softhsm" in module_path.lower() and "SOFTHSM2_CONF" not in os.environ:
+        user_conf = os.path.expanduser("~/.config/softhsm2/softhsm2.conf")
+        if not os.path.exists(user_conf) and not os.path.exists("/etc/softhsm/softhsm2.conf") and not os.path.exists("/etc/softhsm2.conf"):
+            tok_dir = os.path.expanduser("~/.config/softhsm2/tokens")
+            try:
+                os.makedirs(tok_dir, exist_ok=True)
+                with open(user_conf, "w", encoding="utf-8") as f:
+                    f.write(f"directories.tokendir = {tok_dir}\nobjectstore.backend = file\nlog.level = ERROR\n")
+            except Exception:
+                pass
+        if os.path.exists(user_conf):
+            os.environ["SOFTHSM2_CONF"] = user_conf
+
+
 def list_tokens(module_path: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     if not PKCS11_AVAILABLE:
         return [], "PKCS#11 subsystem is not installed or available"
 
     if not module_path or not os.path.isfile(module_path):
         return [], f"PKCS#11 driver not found: {module_path}"
+
+    module_path = os.path.realpath(module_path)
+    _ensure_softhsm_env(module_path)
 
     try:
         lib = pkcs11.lib(module_path)
@@ -140,6 +158,9 @@ def list_token_certificates(
 
     if not module_path or not os.path.isfile(module_path):
         return [], f"PKCS#11 driver not found: {module_path}"
+
+    module_path = os.path.realpath(module_path)
+    _ensure_softhsm_env(module_path)
 
     try:
         lib = pkcs11.lib(module_path)
@@ -274,6 +295,9 @@ def create_pkcs11_signer(
 
     if not module_path or not os.path.isfile(module_path):
         return None, None, f"PKCS#11 driver not found: {module_path}"
+
+    module_path = os.path.realpath(module_path)
+    _ensure_softhsm_env(module_path)
 
     token_criteria = None
     if token_label:
