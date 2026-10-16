@@ -716,7 +716,7 @@ _STRINGS = {
         "sig_none_found_title": "No Digital Signatures Found",
         "sig_none_found_desc": "This document does not contain any cryptographic digital signatures.",
         "sig_header_signature": "Digital Signature",
-        "sig_status_valid": "Cryptographically Valid & Untampered",
+        "sig_status_valid": "Cryptographically Valid &amp; Untampered",
         "sig_status_valid_desc": "Document integrity is intact. No modifications were made after signing.",
         "sig_status_invalid": "Signature Invalid / Document Modified",
         "sig_status_invalid_desc": "Document content has been altered after this signature was applied.",

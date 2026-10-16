@@ -260,3 +260,49 @@ def test_signature_dialog_ui_headless():
     details_dlg = SignatureDetailsDialog(parent_window=None, signatures=[])
     assert not hasattr(details_dlg, "close_btn")
     details_dlg.destroy()
+
+
+def test_signature_contact_and_unicode_location(pfx_cert_and_password):
+    if not is_pyhanko_available():
+        pytest.skip("pyHanko not installed")
+    pfx_data, password = pfx_cert_and_password
+
+    doc = fitz.open()
+    doc.new_page(width=595.0, height=842.0)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    loc = "Muğla, Muğla, Republic Of Turkey"
+    contact = "barin@example.com"
+
+    signed_bytes, err = sign_pdf_bytes(
+        pdf_bytes=pdf_bytes,
+        pfx_data_or_path=pfx_data,
+        passphrase=password,
+        signer_name="Barin Guzeldemirci",
+        reason="I am the author of this document",
+        location=loc,
+        contact_info=contact,
+        visual_stamp=True,
+    )
+    assert err is None, err
+    assert signed_bytes is not None
+
+    doc2 = fitz.open("pdf", signed_bytes)
+    page_text = doc2[0].get_text()
+    doc2.close()
+
+    assert "Contact: barin@example.com" in page_text
+    assert "þÿ" not in page_text
+    assert "Location: Mugla, Mugla, Republic Of Turkey" in page_text
+
+    sigs = inspect_pdf_signatures(signed_bytes)
+    assert len(sigs) == 1
+    assert sigs[0]["intact"] is True
+    assert sigs[0]["location"] == loc
+    assert sigs[0]["contact_info"] == contact
+
+    from word_sys_pdf_editor.signature_dialog import SignatureDetailsDialog
+    details_dlg = SignatureDetailsDialog(parent_window=None, signatures=sigs)
+    assert details_dlg is not None
+    details_dlg.destroy()

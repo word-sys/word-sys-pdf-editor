@@ -6856,11 +6856,38 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
                 box = options.get("box")
                 if box is None and options.get("visual_stamp", True):
-                    stamp_w = 220.0
-                    stamp_h = 65.0
-                    pos = options.get("position", "bottom_right")
+                    from .digital_signature import _sanitize_visual_stamp_text, _wrap_stamp_field
+                    display_name = options.get("signer_name") or ""
+                    display_loc = options.get("location") or ""
+                    display_cnt = options.get("contact_info") or ""
+                    display_rsn = options.get("reason") or ""
+
+                    s_signer = _sanitize_visual_stamp_text(display_name)
+                    s_rsn, _ = _wrap_stamp_field("Reason", _sanitize_visual_stamp_text(display_rsn))
+                    s_loc, _ = _wrap_stamp_field("Location", _sanitize_visual_stamp_text(display_loc))
+                    s_cnt, _ = _wrap_stamp_field("Contact", _sanitize_visual_stamp_text(display_cnt))
+
+                    rendered_lines = [
+                        f"Digitally signed by: {s_signer}",
+                        "Date: YYYY-MM-DD HH:MM:SS +00",
+                    ]
+                    rendered_lines.extend(f"Reason: {s_rsn}".split("\n"))
+                    if display_loc:
+                        rendered_lines.extend(f"Location: {s_loc}".split("\n"))
+                    if display_cnt:
+                        rendered_lines.extend(f"Contact: {s_cnt}".split("\n"))
+
                     pw = page_width or 595.0
                     ph = page_height or 842.0
+                    max_chars = max(len(l) for l in rendered_lines)
+                    max_w = min(420.0, float(pw - 40.0))
+                    if max_chars <= 34:
+                        stamp_w = 220.0
+                    else:
+                        stamp_w = min(max_chars * 6.2 + 20.0, max_w)
+                    stamp_h = max(65.0, 16.0 + len(rendered_lines) * 14.0)
+
+                    pos = options.get("position", "bottom_right")
                     if pos == "bottom_left":
                         bx = 40.0
                         by = max(20.0, ph - stamp_h - 50.0)

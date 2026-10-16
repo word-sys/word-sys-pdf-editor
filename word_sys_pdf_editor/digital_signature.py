@@ -128,6 +128,43 @@ def load_pkcs12_certificate(
     return signer, cert_info, None
 
 
+def _sanitize_visual_stamp_text(text: str) -> str:
+    """Sanitize text for standard Type-1 PDF font rendering to prevent UTF-16 byte corruption."""
+    if not text:
+        return ""
+    replacements = {
+        "ğ": "g", "Ğ": "G",
+        "ı": "i", "İ": "I",
+        "ş": "s", "Ş": "S",
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    import unicodedata
+    normalized = unicodedata.normalize("NFKD", text)
+    safe = "".join(c for c in normalized if not unicodedata.combining(c))
+    try:
+        return safe.encode("latin-1").decode("latin-1")
+    except UnicodeEncodeError:
+        return safe.encode("ascii", errors="replace").decode("ascii")
+
+
+def _wrap_stamp_field(prefix: str, val: str, max_chars: int = 42) -> Tuple[str, int]:
+    """Wrap a stamp field across multiple lines if it exceeds max_chars."""
+    if not val:
+        return "", 0
+    full = f"{prefix}: {val}"
+    if len(full) <= max_chars:
+        return val, 1
+    import textwrap
+    avail = max(18, max_chars - len(prefix) - 2)
+    wrapped = textwrap.wrap(val, width=avail)
+    if len(wrapped) <= 1:
+        return val, 1
+    indent = "  "
+    multi = wrapped[0] + "\n" + "\n".join(indent + w for w in wrapped[1:])
+    return multi, len(wrapped)
+
+
 def sign_pdf_bytes(
     pdf_bytes: bytes,
     pfx_data_or_path: bytes | str,
@@ -183,6 +220,12 @@ def sign_pdf_bytes(
     display_location = location or ""
     display_contact = contact_info or ""
 
+    # Sanitize visual appearance texts to prevent Type-1 UTF-16 BOM (\xfe\xff) corruption
+    stamp_signer = _sanitize_visual_stamp_text(display_name)
+    stamp_reason, _ = _wrap_stamp_field("Reason", _sanitize_visual_stamp_text(display_reason))
+    stamp_location, _ = _wrap_stamp_field("Location", _sanitize_visual_stamp_text(display_location))
+    stamp_contact, _ = _wrap_stamp_field("Contact", _sanitize_visual_stamp_text(display_contact))
+
     try:
         in_stream = io.BytesIO(pdf_bytes)
         writer = IncrementalPdfFileWriter(in_stream)
@@ -217,9 +260,24 @@ def sign_pdf_bytes(
             if page_width is None:
                 page_width = 595.0
 
+            rendered_lines = [
+                f"Digitally signed by: {stamp_signer}",
+                "Date: YYYY-MM-DD HH:MM:SS +00",
+            ]
+            rendered_lines.extend(f"Reason: {stamp_reason}".split("\n"))
+            if display_location:
+                rendered_lines.extend(f"Location: {stamp_location}".split("\n"))
+            if display_contact:
+                rendered_lines.extend(f"Contact: {stamp_contact}".split("\n"))
+
             if box is None:
-                stamp_w = 220.0
-                stamp_h = 65.0
+                max_chars = max(len(l) for l in rendered_lines)
+                max_w = min(420.0, float(page_width - 40.0))
+                if max_chars <= 34:
+                    stamp_w = 220.0
+                else:
+                    stamp_w = min(max_chars * 6.2 + 20.0, max_w)
+                stamp_h = max(65.0, 16.0 + len(rendered_lines) * 14.0)
                 stamp_x = max(20.0, page_width - stamp_w - 40.0)
                 stamp_y = max(20.0, page_height - stamp_h - 50.0)
                 box = (stamp_x, stamp_y, stamp_w, stamp_h)
@@ -252,6 +310,8 @@ def sign_pdf_bytes(
                 stamp_text = "Digitally signed by: %(signer)s\nDate: %(ts)s\nReason: %(reason)s"
                 if display_location:
                     stamp_text += "\nLocation: %(location)s"
+                if display_contact:
+                    stamp_text += "\nContact: %(contact)s"
 
             # Optional handwritten background image
             bg_image = None
@@ -286,9 +346,10 @@ def sign_pdf_bytes(
 
         out_stream = io.BytesIO()
         appearance_params = {
-            "signer": display_name,
-            "reason": display_reason,
-            "location": display_location,
+            "signer": stamp_signer,
+            "reason": stamp_reason,
+            "location": stamp_location,
+            "contact": stamp_contact,
         }
 
         pdf_signer.sign_pdf(
@@ -400,6 +461,10 @@ def inspect_pdf_signatures(pdf_bytes_or_path: bytes | str) -> List[Dict[str, Any
                     info["not_after"] = validity["not_after"].native
                     info["serial_number"] = str(cert.serial_number)
                     info["sha256_fingerprint"] = cert.sha256.hex()
+                    if not info["contact_info"]:
+                        email = subj.get("email_address") or subj.get("email")
+                        if email:
+                            info["contact_info"] = str(email)
             except Exception:
                 pass
 

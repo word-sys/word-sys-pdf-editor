@@ -496,6 +496,14 @@ class SignatureDetailsDialog(Adw.Window):
                 loc_row.set_subtitle(location)
                 group.add(loc_row)
 
+            # Contact / Email
+            contact = sig.get("contact_info")
+            if contact:
+                contact_row = Adw.ActionRow()
+                contact_row.set_title(_("sig_contact"))
+                contact_row.set_subtitle(contact)
+                group.add(contact_row)
+
             # Scope / Coverage
             cov_row = Adw.ActionRow()
             cov_row.set_title(_("sig_detail_coverage"))
