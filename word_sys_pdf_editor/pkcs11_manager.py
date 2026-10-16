@@ -303,10 +303,21 @@ def create_pkcs11_signer(
     if token_label:
         token_criteria = TokenCriteria(label=token_label.strip())
 
+    slot_index = None
+    if slot_id is not None:
+        try:
+            lib = pkcs11.lib(module_path)
+            for idx, s in enumerate(lib.get_slots()):
+                if s.slot_id == slot_id:
+                    slot_index = idx
+                    break
+        except Exception:
+            pass
+
     try:
         session = p11_signer.open_pkcs11_session(
             lib_location=module_path,
-            slot_no=slot_id,
+            slot_no=slot_index,
             token_criteria=token_criteria,
             user_pin=user_pin,
         )
