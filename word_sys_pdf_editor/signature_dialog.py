@@ -179,13 +179,23 @@ class DigitalSignatureDialog(Adw.Window):
         # Driver row
         self.hw_driver_row = Adw.ActionRow()
         self.hw_driver_row.set_title(_("sig_hw_driver"))
+
+        driver_controls_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        driver_controls_box.set_valign(Gtk.Align.CENTER)
+        driver_controls_box.set_halign(Gtk.Align.END)
+        driver_controls_box.set_margin_top(4)
+        driver_controls_box.set_margin_bottom(4)
+
         self.hw_driver_combo = Gtk.DropDown.new_from_strings([_("sig_hw_no_drivers")])
         self.hw_driver_combo.set_valign(Gtk.Align.CENTER)
         self.hw_driver_combo.connect("notify::selected", self._on_hw_driver_changed)
-        self.hw_driver_row.add_suffix(self.hw_driver_combo)
+        driver_controls_box.append(self.hw_driver_combo)
 
         hw_btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        hw_btn_box.set_halign(Gtk.Align.FILL)
+
         browse_driver_btn = Gtk.Button(label=_("sig_hw_browse_driver"))
+        browse_driver_btn.set_hexpand(True)
         browse_driver_btn.set_valign(Gtk.Align.CENTER)
         browse_driver_btn.connect("clicked", self._on_browse_driver_clicked)
         hw_btn_box.append(browse_driver_btn)
@@ -196,7 +206,9 @@ class DigitalSignatureDialog(Adw.Window):
         rescan_btn.connect("clicked", lambda b: self._rescan_pkcs11_drivers())
         hw_btn_box.append(rescan_btn)
 
-        self.hw_driver_row.add_suffix(hw_btn_box)
+        driver_controls_box.append(hw_btn_box)
+
+        self.hw_driver_row.add_suffix(driver_controls_box)
         self.hw_token_group.add(self.hw_driver_row)
 
         # Token row

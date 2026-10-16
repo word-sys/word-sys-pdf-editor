@@ -18,10 +18,12 @@ Depends: ${misc:Depends},
          gir1.2-gtk-4.0,
          gir1.2-adw-1,
          python3-cryptography
-Recommends: ttf-dejavu-core | fonts-noto-core | fonts-liberation2, pcscd, opensc, libpcsclite1
+Recommends: ttf-dejavu-core | fonts-noto-core | fonts-liberation2, pcscd, opensc, libpcsclite1, softhsm2
+Suggests: opensc-pkcs11
 Description: word-sys PDF Editor - Simple PDF Text Editor
  word-sys PDF Editor allows users to open PDF files, view pages, select
  existing text blocks, modify or delete them, and add new text blocks.
  It focuses on simple text content manipulation rather than full PDF
  annotation or structural changes. It can also export to DOCX, PPTX, ODT,
  ODP, and TXT formats using the native pure-Python anyconvert engine.
+ It supports PAdES digital signatures, RFC 3161 timestamps, and PKCS#11 hardware tokens.

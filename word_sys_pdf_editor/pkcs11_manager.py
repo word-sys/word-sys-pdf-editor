@@ -145,8 +145,12 @@ def list_token_certificates(
         lib = pkcs11.lib(module_path)
         token = None
         if slot_id is not None:
-            slot = lib.get_slot(slot_id)
-            token = slot.get_token()
+            for s in lib.get_slots(token_present=True):
+                if s.slot_id == slot_id:
+                    token = s.get_token()
+                    break
+            if token is None:
+                return [], f"Token in slot {slot_id} not found"
         elif token_label:
             target_label = token_label.strip()
             for s in lib.get_slots(token_present=True):
