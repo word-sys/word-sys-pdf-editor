@@ -99,6 +99,18 @@ def compress_pdf_bytes(
 
     try:
         if options.compress_images:
+            mask_xrefs = set()
+            for xref in range(1, doc.xref_length()):
+                try:
+                    sm = doc.xref_get_key(xref, "SMask")
+                    if sm[0] == "xref":
+                        mask_xrefs.add(int(sm[1].split()[0]))
+                    mk = doc.xref_get_key(xref, "Mask")
+                    if mk[0] == "xref":
+                        mask_xrefs.add(int(mk[1].split()[0]))
+                except Exception:
+                    pass
+
             rect_map: Dict[int, Tuple[float, float]] = {}
             for page in doc:
                 try:
@@ -107,7 +119,7 @@ def compress_pdf_bytes(
                     continue
                 for img_tuple in page_images:
                     xref = img_tuple[0]
-                    if xref <= 0:
+                    if xref <= 0 or xref in mask_xrefs:
                         continue
                     rects = page.get_image_rects(xref)
                     w_pt = max((r.width for r in rects), default=0.0)
@@ -121,6 +133,8 @@ def compress_pdf_bytes(
 
             all_image_xrefs: Dict[int, Tuple[float, float]] = {}
             for xref in range(1, doc.xref_length()):
+                if xref in mask_xrefs:
+                    continue
                 try:
                     sub = doc.xref_get_key(xref, "Subtype")
                     if sub[0] == "name" and sub[1] == "/Image":
@@ -141,7 +155,18 @@ def compress_pdf_bytes(
                     if orig_img_len < 512:
                         continue
 
-                    pil_img = Image.open(io.BytesIO(raw_bytes))
+                    smask_xref = img_dict.get("smask", 0)
+                    if smask_xref > 0:
+                        try:
+                            base_pix = fitz.Pixmap(doc, xref)
+                            mask_pix = fitz.Pixmap(doc, smask_xref)
+                            combined_pix = fitz.Pixmap(base_pix, mask_pix)
+                            pil_img = Image.frombytes("RGBA", (combined_pix.width, combined_pix.height), combined_pix.samples)
+                        except Exception:
+                            pil_img = Image.open(io.BytesIO(raw_bytes))
+                    else:
+                        pil_img = Image.open(io.BytesIO(raw_bytes))
+
                     orig_w, orig_h = pil_img.size
 
                     target_w, target_h = orig_w, orig_h

@@ -229,3 +229,31 @@ def test_window_compress_document_action():
     app.connect("startup", on_startup)
     app.run([])
 
+
+def test_compress_pdf_with_smask():
+    import subprocess
+    doc = fitz.open()
+    page = doc.new_page(width=300, height=300)
+    img_rgba = Image.new("RGBA", (200, 200), color=(100, 150, 200, 128))
+    for i in range(50, 150):
+        for j in range(50, 150):
+            img_rgba.putpixel((i, j), (250, 50, 50, 255))
+    buf = io.BytesIO()
+    img_rgba.save(buf, format="PNG")
+    page.insert_image(fitz.Rect(50, 50, 250, 250), stream=buf.getvalue())
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    res = compress_pdf_bytes(pdf_bytes, get_preset_options(PRESET_BALANCED))
+    assert res.compressed_size > 0
+    assert res.achieved_target is True
+
+    # Ensure Poppler renders without 'Bad image parameters' or syntax errors
+    p = subprocess.run(
+        ["pdftoppm", "-png", "-r", "72", "-", "/tmp/test_smask_check"],
+        input=res.pdf_bytes,
+        capture_output=True,
+    )
+    assert p.returncode == 0
+    assert "Syntax Error" not in p.stderr.decode()
+
