@@ -259,12 +259,15 @@ def show_open_file_dialog(parent_window, title, filters=None, default_filter=Non
         dialog.present()
 
 
-def show_save_file_dialog(parent_window, title, initial_name=None, filters=None, default_filter=None, callback=None):
+def show_save_file_dialog(parent_window, title=_("dialog_save_as"), initial_name=None, filters=None, default_filter=None, callback=None, suggested_name=None):
     """
     Show a save file dialog using Gtk.FileDialog if available (GTK >= 4.10),
     otherwise falling back to Gtk.FileChooserDialog (GTK < 4.10).
     Callback receives (gfile) or (gfile, selected_filter).
     """
+    if not initial_name and suggested_name:
+        initial_name = suggested_name
+
     if hasattr(Gtk, "FileDialog"):
         dialog = Gtk.FileDialog(title=title)
         if initial_name:

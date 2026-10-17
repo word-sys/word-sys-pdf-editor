@@ -13,6 +13,7 @@ PRESET_MAXIMUM = "maximum"      # 72 DPI, 50% quality
 PRESET_BALANCED = "balanced"    # 150 DPI, 75% quality
 PRESET_HIGH_QUALITY = "high"    # 300 DPI, 85% quality
 PRESET_LOSSLESS = "lossless"    # Structure deflate and dead xref purge without re-encoding
+PRESET_MAX_BW = "max_bw"        # 1-bit pure black and white monochrome max compression
 PRESET_TARGET = "target"        # Binary search target size solver
 
 
@@ -33,6 +34,7 @@ class CompressionOptions:
     jpeg_quality: int = 75
     compress_images: bool = True
     grayscale: bool = False
+    monochrome_bw: bool = False
     deflate: bool = True
     clean: bool = True
     garbage: int = 4
@@ -53,7 +55,15 @@ class CompressionResult:
 
 def get_preset_options(preset_name: str) -> CompressionOptions:
     name = (preset_name or "").lower().strip()
-    if name == PRESET_MAXIMUM:
+    if name == PRESET_MAX_BW:
+        return CompressionOptions(
+            target_dpi=150,
+            jpeg_quality=50,
+            compress_images=True,
+            grayscale=True,
+            monochrome_bw=True,
+        )
+    elif name == PRESET_MAXIMUM:
         return CompressionOptions(target_dpi=72, jpeg_quality=50, compress_images=True, grayscale=False)
     elif name == PRESET_HIGH_QUALITY:
         return CompressionOptions(target_dpi=300, jpeg_quality=85, compress_images=True, grayscale=False)
@@ -61,6 +71,216 @@ def get_preset_options(preset_name: str) -> CompressionOptions:
         return CompressionOptions(target_dpi=None, jpeg_quality=95, compress_images=False, grayscale=False)
     else:
         return CompressionOptions(target_dpi=150, jpeg_quality=75, compress_images=True, grayscale=False)
+
+
+def _otsu_threshold(im: Image.Image) -> int:
+    hist = im.histogram()
+    total = sum(hist)
+    if total == 0:
+        return 180
+    sum_b = 0
+    w_b = 0
+    maximum = 0.0
+    sum1 = sum(i * hist[i] for i in range(256))
+    threshold = 180
+    for i in range(256):
+        w_b += hist[i]
+        if w_b == 0:
+            continue
+        w_f = total - w_b
+        if w_f == 0:
+            break
+        sum_b += i * hist[i]
+        m_b = sum_b / w_b
+        m_f = (sum1 - sum_b) / w_f
+        between = w_b * w_f * ((m_b - m_f) ** 2)
+        if between > maximum:
+            maximum = between
+            threshold = i
+    return max(120, min(210, threshold))
+
+
+def _compress_monochrome_bw(doc: fitz.Document, options: CompressionOptions) -> bytes:
+    out_doc = fitz.open()
+    dpi = options.target_dpi or 150
+
+    try:
+        for page in doc:
+            page_rect = page.rect
+            words = []
+            try:
+                words = page.get_text("words")
+            except Exception:
+                pass
+
+            pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csGRAY, alpha=False)
+            pil_img = Image.frombytes("L", (pix.width, pix.height), pix.samples)
+
+            thresh = _otsu_threshold(pil_img)
+            bw_img = pil_img.point(lambda p: 255 if p > thresh else 0).convert("1")
+
+            buf = io.BytesIO()
+            bw_img.save(buf, format="PNG", optimize=True)
+            png_bytes = buf.getvalue()
+
+            new_page = out_doc.new_page(width=page_rect.width, height=page_rect.height)
+            new_page.insert_image(page_rect, stream=png_bytes)
+
+            for w in words:
+                x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4]
+                if not text:
+                    continue
+                h = y1 - y0
+                font_size = max(4.0, h * 0.85)
+                new_page.insert_text(
+                    fitz.Point(x0, y1 - h * 0.15),
+                    text,
+                    fontsize=font_size,
+                    render_mode=3,
+                )
+
+        out_bytes = out_doc.tobytes(
+            deflate=options.deflate,
+            garbage=options.garbage,
+            clean=options.clean,
+            deflate_images=True,
+            deflate_fonts=True,
+        )
+    finally:
+        out_doc.close()
+
+    return out_bytes
+
+
+def _recompress_embedded_images(doc: fitz.Document, options: CompressionOptions) -> None:
+    mask_xrefs = set()
+    for xref in range(1, doc.xref_length()):
+        try:
+            sm = doc.xref_get_key(xref, "SMask")
+            if sm[0] == "xref":
+                mask_xrefs.add(int(sm[1].split()[0]))
+            mk = doc.xref_get_key(xref, "Mask")
+            if mk[0] == "xref":
+                mask_xrefs.add(int(mk[1].split()[0]))
+        except Exception:
+            pass
+
+    rect_map: Dict[int, Tuple[float, float]] = {}
+    for page in doc:
+        try:
+            page_images = page.get_images()
+        except Exception:
+            continue
+        for img_tuple in page_images:
+            xref = img_tuple[0]
+            if xref <= 0 or xref in mask_xrefs:
+                continue
+            rects = page.get_image_rects(xref)
+            w_pt = max((r.width for r in rects), default=0.0)
+            h_pt = max((r.height for r in rects), default=0.0)
+            if xref not in rect_map:
+                rect_map[xref] = (w_pt, h_pt)
+            else:
+                cur_w, cur_h = rect_map[xref]
+                if w_pt > cur_w or h_pt > cur_h:
+                    rect_map[xref] = (max(cur_w, w_pt), max(cur_h, h_pt))
+
+    all_image_xrefs: Dict[int, Tuple[float, float]] = {}
+    for xref in range(1, doc.xref_length()):
+        if xref in mask_xrefs:
+            continue
+        try:
+            sub = doc.xref_get_key(xref, "Subtype")
+            if sub[0] == "name" and sub[1] == "/Image":
+                all_image_xrefs[xref] = rect_map.get(xref, (0.0, 0.0))
+        except Exception:
+            continue
+
+    if not all_image_xrefs and rect_map:
+        all_image_xrefs = rect_map
+
+    for xref, (disp_w_pt, disp_h_pt) in all_image_xrefs.items():
+        try:
+            img_dict = doc.extract_image(xref)
+            if not img_dict or "image" not in img_dict:
+                continue
+            raw_bytes = img_dict["image"]
+            orig_img_len = len(raw_bytes)
+            if orig_img_len < 512:
+                continue
+
+            smask_xref = img_dict.get("smask", 0)
+            if smask_xref > 0:
+                try:
+                    base_pix = fitz.Pixmap(doc, xref)
+                    mask_pix = fitz.Pixmap(doc, smask_xref)
+                    combined_pix = fitz.Pixmap(base_pix, mask_pix)
+                    pil_img = Image.frombytes("RGBA", (combined_pix.width, combined_pix.height), combined_pix.samples)
+                except Exception:
+                    pil_img = Image.open(io.BytesIO(raw_bytes))
+            else:
+                pil_img = Image.open(io.BytesIO(raw_bytes))
+
+            orig_w, orig_h = pil_img.size
+
+            target_w, target_h = orig_w, orig_h
+            if options.target_dpi:
+                if disp_w_pt > 0 and disp_h_pt > 0:
+                    req_w = int(round(disp_w_pt / 72.0 * options.target_dpi))
+                    req_h = int(round(disp_h_pt / 72.0 * options.target_dpi))
+                else:
+                    if options.target_dpi <= 72:
+                        max_dim = 1000
+                    elif options.target_dpi <= 150:
+                        max_dim = 1800
+                    else:
+                        max_dim = 3200
+                    scale_cap = min(max_dim / orig_w, max_dim / orig_h) if (orig_w > max_dim or orig_h > max_dim) else 1.0
+                    req_w = int(round(orig_w * scale_cap))
+                    req_h = int(round(orig_h * scale_cap))
+
+                if req_w > 0 and req_h > 0 and (req_w < orig_w or req_h < orig_h):
+                    scale = min(req_w / orig_w, req_h / orig_h)
+                    if scale < 0.95:
+                        target_w = max(1, int(round(orig_w * scale)))
+                        target_h = max(1, int(round(orig_h * scale)))
+
+            if target_w != orig_w or target_h != orig_h:
+                pil_img = pil_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+            if options.grayscale and pil_img.mode not in ("1", "L"):
+                pil_img = pil_img.convert("L")
+
+            has_alpha = pil_img.mode in ("RGBA", "LA") or ("transparency" in pil_img.info)
+            candidates = []
+
+            if has_alpha:
+                buf_png = io.BytesIO()
+                pil_img.save(buf_png, format="PNG", optimize=True)
+                candidates.append(buf_png.getvalue())
+            else:
+                im_rgb = pil_img if pil_img.mode in ("L", "RGB") else pil_img.convert("RGB")
+                buf_jpg = io.BytesIO()
+                im_rgb.save(
+                    buf_jpg,
+                    format="JPEG",
+                    quality=max(10, min(95, options.jpeg_quality)),
+                    optimize=True,
+                    progressive=False,
+                )
+                candidates.append(buf_jpg.getvalue())
+
+                buf_png = io.BytesIO()
+                pil_img.save(buf_png, format="PNG", optimize=True)
+                candidates.append(buf_png.getvalue())
+
+            if candidates:
+                best_bytes = min(candidates, key=len)
+                if len(best_bytes) < orig_img_len:
+                    doc[0].replace_image(xref, stream=best_bytes)
+
+        except Exception as img_exc:
+            logging.debug("Could not recompress image xref %s: %s", xref, img_exc)
 
 
 def compress_pdf_bytes(
@@ -98,157 +318,33 @@ def compress_pdf_bytes(
         )
 
     try:
-        if options.compress_images:
-            mask_xrefs = set()
-            for xref in range(1, doc.xref_length()):
-                try:
-                    sm = doc.xref_get_key(xref, "SMask")
-                    if sm[0] == "xref":
-                        mask_xrefs.add(int(sm[1].split()[0]))
-                    mk = doc.xref_get_key(xref, "Mask")
-                    if mk[0] == "xref":
-                        mask_xrefs.add(int(mk[1].split()[0]))
-                except Exception:
-                    pass
+        if options.monochrome_bw:
+            compressed_bytes = _compress_monochrome_bw(doc, options)
+        else:
+            if options.compress_images:
+                _recompress_embedded_images(doc, options)
 
-            rect_map: Dict[int, Tuple[float, float]] = {}
-            for page in doc:
-                try:
-                    page_images = page.get_images()
-                except Exception:
-                    continue
-                for img_tuple in page_images:
-                    xref = img_tuple[0]
-                    if xref <= 0 or xref in mask_xrefs:
-                        continue
-                    rects = page.get_image_rects(xref)
-                    w_pt = max((r.width for r in rects), default=0.0)
-                    h_pt = max((r.height for r in rects), default=0.0)
-                    if xref not in rect_map:
-                        rect_map[xref] = (w_pt, h_pt)
-                    else:
-                        cur_w, cur_h = rect_map[xref]
-                        if w_pt > cur_w or h_pt > cur_h:
-                            rect_map[xref] = (max(cur_w, w_pt), max(cur_h, h_pt))
-
-            all_image_xrefs: Dict[int, Tuple[float, float]] = {}
-            for xref in range(1, doc.xref_length()):
-                if xref in mask_xrefs:
-                    continue
-                try:
-                    sub = doc.xref_get_key(xref, "Subtype")
-                    if sub[0] == "name" and sub[1] == "/Image":
-                        all_image_xrefs[xref] = rect_map.get(xref, (0.0, 0.0))
-                except Exception:
-                    continue
-
-            if not all_image_xrefs and rect_map:
-                all_image_xrefs = rect_map
-
-            for xref, (disp_w_pt, disp_h_pt) in all_image_xrefs.items():
-                try:
-                    img_dict = doc.extract_image(xref)
-                    if not img_dict or "image" not in img_dict:
-                        continue
-                    raw_bytes = img_dict["image"]
-                    orig_img_len = len(raw_bytes)
-                    if orig_img_len < 512:
-                        continue
-
-                    smask_xref = img_dict.get("smask", 0)
-                    if smask_xref > 0:
-                        try:
-                            base_pix = fitz.Pixmap(doc, xref)
-                            mask_pix = fitz.Pixmap(doc, smask_xref)
-                            combined_pix = fitz.Pixmap(base_pix, mask_pix)
-                            pil_img = Image.frombytes("RGBA", (combined_pix.width, combined_pix.height), combined_pix.samples)
-                        except Exception:
-                            pil_img = Image.open(io.BytesIO(raw_bytes))
-                    else:
-                        pil_img = Image.open(io.BytesIO(raw_bytes))
-
-                    orig_w, orig_h = pil_img.size
-
-                    target_w, target_h = orig_w, orig_h
-                    if options.target_dpi:
-                        if disp_w_pt > 0 and disp_h_pt > 0:
-                            req_w = int(round(disp_w_pt / 72.0 * options.target_dpi))
-                            req_h = int(round(disp_h_pt / 72.0 * options.target_dpi))
-                        else:
-                            if options.target_dpi <= 72:
-                                max_dim = 1000
-                            elif options.target_dpi <= 150:
-                                max_dim = 1800
-                            else:
-                                max_dim = 3200
-                            scale_cap = min(max_dim / orig_w, max_dim / orig_h) if (orig_w > max_dim or orig_h > max_dim) else 1.0
-                            req_w = int(round(orig_w * scale_cap))
-                            req_h = int(round(orig_h * scale_cap))
-
-                        if req_w > 0 and req_h > 0 and (req_w < orig_w or req_h < orig_h):
-                            scale = min(req_w / orig_w, req_h / orig_h)
-                            if scale < 0.95:
-                                target_w = max(1, int(round(orig_w * scale)))
-                                target_h = max(1, int(round(orig_h * scale)))
-
-                    if target_w != orig_w or target_h != orig_h:
-                        pil_img = pil_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
-
-                    if options.grayscale and pil_img.mode not in ("1", "L"):
-                        pil_img = pil_img.convert("L")
-
-                    has_alpha = pil_img.mode in ("RGBA", "LA") or ("transparency" in pil_img.info)
-                    candidates = []
-
-                    if has_alpha:
-                        buf_png = io.BytesIO()
-                        pil_img.save(buf_png, format="PNG", optimize=True)
-                        candidates.append(buf_png.getvalue())
-                    else:
-                        im_rgb = pil_img if pil_img.mode in ("L", "RGB") else pil_img.convert("RGB")
-                        buf_jpg = io.BytesIO()
-                        im_rgb.save(
-                            buf_jpg,
-                            format="JPEG",
-                            quality=max(10, min(95, options.jpeg_quality)),
-                            optimize=True,
-                            progressive=False,
-                        )
-                        candidates.append(buf_jpg.getvalue())
-
-                        buf_png = io.BytesIO()
-                        pil_img.save(buf_png, format="PNG", optimize=True)
-                        candidates.append(buf_png.getvalue())
-
-                    if candidates:
-                        best_bytes = min(candidates, key=len)
-                        if len(best_bytes) < orig_img_len:
-                            doc[0].replace_image(xref, stream=best_bytes)
-
-                except Exception as img_exc:
-                    logging.debug("Could not recompress image xref %s: %s", xref, img_exc)
-
-        out_c = doc.tobytes(
-            deflate=options.deflate,
-            garbage=options.garbage,
-            clean=True,
-            deflate_images=True,
-            deflate_fonts=True,
-        )
-        out_nc = doc.tobytes(
-            deflate=options.deflate,
-            garbage=options.garbage,
-            clean=False,
-            deflate_images=True,
-            deflate_fonts=True,
-        )
-        compressed_bytes = out_c if len(out_c) < len(out_nc) else out_nc
+            out_c = doc.tobytes(
+                deflate=options.deflate,
+                garbage=options.garbage,
+                clean=True,
+                deflate_images=True,
+                deflate_fonts=True,
+            )
+            out_nc = doc.tobytes(
+                deflate=options.deflate,
+                garbage=options.garbage,
+                clean=False,
+                deflate_images=True,
+                deflate_fonts=True,
+            )
+            compressed_bytes = out_c if len(out_c) < len(out_nc) else out_nc
 
     finally:
         doc.close()
 
     comp_len = len(compressed_bytes)
-    if comp_len >= orig_len:
+    if comp_len >= orig_len and not options.monochrome_bw:
         compressed_bytes = pdf_bytes
         comp_len = orig_len
 

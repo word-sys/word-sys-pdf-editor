@@ -6931,6 +6931,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         def _on_saved(saved_path: str):
             self._compress_dialog = None
+            if saved_path and os.path.exists(saved_path):
+                GLib.idle_add(self.load_document, saved_path)
 
         self._compress_dialog = CompressionDialog(
             parent_window=self,

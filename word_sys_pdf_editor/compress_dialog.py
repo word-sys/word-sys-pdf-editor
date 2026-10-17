@@ -15,6 +15,7 @@ from .compressor import (
     PRESET_MAXIMUM,
     PRESET_HIGH_QUALITY,
     PRESET_LOSSLESS,
+    PRESET_MAX_BW,
     CompressionOptions,
     CompressionResult,
     get_preset_options,
@@ -64,6 +65,10 @@ class CompressionDialog(Adw.Window):
         self.save_btn.add_css_class("suggested-action")
         self.save_btn.connect("clicked", self._on_save_clicked)
         header.pack_end(self.save_btn)
+        self.compare_btn = Gtk.Button.new_from_icon_name("view-dual-symbolic")
+        self.compare_btn.set_tooltip_text(_("compress_btn_compare"))
+        self.compare_btn.connect("clicked", self._on_compare_clicked)
+        header.pack_end(self.compare_btn)
         main_box.append(header)
 
         scrolled = Gtk.ScrolledWindow()
@@ -110,7 +115,18 @@ class CompressionDialog(Adw.Window):
         self.size_badge.add_css_class("heading")
         self.status_row.add_suffix(self.size_badge)
 
+        self.compare_row = Adw.ActionRow(
+            title=_("compress_btn_compare"),
+            subtitle=_("compress_compare_title"),
+        )
+        self.compare_row.add_prefix(Gtk.Image.new_from_icon_name("view-dual-symbolic"))
+        self.compare_row.set_activatable(True)
+        compare_arrow = Gtk.Image.new_from_icon_name("go-next-symbolic")
+        self.compare_row.add_suffix(compare_arrow)
+        self.compare_row.connect("activated", lambda r: self._on_compare_clicked(None))
+
         status_group.add(self.status_row)
+        status_group.add(self.compare_row)
         content_box.append(status_group)
 
         # Presets Group with Radio Rows
@@ -119,40 +135,45 @@ class CompressionDialog(Adw.Window):
         content_box.append(presets_group)
 
         self.radio_bal = Gtk.CheckButton()
-        self.row_bal = Adw.ActionRow(
-            title=_("compress_preset_balanced_title"),
-            subtitle=_("compress_preset_balanced_desc"),
-        )
+        self.row_bal = Adw.ActionRow()
+        self.row_bal.set_title(GLib.markup_escape_text(_("compress_preset_balanced_title")))
+        self.row_bal.set_subtitle(GLib.markup_escape_text(_("compress_preset_balanced_desc")))
         self.row_bal.add_prefix(self.radio_bal)
         self.row_bal.set_activatable_widget(self.radio_bal)
         presets_group.add(self.row_bal)
 
         self.radio_max = Gtk.CheckButton()
         self.radio_max.set_group(self.radio_bal)
-        self.row_max = Adw.ActionRow(
-            title=_("compress_preset_maximum_title"),
-            subtitle=_("compress_preset_maximum_desc"),
-        )
+        self.row_max = Adw.ActionRow()
+        self.row_max.set_title(GLib.markup_escape_text(_("compress_preset_maximum_title")))
+        self.row_max.set_subtitle(GLib.markup_escape_text(_("compress_preset_maximum_desc")))
         self.row_max.add_prefix(self.radio_max)
         self.row_max.set_activatable_widget(self.radio_max)
         presets_group.add(self.row_max)
 
+        self.radio_max_bw = Gtk.CheckButton()
+        self.radio_max_bw.set_group(self.radio_bal)
+        self.row_max_bw = Adw.ActionRow()
+        self.row_max_bw.set_title(GLib.markup_escape_text(_("compress_preset_max_bw_title")))
+        self.row_max_bw.set_subtitle(GLib.markup_escape_text(_("compress_preset_max_bw_desc")))
+        self.row_max_bw.add_prefix(self.radio_max_bw)
+        self.row_max_bw.set_activatable_widget(self.radio_max_bw)
+        presets_group.add(self.row_max_bw)
+
         self.radio_high = Gtk.CheckButton()
         self.radio_high.set_group(self.radio_bal)
-        self.row_high = Adw.ActionRow(
-            title=_("compress_preset_high_title"),
-            subtitle=_("compress_preset_high_desc"),
-        )
+        self.row_high = Adw.ActionRow()
+        self.row_high.set_title(GLib.markup_escape_text(_("compress_preset_high_title")))
+        self.row_high.set_subtitle(GLib.markup_escape_text(_("compress_preset_high_desc")))
         self.row_high.add_prefix(self.radio_high)
         self.row_high.set_activatable_widget(self.radio_high)
         presets_group.add(self.row_high)
 
         self.radio_lossless = Gtk.CheckButton()
         self.radio_lossless.set_group(self.radio_bal)
-        self.row_lossless = Adw.ActionRow(
-            title=_("compress_preset_lossless_title"),
-            subtitle=_("compress_preset_lossless_desc"),
-        )
+        self.row_lossless = Adw.ActionRow()
+        self.row_lossless.set_title(GLib.markup_escape_text(_("compress_preset_lossless_title")))
+        self.row_lossless.set_subtitle(GLib.markup_escape_text(_("compress_preset_lossless_desc")))
         self.row_lossless.add_prefix(self.radio_lossless)
         self.row_lossless.set_activatable_widget(self.radio_lossless)
         presets_group.add(self.row_lossless)
@@ -165,10 +186,9 @@ class CompressionDialog(Adw.Window):
         self.grayscale_switch.set_valign(Gtk.Align.CENTER)
         self.grayscale_switch.set_active(False)
         self.grayscale_switch.connect("notify::active", lambda s, p: self._trigger_recalculation())
-        self.grayscale_row = Adw.ActionRow(
-            title=_("compress_grayscale_title"),
-            subtitle=_("compress_grayscale_desc"),
-        )
+        self.grayscale_row = Adw.ActionRow()
+        self.grayscale_row.set_title(GLib.markup_escape_text(_("compress_grayscale_title")))
+        self.grayscale_row.set_subtitle(GLib.markup_escape_text(_("compress_grayscale_desc")))
         self.grayscale_row.add_suffix(self.grayscale_switch)
         self.grayscale_row.set_activatable_widget(self.grayscale_switch)
         options_group.add(self.grayscale_row)
@@ -176,6 +196,7 @@ class CompressionDialog(Adw.Window):
         # Connect Radio Toggles
         self.radio_bal.connect("toggled", self._on_preset_toggled)
         self.radio_max.connect("toggled", self._on_preset_toggled)
+        self.radio_max_bw.connect("toggled", self._on_preset_toggled)
         self.radio_high.connect("toggled", self._on_preset_toggled)
         self.radio_lossless.connect("toggled", self._on_preset_toggled)
 
@@ -183,7 +204,9 @@ class CompressionDialog(Adw.Window):
         self.radio_bal.set_active(True)
 
     def _get_active_preset(self) -> str:
-        if self.radio_max.get_active():
+        if self.radio_max_bw.get_active():
+            return PRESET_MAX_BW
+        elif self.radio_max.get_active():
             return PRESET_MAXIMUM
         elif self.radio_high.get_active():
             return PRESET_HIGH_QUALITY
@@ -195,6 +218,8 @@ class CompressionDialog(Adw.Window):
     def _on_preset_toggled(self, button):
         if not button.get_active():
             return
+        is_bw = self.radio_max_bw.get_active()
+        self.grayscale_switch.set_sensitive(not is_bw)
         self._trigger_recalculation()
 
     def _trigger_recalculation(self):
@@ -265,6 +290,26 @@ class CompressionDialog(Adw.Window):
             self._pending_save = True
             return
         self._open_save_dialog()
+
+    def _on_compare_clicked(self, _button):
+        from .compress_compare_dialog import CompressionCompareDialog
+        preset = self._get_active_preset()
+        grayscale = self.grayscale_switch.get_active() if hasattr(self, 'grayscale_switch') else False
+
+        dlg = CompressionCompareDialog(
+            parent_window=self.parent_window,
+            pdf_bytes=self.pdf_bytes,
+            initial_filename=self.initial_filename,
+            initial_preset=preset,
+            initial_grayscale=grayscale,
+            on_saved_callback=self._on_saved_from_compare,
+        )
+        dlg.present()
+
+    def _on_saved_from_compare(self, path: str):
+        if self.on_saved_callback:
+            self.on_saved_callback(path)
+        self.destroy()
 
     def _open_save_dialog(self):
         if not self.compressed_result or not self.compressed_result.pdf_bytes:

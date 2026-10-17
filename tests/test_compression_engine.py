@@ -12,6 +12,7 @@ from word_sys_pdf_editor.compressor import (
     PRESET_MAXIMUM,
     PRESET_HIGH_QUALITY,
     PRESET_LOSSLESS,
+    PRESET_MAX_BW,
     PRESET_TARGET,
     CompressionOptions,
     CompressionResult,
@@ -55,6 +56,11 @@ def test_get_preset_options():
     assert max_opt.target_dpi == 72
     assert max_opt.jpeg_quality == 50
     assert max_opt.compress_images is True
+
+    max_bw = get_preset_options(PRESET_MAX_BW)
+    assert max_bw.target_dpi == 150
+    assert max_bw.grayscale is True
+    assert max_bw.monochrome_bw is True
 
     high = get_preset_options(PRESET_HIGH_QUALITY)
     assert high.target_dpi == 300
@@ -108,6 +114,13 @@ def test_compress_presets_image_pdf():
 
     res_lossless = compress_pdf_bytes(orig_bytes, get_preset_options(PRESET_LOSSLESS))
     assert len(res_lossless.pdf_bytes) > 0
+
+    res_bw = compress_pdf_bytes(orig_bytes, get_preset_options(PRESET_MAX_BW))
+    assert res_bw.compressed_size < orig_len
+    assert res_bw.savings_bytes > 0
+    doc_bw = fitz.open(stream=res_bw.pdf_bytes, filetype="pdf")
+    assert len(doc_bw) == 1
+    doc_bw.close()
 
 
 def test_compress_alpha_image_preservation():
