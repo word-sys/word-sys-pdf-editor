@@ -1335,6 +1335,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         header.pack_end(self.mode_toggle_button)
         menu = Gio.Menu()
         menu.append(_("menu_save_as"), "win.save_as")
+        menu.append(_("menu_compress_document"), "win.compress_document")
         menu.append(_("protect_document"), "win.protect_document")
         menu.append(_("digitally_sign_document"), "win.digitally_sign_document")
         menu.append(_("inspect_digital_signatures"), "win.inspect_digital_signatures")
@@ -2114,6 +2115,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_save_as.connect('activate', self.on_save_as)
         self.add_action(action_save_as)
 
+        action_compress = Gio.SimpleAction.new('compress_document', None)
+        action_compress.connect('activate', self.on_compress_document_clicked)
+        self.add_action(action_compress)
+
         action_protect = Gio.SimpleAction.new('protect_document', None)
         action_protect.connect('activate', self.on_protect_document_clicked)
         self.add_action(action_protect)
@@ -2263,6 +2268,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.lookup_action("print").set_enabled(has_doc)
 
         doc_actions = (
+            "compress_document",
             "protect_document",
             "digitally_sign_document",
             "inspect_digital_signatures",
@@ -2762,6 +2768,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if act:
                 act.set_enabled(False)
         for act_name in (
+            "compress_document",
             "protect_document",
             "digitally_sign_document",
             "inspect_digital_signatures",
@@ -6903,6 +6910,40 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             default_filter=default_filter,
             callback=on_save_finish
         )
+
+    def on_compress_document_clicked(self, _action=None, _param=None):
+        """Show Compression dialog to compress the active PDF."""
+        if not self.doc:
+            return
+        from .compress_dialog import CompressionDialog
+        if getattr(self, "_compress_dialog", None) is not None:
+            self._compress_dialog.present()
+            return
+
+        try:
+            pdf_bytes = self.doc.tobytes()
+        except Exception:
+            if self.current_file_path and os.path.exists(self.current_file_path):
+                with open(self.current_file_path, "rb") as f:
+                    pdf_bytes = f.read()
+            else:
+                return
+
+        def _on_saved(saved_path: str):
+            self._compress_dialog = None
+
+        self._compress_dialog = CompressionDialog(
+            parent_window=self,
+            pdf_bytes=pdf_bytes,
+            initial_filename=self.current_file_path or "document.pdf",
+            on_saved_callback=_on_saved,
+        )
+        self._compress_dialog.connect("close-request", self._on_compress_dialog_closed)
+        self._compress_dialog.present()
+
+    def _on_compress_dialog_closed(self, dialog):
+        self._compress_dialog = None
+        return False
 
     def on_protect_document_clicked(self, _action=None, _param=None):
         """Show Protect Document dialog."""

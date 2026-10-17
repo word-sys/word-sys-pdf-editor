@@ -220,9 +220,9 @@ This method is suitable for users who want to run the application directly from 
     *(You can use `deactivate` later to exit the virtual environment.)*
 
 4.  **Install Python Dependencies:**
-    Install the core Python dependencies (PyMuPDF, numpy, anyconvert, and cryptography):
+    Install the core Python dependencies (PyMuPDF, numpy, anyconvert, cryptography, Pillow, pyhanko, python-pkcs11, and certifi):
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject==3.50.0
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject==3.50.0
     ```
 
 5.  **Run the Application:**
@@ -268,7 +268,7 @@ This method is suitable for users who want to run the application directly from 
 
 4.  **Install Python Dependencies:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject
     ```
 
 5.  **Run the Application:**
@@ -304,7 +304,7 @@ This method is suitable for users who want to run the application directly from 
 
 3.  **Install Python Dependencies:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject
     ```
 
 4.  **Run the Application:**

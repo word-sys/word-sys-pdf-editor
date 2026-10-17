@@ -219,7 +219,7 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 4.  **Instalar dependencias de Python:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject==3.50.0
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject==3.50.0
     ```
 
 5.  **Iniciar la aplicación:**
@@ -263,7 +263,7 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 4.  **Instalar dependencias de Python:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject
     ```
 
 5.  **Iniciar la aplicación:**
@@ -298,7 +298,7 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 3.  **Instalar dependencias de Python:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject
     ```
 
 4.  **Iniciar la aplicación:**

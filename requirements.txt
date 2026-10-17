@@ -10,5 +10,6 @@ pyhanko-certvalidator>=0.24.0
 python-pkcs11>=0.7.0
 asn1crypto>=1.5.1
 certifi
+Pillow>=9.0.0
 
 

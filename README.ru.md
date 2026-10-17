@@ -219,7 +219,7 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 4.  **Установка зависимостей Python:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject==3.50.0
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject==3.50.0
     ```
 
 5.  **Запуск приложения:**
@@ -263,7 +263,7 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 4.  **Установка зависимостей Python:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject
     ```
 
 5.  **Запуск приложения:**
@@ -298,7 +298,7 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 3.  **Установка зависимостей Python:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject
     ```
 
 4.  **Запуск приложения:**

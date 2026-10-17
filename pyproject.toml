@@ -20,7 +20,9 @@ dependencies = [
     "anyconvert>=0.1.9",
     "cryptography",
     "pyhanko>=0.25.0",
-    "python-pkcs11>=0.7.0"
+    "python-pkcs11>=0.7.0",
+    "Pillow>=9.0.0",
+    "certifi"
 ]
 
 [project.urls]

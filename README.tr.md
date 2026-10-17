@@ -219,7 +219,7 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 4.  **Python Paketlerini Kurun:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject==3.50.0
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject==3.50.0
     ```
 
 5.  **Uygulamayı Başlatın:**
@@ -263,7 +263,7 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 4.  **Python Paketlerini Kurun:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject
     ```
 
 5.  **Uygulamayı Başlatın:**
@@ -298,7 +298,7 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 3.  **Python Paketlerini Kurun:**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography pygobject
+    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject
     ```
 
 4.  **Uygulamayı Başlatın:**

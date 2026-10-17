@@ -35,7 +35,7 @@ tar -xzf build_tmp/python.tar.gz -C AppDir/usr --strip-components=1
 echo "--- Installing Python dependencies ---"
 AppDir/usr/bin/python3 -m pip install --upgrade pip
 AppDir/usr/bin/python3 -m pip install pygobject==3.50.0
-AppDir/usr/bin/python3 -m pip install PyMuPDF numpy "anyconvert>=0.1.9" cryptography "pyhanko>=0.25.0" "python-pkcs11>=0.7.0"
+AppDir/usr/bin/python3 -m pip install PyMuPDF numpy "anyconvert>=0.1.9" cryptography "pyhanko>=0.25.0" "python-pkcs11>=0.7.0" "Pillow>=9.0.0" certifi
 AppDir/usr/bin/python3 -m pip install .
 
 echo "--- Configuring application entry point ---"
