@@ -7,7 +7,7 @@ from .undo_manager import (
     ReplaceImageCommand, CalibrateScaleCommand, AddMeasurementCommand, DeleteMeasurementCommand,
     AddStickyNoteCommand, DeleteStickyNoteCommand, EditStickyNoteCommand, MoveStickyNoteCommand
 )
-from .i18n import _, get_language, get_setting, set_setting
+from .i18n import _, get_language, set_language, get_supported_languages, get_setting, set_setting
 
 import gi
 import os
@@ -1356,6 +1356,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         pref_section = Gio.Menu()
         pref_section.append(_("menu_toggle_annotations"), "win.toggle_annotations")
         pref_section.append(_("menu_confirm_delete"), "win.confirm_delete")
+
+        lang_menu = Gio.Menu()
+        for code, name in get_supported_languages():
+            lang_item = Gio.MenuItem.new(name, f"win.change_language('{code}')")
+            lang_menu.append_item(lang_item)
+        pref_section.append_submenu(_("lang_label"), lang_menu)
+
         menu.append_section(None, pref_section)
 
         menu.append_section(None, Gio.Menu())
@@ -2182,6 +2189,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             set_setting("confirm_delete_objects", new_val)
         self.action_confirm_delete.connect('change-state', on_confirm_delete_change)
         self.add_action(self.action_confirm_delete)
+
+        current_lang = get_language()
+        self.action_change_language = Gio.SimpleAction.new_stateful(
+            'change_language', GLib.VariantType.new('s'), GLib.Variant.new_string(current_lang)
+        )
+        def on_change_language_activate(action, value):
+            new_lang = value.get_string()
+            self.request_language_change(new_lang)
+        self.action_change_language.connect('activate', on_change_language_activate)
+        self.add_action(self.action_change_language)
 
         action_close_tab = Gio.SimpleAction.new('close_tab', None)
         action_close_tab.connect('activate', self.on_close_tab)
@@ -10409,6 +10426,55 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_ui_state()
 
         show_new_document_dialog(self, on_create)
+
+    def request_language_change(self, target_code: str):
+        """Unified language change handler with multi-tab unsaved changes guard and restart confirmation."""
+        current_lang = get_language()
+        if target_code == current_lang:
+            return
+
+        modified_sessions = [s for s in self.sessions if s and s.is_modified and s.doc is not None]
+        if modified_sessions:
+            from .ui_components import show_confirm_dialog
+            if not show_confirm_dialog(
+                self,
+                _("unsaved_changes"),
+                _("unsaved_title"),
+                destructive=False,
+            ):
+                if hasattr(self, 'action_change_language'):
+                    self.action_change_language.set_state(GLib.Variant.new_string(current_lang))
+                self._sync_welcome_view_language(current_lang)
+                return
+
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=_("lang_restart_title") + "\n\n" + _("lang_restart_msg"),
+        )
+
+        def on_response(d, response_id):
+            d.destroy()
+            if response_id == Gtk.ResponseType.OK:
+                if hasattr(self, 'action_change_language'):
+                    self.action_change_language.set_state(GLib.Variant.new_string(target_code))
+                self._sync_welcome_view_language(target_code)
+                set_language(target_code)
+            else:
+                if hasattr(self, 'action_change_language'):
+                    self.action_change_language.set_state(GLib.Variant.new_string(current_lang))
+                self._sync_welcome_view_language(current_lang)
+
+        dialog.connect("response", on_response)
+        dialog.present()
+
+    def _sync_welcome_view_language(self, lang_code: str):
+        if hasattr(self, 'stack') and self.stack:
+            welcome_view = self.stack.get_child_by_name("welcome")
+            if welcome_view and hasattr(welcome_view, "update_language_display"):
+                welcome_view.update_language_display(lang_code)
 
     def do_close_request(self):
         """Prompt to save unsaved changes in all open tabs before closing the window."""

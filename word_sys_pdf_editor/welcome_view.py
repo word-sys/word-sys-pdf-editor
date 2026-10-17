@@ -23,14 +23,51 @@ class WelcomeView(Adw.Bin):
 
     def _build_ui(self):
         """Build widgets for the welcome screen layout."""
+        overlay = Gtk.Overlay()
+        self.set_child(overlay)
+
         clamp = Adw.Clamp(maximum_size=800, tightening_threshold=300)
-        self.set_child(clamp)
+        overlay.set_child(clamp)
 
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
         main_box.set_vexpand(True)
         main_box.set_valign(Gtk.Align.CENTER)
         clamp.set_child(main_box)
         main_box.set_margin_bottom(40)
+
+        top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        top_bar.set_halign(Gtk.Align.END)
+        top_bar.set_valign(Gtk.Align.START)
+        top_bar.set_margin_top(16)
+        top_bar.set_margin_end(20)
+
+        self._languages = get_supported_languages()
+        cur_lang = get_language()
+        cur_name = dict(self._languages).get(cur_lang, "English")
+
+        self.lang_menu_btn = Gtk.MenuButton()
+        self.lang_menu_btn.add_css_class("pill")
+        self.lang_menu_btn.add_css_class("flat")
+        self.lang_menu_btn.set_tooltip_text(_("lang_label"))
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        lang_icon = Gtk.Image.new_from_icon_name("preferences-desktop-locale-symbolic")
+        self.lang_btn_label = Gtk.Label(label=cur_name)
+        chevron = Gtk.Image.new_from_icon_name("pan-down-symbolic")
+        btn_box.append(lang_icon)
+        btn_box.append(self.lang_btn_label)
+        btn_box.append(chevron)
+        self.lang_menu_btn.set_child(btn_box)
+
+        lang_menu = Gio.Menu()
+        for code, name in self._languages:
+            lang_item = Gio.MenuItem.new(name, f"win.change_language('{code}')")
+            lang_menu.append_item(lang_item)
+        self.lang_menu_btn.set_menu_model(lang_menu)
+        self._lang_dropdown = self.lang_menu_btn
+
+        top_bar.append(self.lang_menu_btn)
+        overlay.add_overlay(top_bar)
 
         try:
             app_icon = Gtk.Image.new_from_icon_name("f-pv1")
@@ -49,37 +86,6 @@ class WelcomeView(Adw.Bin):
         subtitle = Gtk.Label(label=_("app_subtitle"))
         subtitle.add_css_class("dim-label")
         main_box.append(subtitle)
-
-        lang_box = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=8,
-            halign=Gtk.Align.CENTER,
-        )
-        lang_box.set_margin_top(4)
-
-        lang_icon = Gtk.Image.new_from_icon_name("preferences-desktop-locale-symbolic")
-        lang_box.append(lang_icon)
-
-        lang_label = Gtk.Label(label=_("lang_label"))
-        lang_label.add_css_class("dim-label")
-        lang_box.append(lang_label)
-
-        self._languages = get_supported_languages()
-        lang_names = [name for _, name in self._languages]
-        self._lang_dropdown = Gtk.DropDown.new_from_strings(lang_names)
-        self._lang_dropdown.add_css_class("flat")
-
-        cur_lang = get_language()
-        cur_idx = 0
-        for i, (code, lang_title) in enumerate(self._languages):
-            if code == cur_lang:
-                cur_idx = i
-                break
-        self._lang_dropdown.set_selected(cur_idx)
-        self._lang_dropdown_handler_id = self._lang_dropdown.connect("notify::selected", self._on_lang_selected)
-        lang_box.append(self._lang_dropdown)
-
-        main_box.append(lang_box)
 
         button_box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL, spacing=6, halign=Gtk.Align.CENTER
@@ -144,58 +150,20 @@ class WelcomeView(Adw.Bin):
         tip_label.set_margin_top(40)
         main_box.append(tip_label)
 
-    def _on_lang_selected(self, dropdown, _param):
-        """Handle language selection change from dropdown."""
-        idx = dropdown.get_selected()
-        if 0 <= idx < len(self._languages):
-            lang_code = self._languages[idx][0]
-            if lang_code != get_language():
-                self._confirm_language_switch(lang_code)
+    def update_language_display(self, lang_code: str):
+        """Update the language pill button label when language changes."""
+        cur_name = dict(self._languages).get(lang_code, "English")
+        if hasattr(self, "lang_btn_label"):
+            self.lang_btn_label.set_text(cur_name)
 
-    def _set_dropdown_lang_code(self, lang_code):
-        """Revert or update dropdown selection without triggering signal callback."""
-        target_idx = 0
-        for i, (code, lang_title) in enumerate(self._languages):
-            if code == lang_code:
-                target_idx = i
-                break
-        if self._lang_dropdown.get_selected() != target_idx:
-            self._lang_dropdown.handler_block(self._lang_dropdown_handler_id)
-            self._lang_dropdown.set_selected(target_idx)
-            self._lang_dropdown.handler_unblock(self._lang_dropdown_handler_id)
+    def _set_dropdown_lang_code(self, lang_code: str):
+        self.update_language_display(lang_code)
 
-    def _confirm_language_switch(self, lang_code):
-        """Confirm language switch."""
-        from gi.repository import Gtk
-        from .ui_components import show_confirm_dialog
-
-        if self.parent_window.doc and self.parent_window.document_modified:
-            if not show_confirm_dialog(
-                self.parent_window,
-                _("unsaved_changes"),
-                _("unsaved_title"),
-                destructive=False,
-            ):
-                self._set_dropdown_lang_code(get_language())
-                return
-
-        dialog = Gtk.MessageDialog(
-            transient_for=self.parent_window,
-            modal=True,
-            message_type=Gtk.MessageType.INFO,
-            buttons=Gtk.ButtonsType.OK_CANCEL,
-            text=_("lang_restart_title") + "\n\n" + _("lang_restart_msg"),
-        )
-
-        def on_response(d, response_id):
-            d.destroy()
-            if response_id == Gtk.ResponseType.OK:
-                set_language(lang_code)
-            else:
-                self._set_dropdown_lang_code(get_language())
-
-        dialog.connect("response", on_response)
-        dialog.present()
+    def _confirm_language_switch(self, lang_code: str):
+        if hasattr(self.parent_window, "request_language_change"):
+            self.parent_window.request_language_change(lang_code)
+        else:
+            set_language(lang_code)
 
     def refresh_recent_files(self):
         """Public helper to refresh the recent files list."""

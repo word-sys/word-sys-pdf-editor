@@ -2,7 +2,8 @@ import json
 import os
 from pathlib import Path
 
-_CONFIG_DIR = Path.home() / ".config" / "word-sys-pdf-editor"
+_CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+_CONFIG_DIR = _CONFIG_HOME / "word-sys-pdf-editor"
 _CONFIG_FILE = _CONFIG_DIR / "settings.json"
 
 _STRINGS = {
@@ -226,7 +227,7 @@ _STRINGS = {
         "home_confirm": "Go back to the start screen?\nUnsaved changes will be lost if you don't save first.",
         "home_confirm_title": "Return to Start Screen",
         "export_success": "Exported successfully.",
-        "export_error": "Export failed: {}",
+        "menu_language": "Language",
         "lang_label": "Language",
         "lang_en": "English",
         "lang_tr": "Türkçe",
@@ -992,7 +993,7 @@ _STRINGS = {
         "home_confirm": "Başlangıç ekranına dönmek istiyor musunuz?\nKaydedilmemiş değişiklikler, önce kaydetmezseniz kaybolacaktır.",
         "home_confirm_title": "Başlangıç Ekranına Dön",
         "export_success": "Başarıyla dışa aktarıldı.",
-        "export_error": "Dışa aktarma başarısız: {}",
+        "menu_language": "Dil",
         "lang_label": "Dil",
         "lang_en": "English",
         "lang_tr": "Türkçe",
@@ -1552,46 +1553,6 @@ _STRINGS = {
     },
 }
 
-def _load_settings() -> dict:
-    try:
-        if _CONFIG_FILE.exists():
-            with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return {}
-
-def _save_settings(data: dict):
-    try:
-        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print(f"Warning: Could not save settings: {e}")
-
-_settings = _load_settings()
-_active_lang: str = _settings.get("language", "en")
-
-def get_setting(key: str, default=None):
-    return _settings.get(key, default)
-
-def set_setting(key: str, value):
-    _settings[key] = value
-    _save_settings(_settings)
-
-def get_language() -> str:
-    return _active_lang
-
-def set_language(lang: str):
-    global _active_lang
-    if lang not in _STRINGS:
-        lang = "en"
-    _active_lang = lang
-    _settings["language"] = lang
-    _save_settings(_settings)
-    import sys, os
-    os.execv(sys.executable, [sys.executable] + sys.argv)
-
 from .locales import STRINGS_FR, STRINGS_DE, STRINGS_ES, STRINGS_IT, STRINGS_RU
 
 _STRINGS["fr"] = STRINGS_FR
@@ -1612,6 +1573,90 @@ SUPPORTED_LANGUAGES = [
 
 def get_supported_languages():
     return SUPPORTED_LANGUAGES
+
+def _normalize_lang_code(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    cleaned = str(raw).strip()
+    cleaned = cleaned.split(".")[0].split("@")[0]
+    parts = cleaned.replace("-", "_").split("_")
+    code = parts[0].lower()
+    if len(code) == 2 and code.isalpha():
+        return code
+    return None
+
+def _detect_system_language() -> str:
+    try:
+        from gi.repository import GLib
+        for name in GLib.get_language_names():
+            code = _normalize_lang_code(name)
+            if code and code in _STRINGS:
+                return code
+    except Exception:
+        pass
+
+    for env_var in ("LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"):
+        val = os.environ.get(env_var)
+        if not val:
+            continue
+        for part in val.split(":"):
+            code = _normalize_lang_code(part)
+            if code and code in _STRINGS:
+                return code
+
+    return "en"
+
+def detect_system_language() -> str:
+    return _detect_system_language()
+
+def _load_settings() -> dict:
+    try:
+        if _CONFIG_FILE.exists():
+            with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _save_settings(data: dict):
+    try:
+        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        tmp_file = _CONFIG_DIR / f".settings.json.tmp.{os.getpid()}"
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_file, _CONFIG_FILE)
+    except Exception as e:
+        print(f"Warning: Could not save settings: {e}")
+
+_settings = _load_settings()
+_saved_lang = _settings.get("language")
+if _saved_lang and _saved_lang in _STRINGS:
+    _active_lang: str = _saved_lang
+else:
+    _active_lang: str = _detect_system_language()
+
+def get_setting(key: str, default=None):
+    return _settings.get(key, default)
+
+def set_setting(key: str, value):
+    _settings[key] = value
+    _save_settings(_settings)
+
+def get_language() -> str:
+    return _active_lang
+
+def set_language(lang: str, restart: bool = True):
+    global _active_lang
+    if lang not in _STRINGS:
+        lang = "en"
+    _active_lang = lang
+    _settings["language"] = lang
+    _save_settings(_settings)
+    if restart:
+        import sys, os
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 def _(key: str, *args) -> str:
     table = _STRINGS.get(_active_lang, _STRINGS["en"])
