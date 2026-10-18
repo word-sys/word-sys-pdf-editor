@@ -1510,6 +1510,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_overlay.set_child(self.pdf_view)
 
         self.pdf_viewport = Gtk.Viewport()
+        self.pdf_viewport.set_scroll_to_focus(False)
         self.pdf_viewport.set_child(self.pdf_overlay)
         self.pdf_scroll.set_child(self.pdf_viewport)
         
@@ -1657,6 +1658,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.thumbnails_list.set_vexpand(True)
 
         self.thumbnail_selection_model = Gtk.SingleSelection(model=self.pages_model)
+        self.thumbnail_selection_model.set_autoselect(False)
+        self.thumbnail_selection_model.set_can_unselect(False)
         self.thumbnails_list.set_model(self.thumbnail_selection_model)
         self.thumbnail_selection_model.connect("selection-changed", self.on_thumbnail_selected)
 
@@ -3221,6 +3224,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if dist < closest_dist:
                     closest_dist = dist
                     dominant_page = p_idx
+        elif dominant_page != self.current_page_index and 0 <= self.current_page_index < len(self.doc):
+            _, cpy, _, cph = self.get_page_canvas_rect(self.current_page_index)
+            c_top = max(vp_top, cpy)
+            c_bottom = min(vp_bottom, cpy + cph)
+            cur_vis_h = max(0.0, c_bottom - c_top)
+            if cur_vis_h > 0.0 and max_vis_height < cur_vis_h + 24.0:
+                dominant_page = self.current_page_index
 
         return dominant_page
 
@@ -8558,7 +8568,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
          self.thumbnail_selection_model.set_selected(self.current_page_index)
          if hasattr(self, 'thumbnails_list') and hasattr(self.thumbnails_list, 'scroll_to'):
              try:
-                 flags = getattr(Gtk.ListScrollFlags, 'FOCUS', 0) if hasattr(Gtk, 'ListScrollFlags') else 0
+                 flags = getattr(Gtk.ListScrollFlags, 'NONE', 0) if hasattr(Gtk, 'ListScrollFlags') else 0
                  self.thumbnails_list.scroll_to(self.current_page_index, flags, None)
              except Exception:
                  pass

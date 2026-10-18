@@ -158,6 +158,7 @@ class TestContinuousScrollLayout(unittest.TestCase):
         if self.doc:
             self.doc.close()
         self.temp_dir.cleanup()
+        set_setting("view_mode", "single")
 
     def test_document_session_continuous_scroll_defaults(self):
         sess = DocumentSession()
@@ -624,6 +625,10 @@ class TestContinuousScrollLayout(unittest.TestCase):
         win.continuous_scroll = False
         self.assertFalse(win.continuous_scroll)
         self.assertFalse(win._active_session.continuous_scroll)
+
+        # Verify viewport focus scroll prevention and autoselect guard
+        self.assertFalse(win.pdf_viewport.get_scroll_to_focus())
+        self.assertFalse(win.thumbnail_selection_model.get_autoselect())
 
 
 if __name__ == '__main__':
