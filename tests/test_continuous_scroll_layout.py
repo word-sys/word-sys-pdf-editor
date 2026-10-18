@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 import tempfile
 import os
 
@@ -14,6 +15,7 @@ from gi.repository import Gtk, Adw, GLib, Gdk
 
 from word_sys_pdf_editor.models import DocumentSession, EditableText, EditableShape, EditableStroke, AcroFormField
 from word_sys_pdf_editor.window import PdfEditorWindow
+from word_sys_pdf_editor.i18n import get_setting, set_setting
 
 
 def has_screen_display():
@@ -61,7 +63,13 @@ class MockContinuousScrollWindow:
         self.page_label = Gtk.Label()
         self.status_label = Gtk.Label()
         self.thumbnail_selection_model = None
+        self.undo_manager = unittest.mock.MagicMock()
         self._title = ""
+        self._scroll_anim_id = None
+        self._actions = {}
+        self.continuous_scroll_btn = Gtk.ToggleButton()
+        self.continuous_scroll_btn.set_icon_name("view-continuous-symbolic" if self.continuous_scroll else "view-paged-symbolic")
+        self.continuous_scroll_btn.set_active(self.continuous_scroll)
 
     continuous_scroll = PdfEditorWindow.continuous_scroll
     _page_objects_cache = PdfEditorWindow._page_objects_cache
@@ -75,6 +83,7 @@ class MockContinuousScrollWindow:
     _stash_page_objects = PdfEditorWindow._stash_page_objects
     _restore_page_objects = PdfEditorWindow._restore_page_objects
     _switch_active_page = PdfEditorWindow._switch_active_page
+    _load_page = PdfEditorWindow._load_page
     _visual_to_unrotated_page_coords = PdfEditorWindow._visual_to_unrotated_page_coords
     _unrotated_to_visual_page_coords = PdfEditorWindow._unrotated_to_visual_page_coords
     _visual_to_unrotated_delta = PdfEditorWindow._visual_to_unrotated_delta
@@ -84,6 +93,12 @@ class MockContinuousScrollWindow:
     _on_canvas_scrolled = PdfEditorWindow._on_canvas_scrolled
     _sync_window_title_and_subtitle = PdfEditorWindow._sync_window_title_and_subtitle
     update_page_label = PdfEditorWindow.update_page_label
+    set_continuous_scroll_mode = PdfEditorWindow.set_continuous_scroll_mode
+    scroll_to_page = PdfEditorWindow.scroll_to_page
+    go_to_page = PdfEditorWindow.go_to_page
+    on_prev_page = PdfEditorWindow.on_prev_page
+    on_next_page = PdfEditorWindow.on_next_page
+    on_thumbnail_selected = PdfEditorWindow.on_thumbnail_selected
 
     def commit_pending_format_change(self):
         pass
@@ -113,6 +128,12 @@ class MockContinuousScrollWindow:
 
     def get_title(self):
         return getattr(self, '_title', "")
+
+    def lookup_action(self, name):
+        return self._actions.get(name, None)
+
+    def add_action(self, action):
+        self._actions[action.get_name()] = action
 
 
 class TestContinuousScrollLayout(unittest.TestCase):
@@ -460,6 +481,124 @@ class TestContinuousScrollLayout(unittest.TestCase):
         win._sync_window_title_and_subtitle()
         self.assertIn("2", win.window_title_widget.get_subtitle())
         self.assertIn("3", win.window_title_widget.get_subtitle())
+
+    def test_view_mode_settings_persistence(self):
+        orig_mode = get_setting("view_mode", "single")
+        try:
+            set_setting("view_mode", "continuous")
+            self.assertEqual(get_setting("view_mode"), "continuous")
+            set_setting("view_mode", "single")
+            self.assertEqual(get_setting("view_mode"), "single")
+        finally:
+            set_setting("view_mode", orig_mode)
+
+    def test_set_continuous_scroll_mode_toggle(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = False
+        self.assertFalse(win.continuous_scroll)
+
+        # Toggle to continuous
+        win.set_continuous_scroll_mode(True)
+        self.assertTrue(win.continuous_scroll)
+        self.assertTrue(win.continuous_scroll_btn.get_active())
+        self.assertEqual(win.continuous_scroll_btn.get_icon_name(), "view-continuous-symbolic")
+
+        # Toggle back to single
+        win.set_continuous_scroll_mode(False)
+        self.assertFalse(win.continuous_scroll)
+        self.assertFalse(win.continuous_scroll_btn.get_active())
+        self.assertEqual(win.continuous_scroll_btn.get_icon_name(), "view-paged-symbolic")
+
+    def test_scroll_to_page_instant(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win.current_page_index = 0
+        win._recompute_continuous_layout()
+
+        # Instant jump to page 1
+        win.scroll_to_page(1, smooth=False)
+        self.assertEqual(win.current_page_index, 1)
+        self.assertEqual(win.v_adj.get_value(), 832.0)
+
+        # Instant jump to page 2
+        win.scroll_to_page(2, smooth=False)
+        self.assertEqual(win.current_page_index, 2)
+        self.assertEqual(win.v_adj.get_value(), 1548.0)
+
+    def test_scroll_to_page_smooth(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win.current_page_index = 0
+        win._recompute_continuous_layout()
+
+        win.scroll_to_page(1, smooth=True, duration_ms=50)
+        self.assertIsNotNone(win._scroll_anim_id)
+        if win._scroll_anim_id:
+            try:
+                GLib.source_remove(win._scroll_anim_id)
+            except Exception:
+                pass
+            win._scroll_anim_id = None
+
+    def test_go_to_page_navigation(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win.current_page_index = 0
+        win._recompute_continuous_layout()
+
+        # User enters page 2 (index 1)
+        win.go_to_page(2, smooth=False)
+        self.assertEqual(win.current_page_index, 1)
+        self.assertEqual(win.v_adj.get_value(), 832.0)
+
+        # Clamped out of bounds
+        win.go_to_page(999, smooth=False)
+        self.assertEqual(win.current_page_index, 2)
+        self.assertEqual(win.v_adj.get_value(), 1548.0)
+
+    def test_prev_next_page_continuous_navigation(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win.current_page_index = 0
+        win._recompute_continuous_layout()
+
+        # Instant navigation
+        win.on_next_page(None, smooth=False)
+        self.assertEqual(win.current_page_index, 1)
+        self.assertEqual(win.v_adj.get_value(), 832.0)
+
+        win.on_prev_page(None, smooth=False)
+        self.assertEqual(win.current_page_index, 0)
+        self.assertEqual(win.v_adj.get_value(), 16.0)
+
+        # Smooth navigation starts animation
+        win.on_next_page(None, smooth=True)
+        self.assertEqual(win.current_page_index, 1)
+        self.assertIsNotNone(win._scroll_anim_id)
+        if win._scroll_anim_id:
+            try:
+                GLib.source_remove(win._scroll_anim_id)
+            except Exception:
+                pass
+            win._scroll_anim_id = None
+
+    def test_thumbnail_selected_continuous_scroll(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win.current_page_index = 0
+        win._recompute_continuous_layout()
+
+        mock_sel = unittest.mock.MagicMock()
+        mock_sel.get_selected.return_value = 2
+
+        win.on_thumbnail_selected(mock_sel, 0, 0, smooth=False)
+        self.assertEqual(win.current_page_index, 2)
+        self.assertEqual(win.v_adj.get_value(), 1548.0)
 
     @unittest.skipUnless(has_screen_display(), "Screen display not available (headless build environment)")
     def test_window_continuous_scroll_integration(self):

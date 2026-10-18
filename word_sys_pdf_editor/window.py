@@ -245,9 +245,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.set_default_size(1200, 800)
         self.set_icon_name("f-pv1")
         self._is_programmatic_scrolling = False
+        self._scroll_anim_id = None
+
+        saved_view_mode = get_setting("view_mode", "single")
+        is_cont = (saved_view_mode == "continuous")
+        self._continuous_scroll_fallback = is_cont
 
         self.sessions = []
         self._active_session = DocumentSession(undo_manager=UndoManager(self))
+        self._active_session.continuous_scroll = is_cont
         self.sessions.append(self._active_session)
         self.tab_view = None
         self.tab_bar = None
@@ -694,6 +700,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     pass
             self.update_zoom_label()
 
+            if hasattr(self, 'continuous_scroll_btn') and self.continuous_scroll_btn:
+                is_cont = self.continuous_scroll
+                if self.continuous_scroll_btn.get_active() != is_cont:
+                    self.continuous_scroll_btn.set_active(is_cont)
+                self.continuous_scroll_btn.set_icon_name("view-continuous-symbolic" if is_cont else "view-paged-symbolic")
+            action = self.lookup_action("toggle_continuous_scroll")
+            if action:
+                action.set_state(GLib.Variant.new_boolean(self.continuous_scroll))
+
             if hasattr(self, 'pdf_scroll') and self.pdf_scroll:
                 saved_sx = getattr(session, 'scroll_x', 0.0)
                 saved_sy = getattr(session, 'scroll_y', 0.0)
@@ -867,6 +882,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             doc=doc,
             pdf_path=filepath,
             original_file_path=filepath,
+            continuous_scroll=self.continuous_scroll,
             undo_manager=UndoManager(self)
         )
         return session
@@ -1392,6 +1408,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu.append_submenu(_("menu_export"), export_menu)
         
         pref_section = Gio.Menu()
+        pref_section.append(_("menu_toggle_continuous_scroll"), "win.toggle_continuous_scroll")
         pref_section.append(_("menu_toggle_annotations"), "win.toggle_annotations")
         pref_section.append(_("menu_confirm_delete"), "win.confirm_delete")
 
@@ -1670,6 +1687,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.toolbar_row1.append(zoom_out)
         self.toolbar_row1.append(self.zoom_label)
         self.toolbar_row1.append(zoom_in)
+
+        self.continuous_scroll_btn = Gtk.ToggleButton()
+        self.continuous_scroll_btn.set_icon_name("view-continuous-symbolic" if self.continuous_scroll else "view-paged-symbolic")
+        self.continuous_scroll_btn.set_tooltip_text(_("tooltip_continuous_scroll"))
+        self.continuous_scroll_btn.set_active(self.continuous_scroll)
+        self.continuous_scroll_btn.connect("toggled", lambda b: self.set_continuous_scroll_mode(b.get_active()))
+        self.toolbar_row1.append(self.continuous_scroll_btn)
 
         self.toolbar_row1.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6))
 
@@ -2261,6 +2285,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_toggle_annots.connect('activate', lambda a, p: self.toggle_annotations_sidebar())
         self.add_action(action_toggle_annots)
 
+        action_toggle_continuous = Gio.SimpleAction.new_stateful(
+            'toggle_continuous_scroll',
+            None,
+            GLib.Variant.new_boolean(self.continuous_scroll)
+        )
+        def on_toggle_continuous_activate(action, value):
+            new_val = not action.get_state().get_boolean()
+            self.set_continuous_scroll_mode(new_val)
+        action_toggle_continuous.connect('activate', on_toggle_continuous_activate)
+        self.add_action(action_toggle_continuous)
+
+        action_go_to_page = Gio.SimpleAction.new('go_to_page', None)
+        action_go_to_page.connect('activate', lambda a, p: self.show_go_to_page_dialog())
+        self.add_action(action_go_to_page)
+
         app = self.get_application()
         if app:
             app.set_accels_for_action("win.new", ["<Control>n"])
@@ -2276,6 +2315,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             app.set_accels_for_action("win.print", ["<Control>p"])
             app.set_accels_for_action("win.quick_guide", ["F1"])
             app.set_accels_for_action("win.toggle_annotations", ["F7"])
+            app.set_accels_for_action("win.toggle_continuous_scroll", ["<Control><Shift>c"])
+            app.set_accels_for_action("win.go_to_page", ["<Control>g"])
             app.set_accels_for_action("win.rotate_page_cw", ["<Control><Shift>r"])
             app.set_accels_for_action("win.rotate_page_ccw", ["<Control><Shift>l"])
 
@@ -3207,6 +3248,142 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, 'window_title_widget') and self.window_title_widget:
             self.window_title_widget.set_title(title)
             self.window_title_widget.set_subtitle(subtitle)
+
+    def set_continuous_scroll_mode(self, enabled: bool):
+        """Switch viewing mode between continuous vertical scrolling and single-page view."""
+        enabled = bool(enabled)
+        if self.continuous_scroll == enabled:
+            if hasattr(self, 'continuous_scroll_btn') and self.continuous_scroll_btn:
+                if self.continuous_scroll_btn.get_active() != enabled:
+                    self.continuous_scroll_btn.set_active(enabled)
+                self.continuous_scroll_btn.set_icon_name("view-continuous-symbolic" if enabled else "view-paged-symbolic")
+            return
+
+        target_page = self.get_dominant_visible_page_index() if self.continuous_scroll else self.current_page_index
+
+        self.continuous_scroll = enabled
+        set_setting("view_mode", "continuous" if enabled else "single")
+
+        if hasattr(self, 'continuous_scroll_btn') and self.continuous_scroll_btn:
+            if self.continuous_scroll_btn.get_active() != enabled:
+                self.continuous_scroll_btn.set_active(enabled)
+            self.continuous_scroll_btn.set_icon_name("view-continuous-symbolic" if enabled else "view-paged-symbolic")
+
+        action = self.lookup_action("toggle_continuous_scroll")
+        if action and action.get_state().get_boolean() != enabled:
+            action.set_state(GLib.Variant.new_boolean(enabled))
+
+        if not self.doc or len(self.doc) == 0:
+            return
+
+        if enabled:
+            self._recompute_continuous_layout()
+            self._update_canvas_content_size()
+            if hasattr(self, 'continuous_page_offsets') and 0 <= target_page < len(self.continuous_page_offsets):
+                target_y = self.continuous_page_offsets[target_page][1]
+                v_adj = self.pdf_scroll.get_vadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+                if v_adj:
+                    self._is_programmatic_scrolling = True
+                    v_adj.set_value(target_y)
+                    self._is_programmatic_scrolling = False
+            self._switch_active_page(target_page)
+        else:
+            self._load_page(target_page)
+
+    def scroll_to_page(self, page_index: int, smooth: bool = True, duration_ms: int = 250):
+        """Navigate to target page, using smooth animation in continuous mode if requested."""
+        if not self.doc or not (0 <= page_index < len(self.doc)):
+            return
+
+        if not self.continuous_scroll:
+            self._load_page(page_index)
+            return
+
+        if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
+            self._recompute_continuous_layout()
+
+        target_y = self.continuous_page_offsets[page_index][1]
+        v_adj = self.pdf_scroll.get_vadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+        if not v_adj:
+            self._switch_active_page(page_index)
+            return
+
+        if hasattr(self, '_scroll_anim_id') and self._scroll_anim_id:
+            try:
+                GLib.source_remove(self._scroll_anim_id)
+            except Exception:
+                pass
+            self._scroll_anim_id = None
+
+        self._switch_active_page(page_index)
+
+        start_y = v_adj.get_value()
+        delta_y = target_y - start_y
+
+        if (not smooth) or duration_ms <= 0 or abs(delta_y) < 2.0:
+            self._is_programmatic_scrolling = True
+            v_adj.set_value(target_y)
+            self._is_programmatic_scrolling = False
+            return
+
+        start_time = GLib.get_monotonic_time() / 1000.0
+        duration = float(duration_ms)
+        self._is_programmatic_scrolling = True
+
+        def _step():
+            now = GLib.get_monotonic_time() / 1000.0
+            elapsed = now - start_time
+            t = min(1.0, max(0.0, elapsed / duration))
+            ease = 1.0 - (1.0 - t) ** 3
+            current_y = start_y + (delta_y * ease)
+            v_adj.set_value(current_y)
+            if t >= 1.0:
+                v_adj.set_value(target_y)
+                self._is_programmatic_scrolling = False
+                self._scroll_anim_id = None
+                return False
+            return True
+
+        self._scroll_anim_id = GLib.timeout_add(16, _step)
+
+    def go_to_page(self, page_number: int, smooth: bool = True):
+        """Navigate to 1-based page number."""
+        if not self.doc or len(self.doc) == 0:
+            return
+        target_idx = max(0, min(int(page_number) - 1, len(self.doc) - 1))
+        self.scroll_to_page(target_idx, smooth=smooth)
+
+    def show_go_to_page_dialog(self):
+        """Display Go to Page modal dialog to jump to user-entered page number."""
+        if not self.doc or len(self.doc) == 0:
+            return
+
+        total_pages = len(self.doc)
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            heading=_("go_to_page_title"),
+            body=_("go_to_page_label").format(total_pages)
+        )
+        dialog.add_response("cancel", _("btn_cancel"))
+        dialog.add_response("go", _("btn_go"))
+        dialog.set_response_appearance("go", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("go")
+        dialog.set_close_response("cancel")
+
+        spin = Gtk.SpinButton.new_with_range(1, total_pages, 1)
+        spin.set_value(self.current_page_index + 1)
+        spin.set_halign(Gtk.Align.CENTER)
+        spin.set_activates_default(True)
+        dialog.set_extra_child(spin)
+
+        def on_response(dlg, response):
+            if response == "go":
+                target_page_num = int(spin.get_value())
+                self.go_to_page(target_page_num)
+            dlg.destroy()
+
+        dialog.connect("response", on_response)
+        dialog.present()
 
     def canvas_to_page_coords(self, canvas_x: float, canvas_y: float) -> Tuple[int, float, float]:
         """Convert canvas coordinates to (page_index, unzoomed_page_x, unzoomed_page_y)."""
@@ -8205,13 +8382,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return True
         return False
 
-    def on_prev_page(self, button):
+    def on_prev_page(self, button=None, smooth: bool = True):
         if self.doc and self.current_page_index > 0:
-            self._load_page(self.current_page_index - 1)
+            if self.continuous_scroll:
+                self.scroll_to_page(self.current_page_index - 1, smooth=smooth)
+            else:
+                self._load_page(self.current_page_index - 1)
 
-    def on_next_page(self, button):
+    def on_next_page(self, button=None, smooth: bool = True):
         if self.doc and self.current_page_index < pdf_handler.get_page_count(self.doc) - 1:
-            self._load_page(self.current_page_index + 1)
+            if self.continuous_scroll:
+                self.scroll_to_page(self.current_page_index + 1, smooth=smooth)
+            else:
+                self._load_page(self.current_page_index + 1)
 
     def on_add_page(self, button):
         """Insert a new blank page with matching dimensions after current page."""
@@ -8358,12 +8541,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, 'zoom_label') and self.zoom_label is not None:
             self.zoom_label.set_text(f"{int(round(zoom * 100))}%")
 
-    def on_thumbnail_selected(self, selection_model, position, n_items):
+    def on_thumbnail_selected(self, selection_model, position=0, n_items=0, smooth: bool = True):
          """Navigate to page selected in the thumbnail sidebar."""
          selected_index = selection_model.get_selected()
          if selected_index != Gtk.INVALID_LIST_POSITION and selected_index != self.current_page_index:
               if hasattr(self, '_syncing_thumb') and self._syncing_thumb: return
-              self._load_page(selected_index)
+              if self.continuous_scroll:
+                  self.scroll_to_page(selected_index, smooth=smooth)
+              else:
+                  self._load_page(selected_index)
 
     def _sync_thumbnail_selection(self):
          """Update sidebar thumbnail selection without re-triggering navigation."""

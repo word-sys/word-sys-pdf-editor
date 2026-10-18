@@ -1232,7 +1232,7 @@ class DocumentSession:
     digital_signatures: Optional[List[Dict[str, Any]]] = None
 
     def __post_init__(self):
-        """Ensure Gio.ListStore for pages_model if not provided."""
+        """Ensure Gio.ListStore for pages_model if not provided and apply view mode settings."""
         if self.pages_model is None:
             try:
                 self.pages_model = Gio.ListStore(item_type=PdfPage)
