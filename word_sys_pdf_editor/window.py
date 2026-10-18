@@ -244,6 +244,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.set_title(constants.APP_NAME)
         self.set_default_size(1200, 800)
         self.set_icon_name("f-pv1")
+        self._is_programmatic_scrolling = False
 
         self.sessions = []
         self._active_session = DocumentSession(undo_manager=UndoManager(self))
@@ -1310,6 +1311,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.set_content(self.main_box)
 
         header = Adw.HeaderBar()
+        self.header_bar = header
+        self.window_title_widget = Adw.WindowTitle()
+        self.window_title_widget.set_title(constants.APP_NAME)
+        header.set_title_widget(self.window_title_widget)
         self.main_box.append(header)
 
         self.new_button = Gtk.Button(label=_("btn_new_doc"))
@@ -1473,6 +1478,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_scroll = Gtk.ScrolledWindow(hexpand=True, vexpand=True,
                                             hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
                                             vscrollbar_policy=Gtk.PolicyType.AUTOMATIC)
+        v_adj = self.pdf_scroll.get_vadjustment()
+        if v_adj:
+            v_adj.connect("value-changed", self._on_canvas_scrolled)
         self.pdf_view = Gtk.DrawingArea(content_width=1, content_height=1,
                                         hexpand=True, vexpand=True)
         self.pdf_view.set_draw_func(self.draw_pdf_page)
@@ -2336,6 +2344,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.print_button.set_sensitive(has_doc)
         self.prev_button.set_sensitive(can_go_prev)
         self.next_button.set_sensitive(can_go_next)
+        if hasattr(self, 'page_label') and self.page_label:
+            self.update_page_label()
 
         in_edit = not self.view_mode
         if hasattr(self, 'mode_toggle_button'):
@@ -3079,6 +3089,125 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         return (0.0, 0.0, float(self.current_pdf_page_width), float(self.current_pdf_page_height))
 
+    def get_visible_viewport_rect(self) -> Tuple[float, float, float, float]:
+        """Return visible canvas viewport (scroll_x, scroll_y, viewport_width, viewport_height)."""
+        h_adj = self.pdf_scroll.get_hadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+        v_adj = self.pdf_scroll.get_vadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+
+        scroll_x = float(h_adj.get_value()) if h_adj else 0.0
+        scroll_y = float(v_adj.get_value()) if v_adj else 0.0
+
+        vp_w = float(h_adj.get_page_size()) if h_adj and h_adj.get_page_size() > 0 else (
+            float(self.pdf_scroll.get_allocated_width()) if hasattr(self, 'pdf_scroll') and self.pdf_scroll and self.pdf_scroll.get_allocated_width() > 0 else (
+                float(self.pdf_view.get_allocated_width()) if hasattr(self, 'pdf_view') and self.pdf_view and self.pdf_view.get_allocated_width() > 0 else float(getattr(self, 'current_pdf_page_width', 600))
+            )
+        )
+        vp_h = float(v_adj.get_page_size()) if v_adj and v_adj.get_page_size() > 0 else (
+            float(self.pdf_scroll.get_allocated_height()) if hasattr(self, 'pdf_scroll') and self.pdf_scroll and self.pdf_scroll.get_allocated_height() > 0 else (
+                float(self.pdf_view.get_allocated_height()) if hasattr(self, 'pdf_view') and self.pdf_view and self.pdf_view.get_allocated_height() > 0 else float(getattr(self, 'current_pdf_page_height', 800))
+            )
+        )
+
+        return (scroll_x, scroll_y, vp_w, vp_h)
+
+    def get_visible_page_indices(self, prefetch_margin: Optional[float] = None) -> List[int]:
+        """Return sorted list of page indices intersecting visible viewport plus prefetch buffer."""
+        if not self.doc or len(self.doc) == 0:
+            return []
+
+        if not self.continuous_scroll:
+            if 0 <= self.current_page_index < len(self.doc):
+                return [self.current_page_index]
+            return [0]
+
+        if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
+            self._recompute_continuous_layout()
+
+        _, scroll_y, _, vp_h = self.get_visible_viewport_rect()
+
+        if prefetch_margin is None:
+            avg_h = (self.continuous_total_height / max(len(self.doc), 1)) if getattr(self, 'continuous_total_height', 0) > 0 else 800.0
+            prefetch_margin = max(float(vp_h), float(avg_h))
+
+        cull_top = scroll_y - prefetch_margin
+        cull_bottom = scroll_y + vp_h + prefetch_margin
+
+        visible = []
+        for p_idx in range(len(self.doc)):
+            px, py, pw, ph = self.get_page_canvas_rect(p_idx)
+            if (py + ph >= cull_top) and (py <= cull_bottom):
+                visible.append(p_idx)
+        return visible
+
+    def get_dominant_visible_page_index(self) -> int:
+        """Calculate the page index with the largest visible area in the viewport."""
+        if not self.doc or len(self.doc) == 0:
+            return 0
+
+        if not self.continuous_scroll:
+            return self.current_page_index
+
+        if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
+            self._recompute_continuous_layout()
+
+        _, scroll_y, _, vp_h = self.get_visible_viewport_rect()
+        vp_top = scroll_y
+        vp_bottom = scroll_y + vp_h
+
+        max_vis_height = -1.0
+        dominant_page = self.current_page_index
+
+        for p_idx in range(len(self.doc)):
+            px, py, pw, ph = self.get_page_canvas_rect(p_idx)
+            p_top = py
+            p_bottom = py + ph
+
+            vis_top = max(vp_top, p_top)
+            vis_bottom = min(vp_bottom, p_bottom)
+            vis_h = max(0.0, vis_bottom - vis_top)
+
+            if vis_h > max_vis_height:
+                max_vis_height = vis_h
+                dominant_page = p_idx
+
+        if max_vis_height <= 0.0:
+            focal_y = vp_top + (vp_h * 0.4)
+            closest_dist = float('inf')
+            for p_idx in range(len(self.doc)):
+                _, py, _, ph = self.get_page_canvas_rect(p_idx)
+                center_y = py + ph / 2.0
+                dist = abs(center_y - focal_y)
+                if dist < closest_dist:
+                    closest_dist = dist
+                    dominant_page = p_idx
+
+        return dominant_page
+
+    def _on_canvas_scrolled(self, adjustment):
+        """Handle canvas scroll adjustment value change to track visible page and sync indicators."""
+        if not self.doc or not self.continuous_scroll:
+            return
+        if getattr(self, '_is_programmatic_scrolling', False):
+            return
+
+        dominant = self.get_dominant_visible_page_index()
+        if dominant != self.current_page_index:
+            self._switch_active_page(dominant)
+
+    def _sync_window_title_and_subtitle(self):
+        """Update window title and header subtitle with current session and page info."""
+        if not self.doc:
+            title = constants.APP_NAME
+            subtitle = ""
+        else:
+            title = self._active_session.display_title if self._active_session else constants.APP_NAME
+            count = pdf_handler.get_page_count(self.doc)
+            subtitle = _("page_info_count").format(self.current_page_index + 1, count) if count > 0 else ""
+            self.set_title(f"{constants.APP_NAME} - {title}")
+        if hasattr(self, 'window_title_widget') and self.window_title_widget:
+            self.window_title_widget.set_title(title)
+            self.window_title_widget.set_subtitle(subtitle)
+
     def canvas_to_page_coords(self, canvas_x: float, canvas_y: float) -> Tuple[int, float, float]:
         """Convert canvas coordinates to (page_index, unzoomed_page_x, unzoomed_page_y)."""
         if not self.doc or len(self.doc) == 0:
@@ -3233,6 +3362,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self._sync_thumbnail_selection()
         self._update_ui_state()
+        self._sync_window_title_and_subtitle()
         self._create_form_field_overlays()
         self.pdf_view.queue_draw()
 
@@ -3331,14 +3461,31 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
         
         if preserve_scroll:
-            GLib.idle_add(self.pdf_scroll.get_vadjustment().set_value, current_v_scroll)
-            GLib.idle_add(self.pdf_scroll.get_hadjustment().set_value, current_h_scroll)
+            self._is_programmatic_scrolling = True
+            def _restore_scroll():
+                v_adj = self.pdf_scroll.get_vadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+                h_adj = self.pdf_scroll.get_hadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+                if v_adj:
+                    v_adj.set_value(current_v_scroll)
+                if h_adj:
+                    h_adj.set_value(current_h_scroll)
+                self._is_programmatic_scrolling = False
+                return False
+            GLib.idle_add(_restore_scroll)
         elif self.continuous_scroll and hasattr(self, 'continuous_page_offsets') and 0 <= page_index < len(self.continuous_page_offsets):
             target_y = self.continuous_page_offsets[page_index][1]
-            GLib.idle_add(self.pdf_scroll.get_vadjustment().set_value, target_y)
+            self._is_programmatic_scrolling = True
+            def _apply_scroll():
+                v_adj = self.pdf_scroll.get_vadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+                if v_adj:
+                    v_adj.set_value(target_y)
+                self._is_programmatic_scrolling = False
+                return False
+            GLib.idle_add(_apply_scroll)
 
         self._sync_thumbnail_selection()
         self._update_ui_state()
+        self._sync_window_title_and_subtitle()
         self._create_form_field_overlays()
         
         fallback_font = None
@@ -3533,18 +3680,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
                 self._recompute_continuous_layout()
 
-            v_adj = self.pdf_scroll.get_vadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
-            v_top = float(v_adj.get_value()) if v_adj else 0.0
-            v_height = float(v_adj.get_page_size()) if v_adj and v_adj.get_page_size() > 0 else float(height)
-            v_bottom = v_top + v_height
-
-            cull_top = v_top - 400.0
-            cull_bottom = v_bottom + 400.0
-
-            for p_idx in range(len(self.doc)):
+            visible_pages = self.get_visible_page_indices()
+            for p_idx in visible_pages:
                 px, py, pw, ph = self.get_page_canvas_rect(p_idx)
-                if (py + ph < cull_top) or (py > cull_bottom):
-                    continue
 
                 cr.save()
                 cr.set_source_rgba(0, 0, 0, 0.15)
@@ -8209,8 +8347,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def update_page_label(self):
         """Update the page indicator label with current page number and total count."""
-        count = pdf_handler.get_page_count(self.doc)
-        self.page_label.set_text(_("page_info_count").format(self.current_page_index + 1, count) if count > 0 else _("page_info_count").format(0, 0))
+        count = pdf_handler.get_page_count(self.doc) if self.doc else 0
+        if hasattr(self, 'page_label') and self.page_label:
+            self.page_label.set_text(_("page_info_count").format(self.current_page_index + 1, count) if count > 0 else _("page_info_count").format(0, 0))
+        self._sync_window_title_and_subtitle()
 
     def update_zoom_label(self):
         """Update the zoom indicator label with current active session zoom level."""
@@ -8230,6 +8370,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
          if not self.doc or not self.thumbnail_selection_model: return
          self._syncing_thumb = True
          self.thumbnail_selection_model.set_selected(self.current_page_index)
+         if hasattr(self, 'thumbnails_list') and hasattr(self.thumbnails_list, 'scroll_to'):
+             try:
+                 flags = getattr(Gtk.ListScrollFlags, 'FOCUS', 0) if hasattr(Gtk, 'ListScrollFlags') else 0
+                 self.thumbnails_list.scroll_to(self.current_page_index, flags, None)
+             except Exception:
+                 pass
          self._syncing_thumb = False
 
     @property
@@ -12144,19 +12290,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         v_adj = self.pdf_scroll.get_vadjustment()
 
         def do_scroll():
-            if h_adj:
-                vp_w = h_adj.get_page_size()
-                if vp_w > 0:
-                    target_h = max(0.0, target_canvas_x - vp_w / 2.0)
-                    max_h = max(0.0, h_adj.get_upper() - vp_w)
-                    h_adj.set_value(min(target_h, max_h))
+            self._is_programmatic_scrolling = True
+            try:
+                if h_adj:
+                    vp_w = h_adj.get_page_size()
+                    if vp_w > 0:
+                        target_h = max(0.0, target_canvas_x - vp_w / 2.0)
+                        max_h = max(0.0, h_adj.get_upper() - vp_w)
+                        h_adj.set_value(min(target_h, max_h))
 
-            if v_adj:
-                vp_h = v_adj.get_page_size()
-                if vp_h > 0:
-                    target_v = max(0.0, target_canvas_y - vp_h / 2.0)
-                    max_v = max(0.0, v_adj.get_upper() - vp_h)
-                    v_adj.set_value(min(target_v, max_v))
+                if v_adj:
+                    vp_h = v_adj.get_page_size()
+                    if vp_h > 0:
+                        target_v = max(0.0, target_canvas_y - vp_h / 2.0)
+                        max_v = max(0.0, v_adj.get_upper() - vp_h)
+                        v_adj.set_value(min(target_v, max_v))
+            finally:
+                self._is_programmatic_scrolling = False
             self.pdf_view.queue_draw()
 
         GLib.idle_add(do_scroll)

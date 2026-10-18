@@ -51,6 +51,17 @@ class MockContinuousScrollWindow:
         self.pdf_view = Gtk.DrawingArea()
         self.pdf_view.set_content_width(595)
         self.pdf_view.set_content_height(842)
+        self.pdf_scroll = Gtk.ScrolledWindow()
+        self.v_adj = Gtk.Adjustment(value=0.0, lower=0.0, upper=3000.0, step_increment=10.0, page_increment=100.0, page_size=600.0)
+        self.h_adj = Gtk.Adjustment(value=0.0, lower=0.0, upper=2000.0, step_increment=10.0, page_increment=100.0, page_size=800.0)
+        self.pdf_scroll.set_vadjustment(self.v_adj)
+        self.pdf_scroll.set_hadjustment(self.h_adj)
+        self._is_programmatic_scrolling = False
+        self.window_title_widget = Adw.WindowTitle()
+        self.page_label = Gtk.Label()
+        self.status_label = Gtk.Label()
+        self.thumbnail_selection_model = None
+        self._title = ""
 
     continuous_scroll = PdfEditorWindow.continuous_scroll
     _page_objects_cache = PdfEditorWindow._page_objects_cache
@@ -67,6 +78,12 @@ class MockContinuousScrollWindow:
     _visual_to_unrotated_page_coords = PdfEditorWindow._visual_to_unrotated_page_coords
     _unrotated_to_visual_page_coords = PdfEditorWindow._unrotated_to_visual_page_coords
     _visual_to_unrotated_delta = PdfEditorWindow._visual_to_unrotated_delta
+    get_visible_viewport_rect = PdfEditorWindow.get_visible_viewport_rect
+    get_visible_page_indices = PdfEditorWindow.get_visible_page_indices
+    get_dominant_visible_page_index = PdfEditorWindow.get_dominant_visible_page_index
+    _on_canvas_scrolled = PdfEditorWindow._on_canvas_scrolled
+    _sync_window_title_and_subtitle = PdfEditorWindow._sync_window_title_and_subtitle
+    update_page_label = PdfEditorWindow.update_page_label
 
     def commit_pending_format_change(self):
         pass
@@ -78,13 +95,24 @@ class MockContinuousScrollWindow:
         pass
 
     def _sync_thumbnail_selection(self):
-        pass
+        if not self.doc or not self.thumbnail_selection_model:
+            return
+        self._syncing_thumb = True
+        self.thumbnail_selection_model.set_selected(self.current_page_index)
+        self._syncing_thumb = False
 
     def _update_ui_state(self):
-        pass
+        if hasattr(self, 'page_label') and self.page_label:
+            self.update_page_label()
 
     def _create_form_field_overlays(self):
         pass
+
+    def set_title(self, title):
+        self._title = title
+
+    def get_title(self):
+        return getattr(self, '_title', "")
 
 
 class TestContinuousScrollLayout(unittest.TestCase):
@@ -316,6 +344,122 @@ class TestContinuousScrollLayout(unittest.TestCase):
         self.assertEqual(win.current_page_index, 1)
         self.assertEqual(len(win.editable_shapes), 1)
         self.assertEqual(win.editable_shapes[0].shape_type, EditableShape.SHAPE_ELLIPSE)
+
+    def test_get_visible_viewport_rect(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.v_adj.set_value(250.0)
+        win.h_adj.set_value(75.0)
+
+        vx, vy, vw, vh = win.get_visible_viewport_rect()
+        self.assertEqual(vx, 75.0)
+        self.assertEqual(vy, 250.0)
+        self.assertEqual(vw, 800.0)
+        self.assertEqual(vh, 600.0)
+
+    def test_get_visible_page_indices_single_page(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = False
+        win.current_page_index = 1
+        visible = win.get_visible_page_indices()
+        self.assertEqual(visible, [1])
+
+    def test_get_visible_page_indices_continuous_culling(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win._recompute_continuous_layout()
+
+        # At top of document: y=0, viewport height=600, prefetch margin=300
+        # Visible range: [-300, 900].
+        # Page 0: [16, 816] -> visible
+        # Page 1: [832, 1532] -> visible (832 <= 900)
+        # Page 2: [1548, 2448] -> culled (1548 > 900)
+        win.v_adj.set_value(0.0)
+        visible_top = win.get_visible_page_indices(prefetch_margin=300.0)
+        self.assertEqual(visible_top, [0, 1])
+
+        # Scrolled to bottom: y=1800, viewport height=600, prefetch margin=200
+        # Visible range: [1600, 2600].
+        # Page 0: [16, 816] -> culled (816 < 1600)
+        # Page 1: [832, 1532] -> culled (1532 < 1600)
+        # Page 2: [1548, 2448] -> visible (2448 >= 1600 and 1548 <= 2600)
+        win.v_adj.set_value(1800.0)
+        visible_bottom = win.get_visible_page_indices(prefetch_margin=200.0)
+        self.assertEqual(visible_bottom, [2])
+
+    def test_get_dominant_visible_page_index(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win._recompute_continuous_layout()
+
+        # At top: y=0, viewport height=600
+        # Page 0 covers 16 to 600 = 584px
+        win.v_adj.set_value(0.0)
+        self.assertEqual(win.get_dominant_visible_page_index(), 0)
+
+        # Scrolled down: y=900, viewport height=600 (range: [900, 1500])
+        # Page 0 ends at 816 -> 0px visible
+        # Page 1 covers 900 to 1500 = 600px visible
+        win.v_adj.set_value(900.0)
+        self.assertEqual(win.get_dominant_visible_page_index(), 1)
+
+        # Scrolled to bottom: y=1900, viewport height=600 (range: [1900, 2500])
+        # Page 2 covers 1900 to 2448 = 548px visible
+        win.v_adj.set_value(1900.0)
+        self.assertEqual(win.get_dominant_visible_page_index(), 2)
+
+    def test_on_canvas_scrolled_dominant_page_sync(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win.current_page_index = 0
+        win._recompute_continuous_layout()
+
+        # Create mock thumbnail selection model
+        win.thumbnail_selection_model = Gtk.SingleSelection()
+
+        # Scroll to page 1 region: y=900
+        win.v_adj.set_value(900.0)
+        win._on_canvas_scrolled(win.v_adj)
+
+        # Active page should have switched to 1
+        self.assertEqual(win.current_page_index, 1)
+        # Page counter label and header subtitle should be updated
+        self.assertIn("2", win.page_label.get_text())
+        self.assertIn("2", win.window_title_widget.get_subtitle())
+
+    def test_programmatic_scrolling_guard(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win.current_page_index = 0
+        win._recompute_continuous_layout()
+
+        win._is_programmatic_scrolling = True
+        win.v_adj.set_value(900.0)
+        win._on_canvas_scrolled(win.v_adj)
+
+        # Guard prevented page switch
+        self.assertEqual(win.current_page_index, 0)
+
+    def test_sync_window_title_and_subtitle(self):
+        win = MockContinuousScrollWindow(self.doc)
+        win.current_page_index = 0
+        win._active_session = DocumentSession()
+        win._active_session.doc = self.doc
+        win._active_session.pdf_path = "/path/to/test_sample.pdf"
+
+        win._sync_window_title_and_subtitle()
+        self.assertIn("test_sample.pdf", win.window_title_widget.get_title())
+        self.assertIn("1", win.window_title_widget.get_subtitle())
+        self.assertIn("3", win.window_title_widget.get_subtitle())
+
+        # Switch to page 2 (index 1)
+        win.current_page_index = 1
+        win._sync_window_title_and_subtitle()
+        self.assertIn("2", win.window_title_widget.get_subtitle())
+        self.assertIn("3", win.window_title_widget.get_subtitle())
 
     @unittest.skipUnless(has_screen_display(), "Screen display not available (headless build environment)")
     def test_window_continuous_scroll_integration(self):
