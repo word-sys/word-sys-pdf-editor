@@ -327,6 +327,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.temp_measurement_rect = None
         self.temp_polygon_vertices = []
         self.selected_measurement = None
+        self.page_gap = 16
+        self.continuous_page_offsets = []
+        self.continuous_total_height = 0.0
+        self.continuous_max_width = 0.0
+        self.drag_start_page_index = 0
         self.measurement_toolbar_box = None
         self.measurement_toolbar_sep = None
         self.measurement_scale_indicator = None
@@ -1014,6 +1019,33 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def view_mode(self, val):
         if self._active_session:
             self._active_session.view_mode = val
+
+    @property
+    def continuous_scroll(self) -> bool:
+        """Active document continuous vertical scroll mode flag."""
+        sess = getattr(self, '_active_session', None)
+        return sess.continuous_scroll if sess else getattr(self, '_continuous_scroll_fallback', False)
+
+    @continuous_scroll.setter
+    def continuous_scroll(self, val: bool):
+        sess = getattr(self, '_active_session', None)
+        if sess:
+            sess.continuous_scroll = bool(val)
+        else:
+            self._continuous_scroll_fallback = bool(val)
+        if hasattr(self, 'pdf_view'):
+            self._update_canvas_content_size()
+            self.pdf_view.queue_draw()
+
+    @property
+    def _page_objects_cache(self) -> Dict[int, Any]:
+        """Active document per-page objects cache."""
+        sess = getattr(self, '_active_session', None)
+        if sess is not None:
+            return sess.page_objects_cache
+        if not hasattr(self, '_fallback_page_objects_cache'):
+            self._fallback_page_objects_cache = {}
+        return self._fallback_page_objects_cache
 
     @property
     def document_modified(self):
@@ -2985,6 +3017,224 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         GLib.idle_add(_load_next_thumb)
 
+    def _recompute_continuous_layout(self):
+        """Compute cumulative vertical offsets and dimensions for all pages."""
+        self.continuous_page_offsets = []
+        if not self.doc or len(self.doc) == 0:
+            self.continuous_total_height = 0.0
+            self.continuous_max_width = 0.0
+            return
+
+        current_y = float(self.page_gap)
+        max_w = 0.0
+        for i in range(len(self.doc)):
+            page = self.doc.load_page(i)
+            pw = float(page.rect.width * self.zoom_level)
+            ph = float(page.rect.height * self.zoom_level)
+            if pw > max_w:
+                max_w = pw
+            self.continuous_page_offsets.append((0.0, current_y, pw, ph))
+            current_y += ph + float(self.page_gap)
+
+        self.continuous_total_height = current_y
+        self.continuous_max_width = max_w
+
+    def _update_canvas_content_size(self):
+        """Update drawing area content width and height based on mode."""
+        if not hasattr(self, 'pdf_view') or not self.pdf_view:
+            return
+        if self.continuous_scroll:
+            self._recompute_continuous_layout()
+            alloc_w = float(self.pdf_view.get_allocated_width()) if hasattr(self, 'pdf_view') else 0.0
+            w = max(int(self.continuous_max_width), int(alloc_w), 1)
+            h = max(int(self.continuous_total_height), 1)
+            self.pdf_view.set_content_width(w)
+            self.pdf_view.set_content_height(h)
+        else:
+            self.pdf_view.set_content_width(max(self.current_pdf_page_width, 1))
+            self.pdf_view.set_content_height(max(self.current_pdf_page_height, 1))
+
+    def get_page_canvas_rect(self, page_index: int) -> Tuple[float, float, float, float]:
+        """Return (x, y, width, height) of the given page in canvas coordinates."""
+        if not self.doc or not (0 <= page_index < len(self.doc)):
+            return (0.0, 0.0, float(self.current_pdf_page_width), float(self.current_pdf_page_height))
+
+        alloc_w = float(self.pdf_view.get_allocated_width()) if hasattr(self, 'pdf_view') and self.pdf_view.get_allocated_width() > 0 else float(self.current_pdf_page_width)
+        alloc_h = float(self.pdf_view.get_allocated_height()) if hasattr(self, 'pdf_view') and self.pdf_view.get_allocated_height() > 0 else float(self.current_pdf_page_height)
+
+        if not self.continuous_scroll:
+            pw = float(self.current_pdf_page_width)
+            ph = float(self.current_pdf_page_height)
+            px = max(0.0, (alloc_w - pw) / 2.0)
+            py = max(0.0, (alloc_h - ph) / 2.0)
+            return (px, py, pw, ph)
+
+        if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
+            self._recompute_continuous_layout()
+
+        if 0 <= page_index < len(self.continuous_page_offsets):
+            _, py, pw, ph = self.continuous_page_offsets[page_index]
+            px = max(0.0, (alloc_w - pw) / 2.0)
+            return (px, py, pw, ph)
+
+        return (0.0, 0.0, float(self.current_pdf_page_width), float(self.current_pdf_page_height))
+
+    def canvas_to_page_coords(self, canvas_x: float, canvas_y: float) -> Tuple[int, float, float]:
+        """Convert canvas coordinates to (page_index, unzoomed_page_x, unzoomed_page_y)."""
+        if not self.doc or len(self.doc) == 0:
+            return (0, canvas_x / max(self.zoom_level, 0.001), canvas_y / max(self.zoom_level, 0.001))
+
+        if not self.continuous_scroll:
+            px, py, _, _ = self.get_page_canvas_rect(self.current_page_index)
+            page_x = (canvas_x - px) / max(self.zoom_level, 0.001)
+            page_y = (canvas_y - py) / max(self.zoom_level, 0.001)
+            return (self.current_page_index, page_x, page_y)
+
+        if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
+            self._recompute_continuous_layout()
+
+        target_page = 0
+        num_pages = len(self.doc)
+        if canvas_y < self.continuous_page_offsets[0][1]:
+            target_page = 0
+        elif canvas_y >= self.continuous_page_offsets[-1][1] + self.continuous_page_offsets[-1][3]:
+            target_page = num_pages - 1
+        else:
+            for idx in range(num_pages):
+                _, py, _, ph = self.continuous_page_offsets[idx]
+                gap_boundary = py + ph + (self.page_gap / 2.0)
+                if canvas_y < gap_boundary:
+                    target_page = idx
+                    break
+
+        px, py, _, _ = self.get_page_canvas_rect(target_page)
+        page_x = (canvas_x - px) / max(self.zoom_level, 0.001)
+        page_y = (canvas_y - py) / max(self.zoom_level, 0.001)
+        return (target_page, page_x, page_y)
+
+    def page_to_canvas_coords(self, page_index: int, page_x_unzoomed: float, page_y_unzoomed: float) -> Tuple[float, float]:
+        """Convert unzoomed page coordinates on page_index to canvas coordinates."""
+        px, py, _, _ = self.get_page_canvas_rect(page_index)
+        canvas_x = px + page_x_unzoomed * self.zoom_level
+        canvas_y = py + page_y_unzoomed * self.zoom_level
+        return (canvas_x, canvas_y)
+
+    def is_canvas_point_on_page(self, canvas_x: float, canvas_y: float, page_index: int) -> bool:
+        """Return True if canvas (x, y) is inside the boundary of page_index."""
+        px, py, pw, ph = self.get_page_canvas_rect(page_index)
+        return (px <= canvas_x < px + pw) and (py <= canvas_y < py + ph)
+
+    def _get_page_objects(self, page_index: int) -> Dict[str, Any]:
+        """Retrieve editable objects for a page, using cache if available."""
+        if not self.doc or not (0 <= page_index < len(self.doc)):
+            return {'texts': [], 'images': [], 'shapes': [], 'strokes': [], 'form_fields': []}
+        if page_index == self.current_page_index:
+            return {
+                'texts': self.editable_texts,
+                'images': self.editable_images,
+                'shapes': self.editable_shapes,
+                'strokes': self.editable_strokes,
+                'form_fields': self.form_fields,
+            }
+        if page_index in self._page_objects_cache:
+            return self._page_objects_cache[page_index]
+
+        texts, _ = pdf_handler.extract_editable_text(self.doc, page_index)
+        images, _ = pdf_handler.extract_editable_images(self.doc, page_index)
+        shapes, _ = pdf_handler.extract_editable_shapes(self.doc, page_index)
+        strokes, _ = pdf_handler.extract_editable_strokes(self.doc, page_index)
+        form_fields, _ = pdf_handler.extract_acroform_fields(self.doc, page_index)
+
+        objs = {
+            'texts': texts or [],
+            'images': images or [],
+            'shapes': shapes or [],
+            'strokes': strokes or [],
+            'form_fields': form_fields or [],
+        }
+        self._page_objects_cache[page_index] = objs
+        return objs
+
+    def _stash_page_objects(self, page_index: int):
+        """Stash active collections into page objects cache."""
+        if page_index is None or not self.doc or not (0 <= page_index < len(self.doc)):
+            return
+        self._page_objects_cache[page_index] = {
+            'texts': list(self.editable_texts),
+            'images': list(self.editable_images),
+            'shapes': list(self.editable_shapes),
+            'strokes': list(self.editable_strokes),
+            'form_fields': list(self.form_fields),
+        }
+
+    def _restore_page_objects(self, page_index: int):
+        """Restore collections for page_index from cache or extract from PDF."""
+        if page_index is None or not self.doc or not (0 <= page_index < len(self.doc)):
+            return
+        if page_index in self._page_objects_cache:
+            cached = self._page_objects_cache[page_index]
+            self.editable_texts = cached.get('texts', [])
+            self.editable_images = cached.get('images', [])
+            self.editable_shapes = cached.get('shapes', [])
+            self.editable_strokes = cached.get('strokes', [])
+            self.form_fields = cached.get('form_fields', [])
+        else:
+            texts, _ = pdf_handler.extract_editable_text(self.doc, page_index)
+            self.editable_texts = texts or []
+            images, _ = pdf_handler.extract_editable_images(self.doc, page_index)
+            self.editable_images = images or []
+            shapes, _ = pdf_handler.extract_editable_shapes(self.doc, page_index)
+            self.editable_shapes = shapes or []
+            strokes, _ = pdf_handler.extract_editable_strokes(self.doc, page_index)
+            self.editable_strokes = strokes or []
+            form_fields, _ = pdf_handler.extract_acroform_fields(self.doc, page_index)
+            self.form_fields = form_fields or []
+            self._page_objects_cache[page_index] = {
+                'texts': self.editable_texts,
+                'images': self.editable_images,
+                'shapes': self.editable_shapes,
+                'strokes': self.editable_strokes,
+                'form_fields': self.form_fields,
+            }
+
+    def _switch_active_page(self, page_index: int):
+        """Switch active page without resetting entire canvas layout in continuous mode."""
+        if not self.doc or not (0 <= page_index < len(self.doc)):
+            return
+        if page_index == self.current_page_index:
+            return
+
+        self.commit_pending_format_change()
+        if self.inline_editor_widget is not None:
+            self._apply_and_hide_editor(force_apply=True)
+
+        old_page = self.current_page_index
+        if old_page is not None and (0 <= old_page < len(self.doc)):
+            self._stash_page_objects(old_page)
+
+        self.current_page_index = page_index
+        self.selected_text = None
+        self.selected_image = None
+        self.selected_shape = None
+        self.selected_stroke = None
+        self.selected_form_field = None
+        self.hide_text_editor()
+        self._clear_form_field_overlays()
+
+        self._restore_page_objects(page_index)
+
+        page = self.doc.load_page(page_index)
+        self.current_pdf_page_width = int(page.rect.width * self.zoom_level)
+        self.current_pdf_page_height = int(page.rect.height * self.zoom_level)
+
+        if not self.continuous_scroll:
+            self.pdf_view.set_content_width(self.current_pdf_page_width)
+            self.pdf_view.set_content_height(self.current_pdf_page_height)
+
+        self._sync_thumbnail_selection()
+        self._update_ui_state()
+        self._create_form_field_overlays()
+        self.pdf_view.queue_draw()
 
     def _load_page(self, page_index, preserve_scroll=False, reload_objects=True):
         """Extract editable objects, dimensions, and render page at given index."""
@@ -3008,6 +3258,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.doc and old_page_idx is not None and (0 <= old_page_idx < pdf_handler.get_page_count(self.doc)):
             if old_page_idx != page_index and reload_objects:
                 pdf_handler.save_page_snapshot(self.doc, old_page_idx, force=True)
+            self._stash_page_objects(old_page_idx)
 
         if reload_objects:
             self.undo_manager.clear()
@@ -3057,19 +3308,34 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             else:
                 self.form_fields = form_fields
 
+            self._page_objects_cache[page_index] = {
+                'texts': self.editable_texts,
+                'images': self.editable_images,
+                'shapes': self.editable_shapes,
+                'strokes': self.editable_strokes,
+                'form_fields': self.form_fields,
+            }
+        else:
+            self._restore_page_objects(page_index)
+
         page = self.doc.load_page(page_index)
         self.current_pdf_page_width = int(page.rect.width * self.zoom_level)
         self.current_pdf_page_height = int(page.rect.height * self.zoom_level)
 
-        print(f"DEBUG: Setting pdf_view content size: {self.current_pdf_page_width} x {self.current_pdf_page_height}")
-        self.pdf_view.set_content_width(self.current_pdf_page_width)
-        self.pdf_view.set_content_height(self.current_pdf_page_height)
+        if self.continuous_scroll:
+            self._update_canvas_content_size()
+        else:
+            self.pdf_view.set_content_width(self.current_pdf_page_width)
+            self.pdf_view.set_content_height(self.current_pdf_page_height)
 
         self.pdf_view.queue_draw()
         
         if preserve_scroll:
             GLib.idle_add(self.pdf_scroll.get_vadjustment().set_value, current_v_scroll)
             GLib.idle_add(self.pdf_scroll.get_hadjustment().set_value, current_h_scroll)
+        elif self.continuous_scroll and hasattr(self, 'continuous_page_offsets') and 0 <= page_index < len(self.continuous_page_offsets):
+            target_y = self.continuous_page_offsets[page_index][1]
+            GLib.idle_add(self.pdf_scroll.get_vadjustment().set_value, target_y)
 
         self._sync_thumbnail_selection()
         self._update_ui_state()
@@ -3106,6 +3372,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_form_field = None
         self.hide_text_editor()
         self._clear_form_field_overlays()
+        self._page_objects_cache.clear()
+        self.continuous_page_offsets = []
+        self.continuous_total_height = 0.0
+        self.continuous_max_width = 0.0
         self.pdf_view.set_content_width(1)
         self.pdf_view.set_content_height(1)
         self.pdf_view.queue_draw()
@@ -3235,36 +3505,68 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def draw_pdf_page(self, area, cr, width, height):
         """Draw PDF page."""
-        if not self.doc or self.current_pdf_page_width <= 0:
+        if not self.doc:
             cr.set_source_rgb(0.42, 0.42, 0.42)
             cr.paint()
             return
 
-        page_w = self.current_pdf_page_width
-        page_h = self.current_pdf_page_height
-        page_offset_x = max(0, (width - page_w) / 2.0)
-        page_offset_y = max(0, (height - page_h) / 2.0)
-
         cr.set_source_rgb(0.42, 0.42, 0.42)
         cr.paint()
 
-        cr.save()
-        cr.set_source_rgba(0, 0, 0, 0.15)
-        cr.rectangle(page_offset_x + 4.0, page_offset_y + 4.0, page_w, page_h)
-        cr.fill()
-        cr.restore()
+        if not self.continuous_scroll:
+            if self.current_pdf_page_width <= 0:
+                return
 
+            page_w = float(self.current_pdf_page_width)
+            page_h = float(self.current_pdf_page_height)
+            page_offset_x = max(0.0, (width - page_w) / 2.0)
+            page_offset_y = max(0.0, (height - page_h) / 2.0)
+
+            cr.save()
+            cr.set_source_rgba(0, 0, 0, 0.15)
+            cr.rectangle(page_offset_x + 4.0, page_offset_y + 4.0, page_w, page_h)
+            cr.fill()
+            cr.restore()
+
+            self._draw_page_content(area, cr, self.current_page_index, page_offset_x, page_offset_y, page_w, page_h)
+        else:
+            if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
+                self._recompute_continuous_layout()
+
+            v_adj = self.pdf_scroll.get_vadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+            v_top = float(v_adj.get_value()) if v_adj else 0.0
+            v_height = float(v_adj.get_page_size()) if v_adj and v_adj.get_page_size() > 0 else float(height)
+            v_bottom = v_top + v_height
+
+            cull_top = v_top - 400.0
+            cull_bottom = v_bottom + 400.0
+
+            for p_idx in range(len(self.doc)):
+                px, py, pw, ph = self.get_page_canvas_rect(p_idx)
+                if (py + ph < cull_top) or (py > cull_bottom):
+                    continue
+
+                cr.save()
+                cr.set_source_rgba(0, 0, 0, 0.15)
+                cr.rectangle(px + 4.0, py + 4.0, pw, ph)
+                cr.fill()
+                cr.restore()
+
+                self._draw_page_content(area, cr, p_idx, px, py, pw, ph)
+
+    def _draw_page_content(self, area, cr, page_index, page_offset_x, page_offset_y, page_w, page_h):
+        """Render single page contents including Cairo surface, objects, annotations, and overlays."""
         cr.save()
         cr.translate(page_offset_x, page_offset_y)
-        cached_surf = pdf_handler.get_page_cairo_surface(self.doc, self.current_page_index, self.zoom_level)
+        cached_surf = pdf_handler.get_page_cairo_surface(self.doc, page_index, self.zoom_level)
         if cached_surf:
             cr.set_source_surface(cached_surf, 0, 0)
             cr.paint()
         else:
-            pdf_handler.draw_page_to_cairo(cr, self.doc, self.current_page_index, self.zoom_level)
+            pdf_handler.draw_page_to_cairo(cr, self.doc, page_index, self.zoom_level)
         cr.restore()
 
-        page = self.doc[self.current_page_index]
+        page = self.doc[page_index]
         page_rot = page.rotation % 360
         cr.save()
         cr.translate(page_offset_x, page_offset_y)
@@ -3273,8 +3575,24 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             mat = page.rotation_matrix
             cr.transform(cairo.Matrix(mat.a, mat.b, mat.c, mat.d, mat.e, mat.f))
 
+        if page_index == self.current_page_index:
+            texts = self.editable_texts
+            images = getattr(self, 'editable_images', [])
+            shapes = self.editable_shapes
+            strokes = getattr(self, 'editable_strokes', [])
+            fields = getattr(self, 'form_fields', [])
+        else:
+            page_objs = self._get_page_objects(page_index)
+            texts = page_objs.get('texts', [])
+            images = page_objs.get('images', [])
+            shapes = page_objs.get('shapes', [])
+            strokes = page_objs.get('strokes', [])
+            fields = page_objs.get('form_fields', [])
+
+        active_create_page = getattr(self, 'drag_start_page_index', self.current_page_index)
+
         # Mask original underlying text on canvas while inline editor is actively editing
-        if getattr(self, 'inline_editor_widget', None) is not None and getattr(self, 'inline_editor_text_obj', None) is not None:
+        if page_index == self.current_page_index and getattr(self, 'inline_editor_widget', None) is not None and getattr(self, 'inline_editor_text_obj', None) is not None:
             active_ed_obj = self.inline_editor_text_obj
             target_mask_box = getattr(self, '_inline_editor_target_rect', None) or getattr(active_ed_obj, 'bbox', None)
             if target_mask_box:
@@ -3285,7 +3603,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.fill()
                 cr.restore()
 
-        if self.dragged_object:
+        if self.dragged_object and getattr(self.dragged_object, 'page_number', self.current_page_index) == page_index:
             if self.dragged_object.original_bbox:
                 orig_x1, orig_y1, orig_x2, orig_y2 = self.dragged_object.original_bbox
                 cr.save()
@@ -3454,8 +3772,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     cr.stroke()
             cr.restore()
             
-        for text_obj in self.editable_texts:
-            if text_obj.page_number != self.current_page_index:
+        for text_obj in texts:
+            if getattr(text_obj, 'page_number', page_index) != page_index:
                 continue
             if not text_obj.is_new:
                 continue 
@@ -3536,7 +3854,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 s_attr.end_index = 65535
                 attr_list.change(s_attr)
             
-            if not self.view_mode and self.selected_text == text_obj and getattr(self, 'word_selection_mode', False):
+            if not self.view_mode and self.selected_text == text_obj and getattr(self, 'word_selection_mode', False) and page_index == self.current_page_index:
                 if hasattr(self, 'selected_word_start_char') and hasattr(self, 'selected_word_end_char'):
                     start_byte = len(text_obj.text[:self.selected_word_start_char].encode('utf-8'))
                     end_byte = len(text_obj.text[:self.selected_word_end_char].encode('utf-8'))
@@ -3556,8 +3874,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             PangoCairo.show_layout(cr, layout)
             cr.restore()
 
-        for img_obj in getattr(self, 'editable_images', []):
-            if getattr(img_obj, 'page_number', None) != self.current_page_index:
+        for img_obj in images:
+            if getattr(img_obj, 'page_number', page_index) != page_index:
                 continue
             if getattr(img_obj, 'is_baked', False):
                 continue
@@ -3594,8 +3912,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 pass
             cr.restore()
 
-        for shape in self.editable_shapes:
-            if shape.page_number != self.current_page_index:
+        for shape in shapes:
+            if getattr(shape, 'page_number', page_index) != page_index:
                 continue
             if getattr(shape, 'is_baked', False):
                 continue
@@ -3730,7 +4048,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.stroke()
             cr.set_dash([])
 
-        if getattr(self, 'temp_stamp_bbox', None):
+        if getattr(self, 'temp_stamp_bbox', None) and page_index == active_create_page:
             x1, y1, x2, y2 = self.temp_stamp_bbox
             draw_x = x1
             draw_y = y1
@@ -3758,7 +4076,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.stroke()
             cr.set_dash([])
 
-        if getattr(self, 'temp_sig_bbox', None):
+        if getattr(self, 'temp_sig_bbox', None) and page_index == active_create_page:
             x1, y1, x2, y2 = self.temp_sig_bbox
             draw_x = x1
             draw_y = y1
@@ -3782,7 +4100,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.stroke()
             cr.set_dash([])
 
-        if getattr(self, 'temp_form_field_rect', None) is not None:
+        if getattr(self, 'temp_form_field_rect', None) is not None and page_index == active_create_page:
             x1, y1, x2, y2 = self.temp_form_field_rect
             draw_x = x1
             draw_y = y1
@@ -3821,8 +4139,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.restore()
 
         # Render editable strokes on current page
-        for stroke in getattr(self, 'editable_strokes', []):
-            if getattr(stroke, 'page_number', None) != self.current_page_index:
+        for stroke in strokes:
+            if getattr(stroke, 'page_number', page_index) != page_index:
                 continue
             if getattr(stroke, 'is_baked', False):
                 continue
@@ -3866,7 +4184,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.restore()
 
         # Render live drawing temp stroke
-        if getattr(self, 'temp_stroke', None) and self.temp_stroke.points:
+        if page_index == active_create_page and getattr(self, 'temp_stroke', None) and self.temp_stroke.points:
             cr.save()
             r, g, b = self.temp_stroke.stroke_color
             opacity = getattr(self.temp_stroke, 'opacity', 1.0)
@@ -3897,21 +4215,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.restore()
 
         # Render AcroForm field overlays
-        current_fields = [f for f in getattr(self, 'form_fields', []) if getattr(f, 'page_number', self.current_page_index) == self.current_page_index]
+        current_fields = [f for f in fields if getattr(f, 'page_number', page_index) == page_index]
         if current_fields:
-            is_design = (not self.view_mode and getattr(self, 'tool_mode', '') == "form_builder")
+            is_design = (not self.view_mode and getattr(self, 'tool_mode', '') == "form_builder" and page_index == self.current_page_index)
             pdf_handler.draw_acroform_overlay(
                 cr,
                 current_fields,
                 self.zoom_level,
-                active_field=(self.selected_form_field if self.view_mode else None),
+                active_field=(self.selected_form_field if (self.view_mode and page_index == self.current_page_index) else None),
                 is_design_mode=is_design
             )
 
         selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
                         self.selected_stroke or getattr(self, 'selected_form_field', None) or
                         getattr(self, 'selected_measurement', None))
-        if selected_obj and not self.dragged_object and not (
+        if page_index == self.current_page_index and selected_obj and not self.dragged_object and not (
             isinstance(selected_obj, AcroFormField) and getattr(self, '_active_editing_form_field', None) == selected_obj
         ) and not (self.inline_editor_widget is not None and selected_obj == getattr(self, 'inline_editor_text_obj', None)):
             is_image = isinstance(selected_obj, EditableImage)
@@ -4016,9 +4334,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.restore()
 
         # Draw active scale calibration reference line or saved reference line
-        calib_line = getattr(self, 'temp_calibration_line', None)
-        active_calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
-        is_calib_tool = getattr(self, 'tool_mode', None) == "calibrate"
+        calib_line = getattr(self, 'temp_calibration_line', None) if page_index == active_create_page else None
+        active_calib = self.get_scale_calibration(page_index) if hasattr(self, 'get_scale_calibration') else None
+        is_calib_tool = (getattr(self, 'tool_mode', None) == "calibrate" and page_index == self.current_page_index)
         
         if calib_line or (is_calib_tool and active_calib and active_calib.reference_line):
             line_to_draw = calib_line or active_calib.reference_line
@@ -4097,10 +4415,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         # Draw persistent measurement objects (Distance & Area)
         if self._active_session:
-            page_measurements = self._active_session.measurements.get(self.current_page_index, [])
+            page_measurements = self._active_session.measurements.get(page_index, [])
             for m in page_measurements:
-                is_selected = (getattr(self, 'selected_measurement', None) == m)
-                active_calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
+                is_selected = (getattr(self, 'selected_measurement', None) == m and page_index == self.current_page_index)
+                active_calib = self.get_scale_calibration(page_index) if hasattr(self, 'get_scale_calibration') else None
                 cr.save()
 
                 if m.measurement_type == MeasurementObject.TYPE_DISTANCE and len(m.points) >= 2:
@@ -4238,9 +4556,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         # Draw persistent sticky note & comment annotations
         if self._active_session:
-            page_notes = self._active_session.sticky_notes.get(self.current_page_index, [])
+            page_notes = self._active_session.sticky_notes.get(page_index, [])
             for note in page_notes:
-                is_selected = (getattr(self, 'selected_sticky_note', None) == note)
+                is_selected = (getattr(self, 'selected_sticky_note', None) == note and page_index == self.current_page_index)
                 cr.save()
                 nx = note.x
                 ny = note.y
@@ -4323,7 +4641,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.restore()
 
         # In-progress distance measurement
-        if getattr(self, 'temp_measurement_line', None) is not None:
+        if page_index == active_create_page and getattr(self, 'temp_measurement_line', None) is not None:
             sx, sy, ex, ey = self.temp_measurement_line
             pt_len = math.hypot(ex - sx, ey - sy)
             if pt_len > 1.0:
@@ -4353,7 +4671,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.arc(ex, ey, rad, 0, 2 * math.pi)
                 cr.stroke()
 
-                active_calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
+                active_calib = self.get_scale_calibration(page_index) if hasattr(self, 'get_scale_calibration') else None
                 if active_calib and active_calib.points_per_unit > 0:
                     badge_str = active_calib.format_distance(pt_len)
                 else:
@@ -4386,7 +4704,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.restore()
 
         # In-progress area measurement (drag rectangle)
-        if getattr(self, 'temp_measurement_rect', None) is not None:
+        if page_index == active_create_page and getattr(self, 'temp_measurement_rect', None) is not None:
             x1, y1, x2, y2 = self.temp_measurement_rect
             rw = x2 - x1
             rh = y2 - y1
@@ -4402,7 +4720,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.stroke()
 
                 pt_area = abs(rw * rh)
-                active_calib = self.get_scale_calibration(self.current_page_index) if hasattr(self, 'get_scale_calibration') else None
+                active_calib = self.get_scale_calibration(page_index) if hasattr(self, 'get_scale_calibration') else None
                 if active_calib and active_calib.points_per_unit > 0:
                     badge_str = active_calib.format_area(pt_area)
                 else:
@@ -4434,7 +4752,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.restore()
 
         # In-progress multi-click polygon area measurement
-        if getattr(self, 'temp_polygon_vertices', None) and len(self.temp_polygon_vertices) > 0 and getattr(self, 'tool_mode', None) == "measure_area":
+        if page_index == active_create_page and getattr(self, 'temp_polygon_vertices', None) and len(self.temp_polygon_vertices) > 0 and getattr(self, 'tool_mode', None) == "measure_area":
             pts = list(self.temp_polygon_vertices)
             last_mouse = getattr(self, 'last_mouse_page_pos', None)
             render_pts = pts + [last_mouse] if last_mouse else pts
@@ -4472,10 +4790,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         # Highlighted native annotation from Annotations Sidebar
         if getattr(self, 'highlighted_native_annot', None):
             ha = self.highlighted_native_annot
-            if ha.get('page') == self.current_page_index and ha.get('bbox'):
+            if ha.get('page') == page_index and ha.get('bbox'):
                 bx1, by1, bx2, by2 = ha['bbox']
-                v_x1, v_y1 = self._unrotated_to_visual_page_coords(bx1, by1)
-                v_x2, v_y2 = self._unrotated_to_visual_page_coords(bx2, by2)
+                v_x1, v_y1 = self._unrotated_to_visual_page_coords(bx1, by1, page_index=page_index)
+                v_x2, v_y2 = self._unrotated_to_visual_page_coords(bx2, by2, page_index=page_index)
                 min_vx = min(v_x1, v_x2)
                 max_vx = max(v_x1, v_x2)
                 min_vy = min(v_y1, v_y2)
@@ -4496,7 +4814,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.stroke()
                 cr.restore()
 
-        if self.view_mode and self.view_sel_rect:
+        if self.view_mode and self.view_sel_rect and getattr(self, 'drag_start_page_index', self.current_page_index) == page_index:
             sx1, sy1, sx2, sy2 = self.view_sel_rect
             sel_dx = page_offset_x + sx1 * self.zoom_level
             sel_dy = page_offset_y + sy1 * self.zoom_level
@@ -4512,31 +4830,34 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.stroke()
             cr.restore()
 
-    def _visual_to_unrotated_page_coords(self, vis_x, vis_y):
+    def _visual_to_unrotated_page_coords(self, vis_x, vis_y, page_index=None):
         """Convert visual page coordinates to unrotated PDF cropbox coordinates."""
-        if not self.doc or not (0 <= self.current_page_index < len(self.doc)):
+        p_idx = page_index if page_index is not None else self.current_page_index
+        if not self.doc or not (0 <= p_idx < len(self.doc)):
             return vis_x, vis_y
-        page = self.doc[self.current_page_index]
+        page = self.doc[p_idx]
         if (page.rotation % 360) == 0:
             return vis_x, vis_y
         p = fitz.Point(vis_x, vis_y) * (~page.rotation_matrix)
         return p.x, p.y
 
-    def _unrotated_to_visual_page_coords(self, unrot_x, unrot_y):
+    def _unrotated_to_visual_page_coords(self, unrot_x, unrot_y, page_index=None):
         """Convert unrotated PDF cropbox coordinates to visual page coordinates."""
-        if not self.doc or not (0 <= self.current_page_index < len(self.doc)):
+        p_idx = page_index if page_index is not None else self.current_page_index
+        if not self.doc or not (0 <= p_idx < len(self.doc)):
             return unrot_x, unrot_y
-        page = self.doc[self.current_page_index]
+        page = self.doc[p_idx]
         if (page.rotation % 360) == 0:
             return unrot_x, unrot_y
         p = fitz.Point(unrot_x, unrot_y) * page.rotation_matrix
         return p.x, p.y
 
-    def _visual_to_unrotated_delta(self, dx, dy):
+    def _visual_to_unrotated_delta(self, dx, dy, page_index=None):
         """Convert a visual delta vector to an unrotated page delta vector."""
-        if not self.doc or not (0 <= self.current_page_index < len(self.doc)):
+        p_idx = page_index if page_index is not None else self.current_page_index
+        if not self.doc or not (0 <= p_idx < len(self.doc)):
             return dx, dy
-        page = self.doc[self.current_page_index]
+        page = self.doc[p_idx]
         if (page.rotation % 360) == 0:
             return dx, dy
         inv_mat = ~page.rotation_matrix
@@ -4695,12 +5016,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Compute pixel position and size for an AcroFormField on the overlay matching canvas centering."""
         if not self.doc or not (0 <= self.current_page_index < len(self.doc)):
             return 0, 0, 0, 0
-        alloc_w = self.pdf_view.get_allocated_width() if hasattr(self, 'pdf_view') and self.pdf_view else 0
-        alloc_h = self.pdf_view.get_allocated_height() if hasattr(self, 'pdf_view') and self.pdf_view else 0
-        da_w = alloc_w if alloc_w > 0 else self.current_pdf_page_width
-        da_h = alloc_h if alloc_h > 0 else self.current_pdf_page_height
-        page_offset_x = max(0.0, (da_w - self.current_pdf_page_width) / 2.0)
-        page_offset_y = max(0.0, (da_h - self.current_pdf_page_height) / 2.0)
+        field_page = getattr(field, 'page_number', self.current_page_index)
+        if hasattr(self, 'get_page_canvas_rect'):
+            page_offset_x, page_offset_y, _, _ = self.get_page_canvas_rect(field_page)
+        else:
+            alloc_w = self.pdf_view.get_allocated_width() if hasattr(self, 'pdf_view') and self.pdf_view else 0
+            alloc_h = self.pdf_view.get_allocated_height() if hasattr(self, 'pdf_view') and self.pdf_view else 0
+            da_w = alloc_w if alloc_w > 0 else getattr(self, 'current_pdf_page_width', 0)
+            da_h = alloc_h if alloc_h > 0 else getattr(self, 'current_pdf_page_height', 0)
+            page_offset_x = max(0.0, (da_w - getattr(self, 'current_pdf_page_width', 0)) / 2.0)
+            page_offset_y = max(0.0, (da_h - getattr(self, 'current_pdf_page_height', 0)) / 2.0)
 
         try:
             page = self.doc[field.page_number]
@@ -5894,14 +6219,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return None
         
         x1, y1, x2, y2 = selected_obj.bbox
-        page_offset_x = max(0, (self.pdf_view.get_allocated_width() - self.current_pdf_page_width) / 2)
-        page_offset_y = max(0, (self.pdf_view.get_allocated_height() - self.current_pdf_page_height) / 2)
+        obj_page = getattr(selected_obj, 'page_number', self.current_page_index)
+        rect = None
+        if hasattr(self, 'get_page_canvas_rect'):
+            try:
+                rect = self.get_page_canvas_rect(obj_page)
+            except Exception:
+                rect = None
+        if isinstance(rect, (tuple, list)) and len(rect) == 4:
+            page_offset_x, page_offset_y, _, _ = rect
+        else:
+            alloc_w = self.pdf_view.get_allocated_width() if hasattr(self, 'pdf_view') and hasattr(self.pdf_view, 'get_allocated_width') else getattr(self, 'current_pdf_page_width', 0)
+            alloc_h = self.pdf_view.get_allocated_height() if hasattr(self, 'pdf_view') and hasattr(self.pdf_view, 'get_allocated_height') else getattr(self, 'current_pdf_page_height', 0)
+            page_offset_x = max(0, (alloc_w - getattr(self, 'current_pdf_page_width', 0)) / 2)
+            page_offset_y = max(0, (alloc_h - getattr(self, 'current_pdf_page_height', 0)) / 2)
         
         vis_x = (drawn_x - page_offset_x) / self.zoom_level
         vis_y = (drawn_y - page_offset_y) / self.zoom_level
         unrot_x, unrot_y = vis_x, vis_y
         try:
-            coords = self._visual_to_unrotated_page_coords(vis_x, vis_y)
+            coords = self._visual_to_unrotated_page_coords(vis_x, vis_y, page_index=obj_page)
             if isinstance(coords, (tuple, list)) and len(coords) == 2:
                 unrot_x, unrot_y = coords
         except Exception:
@@ -6470,12 +6807,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._inline_editor_target_rect = target_rect
         self._inline_editor_initial_text = text_obj.text
 
-        da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
-        da_h = max(self.pdf_view.get_allocated_height(), self.current_pdf_page_height)
-        page_w = self.current_pdf_page_width
-        page_h = self.current_pdf_page_height
-        page_offset_x = max(0.0, (da_w - page_w) / 2.0)
-        page_offset_y = max(0.0, (da_h - page_h) / 2.0)
+        page_offset_x, page_offset_y, _, _ = self.get_page_canvas_rect(self.current_page_index)
 
         target_box = target_rect or getattr(text_obj, 'bbox', None)
         if target_box:
@@ -7523,13 +7855,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def _on_pointer_motion(self, controller, x, y):
         """Track last pointer position on pdf_view for focal zoom and update handle cursor."""
         self._last_pointer_pos = (x, y)
-        if getattr(self, 'view_mode', False):
-            page_offset_x = max(0, (self.pdf_view.get_allocated_width() - self.current_pdf_page_width) / 2)
-            page_offset_y = max(0, (self.pdf_view.get_allocated_height() - self.current_pdf_page_height) / 2)
-            vis_x = (x - page_offset_x) / self.zoom_level
-            vis_y = (y - page_offset_y) / self.zoom_level
-            unrot_x, unrot_y = self._visual_to_unrotated_page_coords(vis_x, vis_y)
+        target_page, vis_x, vis_y = self.canvas_to_page_coords(x, y)
+        unrot_x, unrot_y = self._visual_to_unrotated_page_coords(vis_x, vis_y, page_index=target_page)
 
+        if getattr(self, 'view_mode', False):
             if getattr(self, 'view_tool_mode', None) == "add_sticky_note":
                 self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
                 self.pdf_view.set_tooltip_text(None)
@@ -7554,11 +7883,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         modifiers = controller.get_current_event_state() if controller else 0
         ctrl_pressed = bool(modifiers & Gdk.ModifierType.CONTROL_MASK)
         if ctrl_pressed:
-            page_offset_x = max(0, (self.pdf_view.get_allocated_width() - self.current_pdf_page_width) / 2)
-            page_offset_y = max(0, (self.pdf_view.get_allocated_height() - self.current_pdf_page_height) / 2)
-            vis_x = (x - page_offset_x) / self.zoom_level
-            vis_y = (y - page_offset_y) / self.zoom_level
-            unrot_x, unrot_y = self._visual_to_unrotated_page_coords(vis_x, vis_y)
             url = self._get_link_url_at_pos(unrot_x, unrot_y)
             if url:
                 self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("pointer"))
@@ -7568,11 +7892,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.set_tooltip_text(None)
 
         if not getattr(self, 'view_mode', False) and getattr(self, 'tool_mode', None) == "measure_area" and len(getattr(self, 'temp_polygon_vertices', [])) > 0:
-            page_offset_x = max(0, (self.pdf_view.get_allocated_width() - self.current_pdf_page_width) / 2)
-            page_offset_y = max(0, (self.pdf_view.get_allocated_height() - self.current_pdf_page_height) / 2)
-            vis_x = (x - page_offset_x) / self.zoom_level
-            vis_y = (y - page_offset_y) / self.zoom_level
-            unrot_x, unrot_y = self._visual_to_unrotated_page_coords(vis_x, vis_y)
             self.last_mouse_page_pos = (unrot_x, unrot_y)
             self.pdf_view.queue_draw()
 
@@ -7597,11 +7916,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("ew-resize"))
                     return
                 elif isinstance(selected_obj, AcroFormField) and getattr(self, 'tool_mode', None) in ("form_builder", "drag", "select"):
-                    page_offset_x = max(0, (self.pdf_view.get_allocated_width() - self.current_pdf_page_width) / 2)
-                    page_offset_y = max(0, (self.pdf_view.get_allocated_height() - self.current_pdf_page_height) / 2)
-                    vis_x = (x - page_offset_x) / self.zoom_level
-                    vis_y = (y - page_offset_y) / self.zoom_level
-                    unrot_x, unrot_y = self._visual_to_unrotated_page_coords(vis_x, vis_y)
                     bx1, by1, bx2, by2 = selected_obj.bbox
                     if min(bx1, bx2) <= unrot_x <= max(bx1, bx2) and min(by1, by2) <= unrot_y <= max(by1, by2):
                         self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("grab"))
@@ -7615,10 +7929,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         text_obj = self.inline_editor_text_obj
         if not text_obj.bbox:
             return
-        da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
-        da_h = max(self.pdf_view.get_allocated_height(), self.current_pdf_page_height)
-        page_offset_x = max(0.0, (da_w - self.current_pdf_page_width) / 2.0)
-        page_offset_y = max(0.0, (da_h - self.current_pdf_page_height) / 2.0)
+        page_offset_x, page_offset_y, _, _ = self.get_page_canvas_rect(self.current_page_index)
         page = self.doc[self.current_page_index]
         target_box = getattr(self, '_inline_editor_target_rect', None) or text_obj.bbox
         vis_rect = (fitz.Rect(target_box) * page.rotation_matrix).normalize()
@@ -7692,24 +8003,36 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         # Update content dimensions
         self.current_pdf_page_width = new_page_w
         self.current_pdf_page_height = new_page_h
-        self.pdf_view.set_content_width(new_page_w)
-        self.pdf_view.set_content_height(new_page_h)
+        if self.continuous_scroll:
+            self._update_canvas_content_size()
+        else:
+            self.pdf_view.set_content_width(new_page_w)
+            self.pdf_view.set_content_height(new_page_h)
 
         # Reposition active inline editor if open
         self._update_inline_editor_position()
         self._update_form_field_overlay_positions()
 
-        # Calculate new offsets for new page size vs viewport
-        new_da_w = max(new_page_w, int(vp_w))
-        new_da_h = max(new_page_h, int(vp_h))
-        new_offset_x = max(0.0, (new_da_w - new_page_w) / 2.0)
-        new_offset_y = max(0.0, (new_da_h - new_page_h) / 2.0)
+        if self.continuous_scroll:
+            ratio = self.zoom_level / max(old_zoom, 0.001)
+            if focal_point is not None:
+                new_scroll_y = (scroll_y + focal_point[1]) * ratio - focal_point[1]
+                new_scroll_x = (scroll_x + focal_point[0]) * ratio - focal_point[0]
+            else:
+                new_scroll_y = (scroll_y + vp_h / 2.0) * ratio - (vp_h / 2.0)
+                new_scroll_x = (scroll_x + vp_w / 2.0) * ratio - (vp_w / 2.0)
+        else:
+            # Calculate new offsets for new page size vs viewport
+            new_da_w = max(new_page_w, int(vp_w))
+            new_da_h = max(new_page_h, int(vp_h))
+            new_offset_x = max(0.0, (new_da_w - new_page_w) / 2.0)
+            new_offset_y = max(0.0, (new_da_h - new_page_h) / 2.0)
 
-        new_focus_x = new_offset_x + (doc_x * self.zoom_level)
-        new_focus_y = new_offset_y + (doc_y * self.zoom_level)
+            new_focus_x = new_offset_x + (doc_x * self.zoom_level)
+            new_focus_y = new_offset_y + (doc_y * self.zoom_level)
 
-        new_scroll_x = new_focus_x - vp_x
-        new_scroll_y = new_focus_y - vp_y
+            new_scroll_x = new_focus_x - vp_x
+            new_scroll_y = new_focus_y - vp_y
 
         def _apply_scroll():
             if h_adj:
@@ -7938,13 +8261,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not self.doc or self.current_pdf_page_width == 0 or self.current_pdf_page_height == 0:
             return
 
-        drawing_area_width = self.pdf_view.get_allocated_width()
-        drawing_area_height = self.pdf_view.get_allocated_height()
-        page_offset_x = max(0, (drawing_area_width - self.current_pdf_page_width) / 2)
-        page_offset_y = max(0, (drawing_area_height - self.current_pdf_page_height) / 2)
-
-        page_x_unzoomed = (x - page_offset_x) / self.zoom_level
-        page_y_unzoomed = (y - page_offset_y) / self.zoom_level
+        target_page, page_x_unzoomed, page_y_unzoomed = self.canvas_to_page_coords(x, y)
+        is_on_page = self.is_canvas_point_on_page(x, y, target_page)
+        if is_on_page and target_page != self.current_page_index:
+            self._switch_active_page(target_page)
 
         modifiers = Gtk.EventController.get_current_event_state(gesture) if gesture is not None else 0
         ctrl_pressed = bool(modifiers & Gdk.ModifierType.CONTROL_MASK)
@@ -8013,21 +8333,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             show_error_dialog(self, _("err_fonts_scanning_msg"), _("err_fonts_scanning_title"))
             return
 
-        drawing_area_width = self.pdf_view.get_allocated_width()
-        drawing_area_height = self.pdf_view.get_allocated_height()
-
-        page_w_zoomed = self.current_pdf_page_width
-        page_h_zoomed = self.current_pdf_page_height
-
-        page_offset_x = max(0, (drawing_area_width - page_w_zoomed) / 2)
-        page_offset_y = max(0, (drawing_area_height - page_h_zoomed) / 2)
-
-        click_x_on_page_zoomed = x - page_offset_x
-        click_y_on_page_zoomed = y - page_offset_y
-
-        is_on_page = (0 <= click_x_on_page_zoomed < page_w_zoomed and
-                    0 <= click_y_on_page_zoomed < page_h_zoomed)
-        
         self.commit_pending_format_change()
         if hasattr(self, 'pdf_view') and self.pdf_view:
             self.pdf_view.grab_focus()
@@ -8043,9 +8348,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
             self._update_ui_state()
             return
-
-        page_x_unzoomed = click_x_on_page_zoomed / self.zoom_level
-        page_y_unzoomed = click_y_on_page_zoomed / self.zoom_level
 
 
         if self.tool_mode == "select":
@@ -9321,12 +9623,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not self.doc:
             return
 
-        page_w, page_h = self.current_pdf_page_width, self.current_pdf_page_height
-        page_offset_x = max(0, (self.pdf_view.get_allocated_width() - page_w) / 2)
-        page_offset_y = max(0, (self.pdf_view.get_allocated_height() - page_h) / 2)
-
-        page_x = (start_x - page_offset_x) / self.zoom_level
-        page_y = (start_y - page_offset_y) / self.zoom_level
+        target_page, page_x, page_y = self.canvas_to_page_coords(start_x, start_y)
+        self.drag_start_page_index = target_page
+        if not self.view_mode and self.is_canvas_point_on_page(start_x, start_y, target_page):
+            if target_page != self.current_page_index:
+                self._switch_active_page(target_page)
 
         if self.view_mode:
             unrot_px, unrot_py = self._visual_to_unrotated_page_coords(page_x, page_y)
@@ -9366,9 +9667,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     x1, y1, x2, y2 = selected_obj.bbox
                     unrot_cx = (x1 + x2) / 2.0
                     unrot_cy = (y1 + y2) / 2.0
-                    vis_cx, vis_cy = self._unrotated_to_visual_page_coords(unrot_cx, unrot_cy)
-                    cx = page_offset_x + vis_cx * self.zoom_level
-                    cy = page_offset_y + vis_cy * self.zoom_level
+                    vis_cx, vis_cy = self._unrotated_to_visual_page_coords(unrot_cx, unrot_cy, page_index=self.current_page_index)
+                    cx, cy = self.page_to_canvas_coords(self.current_page_index, vis_cx, vis_cy)
                     self.rotate_center = (cx, cy)
                     self.rotate_start_angle = getattr(selected_obj, 'rotation', 0.0) % 360.0
                     start_dx = start_x - cx
@@ -10708,9 +11008,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
         self.selected_sticky_note = note
 
-        page_offset_x = max(0, (self.pdf_view.get_allocated_width() - self.current_pdf_page_width) / 2)
-        page_offset_y = max(0, (self.pdf_view.get_allocated_height() - self.current_pdf_page_height) / 2)
-        vis_x, vis_y = self._unrotated_to_visual_page_coords(note.x + note.width / 2.0, note.y + note.height / 2.0)
+        p_idx = getattr(note, 'page_number', self.current_page_index)
+        page_offset_x, page_offset_y, _, _ = self.get_page_canvas_rect(p_idx)
+        vis_x, vis_y = self._unrotated_to_visual_page_coords(note.x + note.width / 2.0, note.y + note.height / 2.0, page_index=p_idx)
         screen_x = int(page_offset_x + vis_x * self.zoom_level)
         screen_y = int(page_offset_y + vis_y * self.zoom_level)
 
@@ -10822,14 +11122,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not self.doc:
             return
         
-        drawing_area_width = self.pdf_view.get_allocated_width()
-        drawing_area_height = self.pdf_view.get_allocated_height()
-        page_offset_x = max(0, (drawing_area_width - self.current_pdf_page_width) / 2)
-        page_offset_y = max(0, (drawing_area_height - self.current_pdf_page_height) / 2)
-        click_x_zoomed = x - page_offset_x
-        click_y_zoomed = y - page_offset_y
-        page_x = click_x_zoomed / self.zoom_level
-        page_y = click_y_zoomed / self.zoom_level
+        target_page, page_x, page_y = self.canvas_to_page_coords(x, y)
+        is_on_page = self.is_canvas_point_on_page(x, y, target_page)
+        if is_on_page and target_page != self.current_page_index:
+            self._switch_active_page(target_page)
         
         if self.view_mode:
             clicked_word = pdf_handler.get_word_at_pos(self.doc, self.current_page_index, (page_x, page_y))
@@ -10890,14 +11186,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
             return
         
-        drawing_area_width = self.pdf_view.get_allocated_width()
-        drawing_area_height = self.pdf_view.get_allocated_height()
-        page_offset_x = max(0, (drawing_area_width - self.current_pdf_page_width) / 2)
-        page_offset_y = max(0, (drawing_area_height - self.current_pdf_page_height) / 2)
-        click_x_zoomed = x - page_offset_x
-        click_y_zoomed = y - page_offset_y
-        page_x = click_x_zoomed / self.zoom_level
-        page_y = click_y_zoomed / self.zoom_level
+        target_page, page_x, page_y = self.canvas_to_page_coords(x, y)
+        is_on_page = self.is_canvas_point_on_page(x, y, target_page)
+        if is_on_page and target_page != self.current_page_index:
+            self._switch_active_page(target_page)
         
         modifiers = Gtk.EventController.get_current_event_state(gesture)
         ctrl_pressed = bool(modifiers & Gdk.ModifierType.CONTROL_MASK)
@@ -11845,15 +12137,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         cx = (x1 + x2) / 2.0
         cy = (y1 + y2) / 2.0
 
-        vis_cx, vis_cy = self._unrotated_to_visual_page_coords(cx, cy)
-
-        da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
-        da_h = max(self.pdf_view.get_allocated_height(), self.current_pdf_page_height)
-        page_offset_x = max(0.0, (da_w - self.current_pdf_page_width) / 2.0)
-        page_offset_y = max(0.0, (da_h - self.current_pdf_page_height) / 2.0)
-
-        target_canvas_x = page_offset_x + vis_cx * self.zoom_level
-        target_canvas_y = page_offset_y + vis_cy * self.zoom_level
+        vis_cx, vis_cy = self._unrotated_to_visual_page_coords(cx, cy, page_index=page_index)
+        target_canvas_x, target_canvas_y = self.page_to_canvas_coords(page_index, vis_cx, vis_cy)
 
         h_adj = self.pdf_scroll.get_hadjustment()
         v_adj = self.pdf_scroll.get_vadjustment()

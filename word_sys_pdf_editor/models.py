@@ -1168,6 +1168,7 @@ class DocumentSession:
     current_page_index: int = 0
     zoom_level: float = 1.0
     view_mode: bool = True
+    continuous_scroll: bool = False
     scroll_x: float = 0.0
     scroll_y: float = 0.0
 
@@ -1206,6 +1207,7 @@ class DocumentSession:
 
     # Page render caches
     page_cache: Dict[int, Any] = field(default_factory=dict)
+    page_objects_cache: Dict[int, Any] = field(default_factory=dict)
 
     # Scale calibration
     scale_calibration: Optional[ScaleCalibration] = None
@@ -1283,6 +1285,7 @@ class DocumentSession:
                 pass
             self.doc = None
         self.page_cache.clear()
+        self.page_objects_cache.clear()
         self.editable_texts.clear()
         self.editable_images.clear()
         self.editable_shapes.clear()

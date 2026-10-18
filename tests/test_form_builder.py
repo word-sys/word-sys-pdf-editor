@@ -81,6 +81,12 @@ class MockBuilderWindow:
         self._last_pointer_pos = (0, 0)
         self.status_label = Gtk.Label()
         self.font_scan_in_progress = False
+        self.page_gap = 16
+        self.continuous_page_offsets = []
+        self.continuous_total_height = 0.0
+        self.continuous_max_width = 0.0
+        self.drag_start_page_index = 0
+        self._continuous_scroll_val = False
 
     def _update_undo_redo_buttons(self):
         pass
@@ -138,6 +144,15 @@ class MockBuilderWindow:
     _create_form_field_overlays = PdfEditorWindow._create_form_field_overlays
     _clear_form_field_overlays = PdfEditorWindow._clear_form_field_overlays
     _compute_form_field_screen_geometry = PdfEditorWindow._compute_form_field_screen_geometry
+    canvas_to_page_coords = PdfEditorWindow.canvas_to_page_coords
+    get_page_canvas_rect = PdfEditorWindow.get_page_canvas_rect
+    is_canvas_point_on_page = PdfEditorWindow.is_canvas_point_on_page
+    page_to_canvas_coords = PdfEditorWindow.page_to_canvas_coords
+    _switch_active_page = PdfEditorWindow._switch_active_page
+    _recompute_continuous_layout = PdfEditorWindow._recompute_continuous_layout
+    _update_canvas_content_size = PdfEditorWindow._update_canvas_content_size
+    continuous_scroll = PdfEditorWindow.continuous_scroll
+    _page_objects_cache = PdfEditorWindow._page_objects_cache
 
 
 class TestFormBuilder(unittest.TestCase):

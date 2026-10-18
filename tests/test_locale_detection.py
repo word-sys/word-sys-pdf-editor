@@ -26,6 +26,10 @@ from word_sys_pdf_editor.welcome_view import WelcomeView
 
 
 class TestLocaleDetectionAndPersistence(unittest.TestCase):
+    @classmethod
+    def tearDownClass(cls):
+        set_language("en", restart=False)
+
     def test_normalize_lang_code(self):
         self.assertEqual(_normalize_lang_code("tr_TR.UTF-8"), "tr")
         self.assertEqual(_normalize_lang_code("de_DE@euro"), "de")
@@ -119,7 +123,7 @@ class TestLocaleDetectionAndPersistence(unittest.TestCase):
             finally:
                 i18n._CONFIG_DIR = orig_dir
                 i18n._CONFIG_FILE = orig_file
-                i18n._active_lang = orig_lang
+                set_language(orig_lang, restart=False)
 
     def test_welcome_view_pill_button_and_display_update(self):
         mock_win = MagicMock()
