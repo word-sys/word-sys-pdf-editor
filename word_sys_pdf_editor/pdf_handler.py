@@ -2976,6 +2976,22 @@ def _apply_single_object_to_page(doc, page, obj):
         if not img_bytes:
             return False, "Image bytes missing"
 
+        opacity = getattr(obj, 'opacity', 1.0)
+        if opacity < 1.0:
+            try:
+                from PIL import Image
+                im_op = Image.open(io.BytesIO(img_bytes))
+                if im_op.mode != "RGBA":
+                    im_op = im_op.convert("RGBA")
+                r_ch, g_ch, b_ch, a_ch = im_op.split()
+                a_ch = a_ch.point(lambda p: int(p * opacity))
+                im_op = Image.merge("RGBA", (r_ch, g_ch, b_ch, a_ch))
+                buf_op = io.BytesIO()
+                im_op.save(buf_op, format="PNG")
+                img_bytes = buf_op.getvalue()
+            except Exception as e:
+                print(f"Warning: image opacity adjustment failed: {e}")
+
         if rot == 0.0:
             page.insert_image(rect, stream=img_bytes, keep_proportion=False)
         elif rot % 90 == 0:
@@ -3158,11 +3174,6 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
     try:
         page = doc.load_page(page_num)
         seen_objs = set()
-        for obj in all_texts:
-            if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
-                seen_objs.add(id(obj))
-                if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
-                    _apply_single_object_to_page(doc, page, obj)
         for obj in all_images:
             if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
                 seen_objs.add(id(obj))
@@ -3179,6 +3190,11 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
                     seen_objs.add(id(obj))
                     if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
                         _apply_single_object_to_page(doc, page, obj)
+        for obj in all_texts:
+            if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+                seen_objs.add(id(obj))
+                if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
+                    _apply_single_object_to_page(doc, page, obj)
         if all_measurements:
             for obj in all_measurements:
                 if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:

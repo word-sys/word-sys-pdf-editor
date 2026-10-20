@@ -631,6 +631,77 @@ class AddObjectCommand(Command):
             pdf_handler.invalidate_page_cache(doc, page_num)
 
 
+class ReorderObjectCommand(Command):
+    """Command for changing z-index / layer ordering of canvas objects."""
+    def __init__(self, window, target_object, old_index, new_index):
+        super().__init__(window)
+        self.target_object = target_object
+        self.old_index = old_index
+        self.new_index = new_index
+
+    def _get_target_collection(self):
+        if isinstance(self.target_object, EditableText):
+            return self._get_collection('editable_texts')
+        elif isinstance(self.target_object, EditableShape):
+            return self._get_collection('editable_shapes')
+        elif isinstance(self.target_object, EditableStroke):
+            return self._get_collection('editable_strokes')
+        else:
+            return self._get_collection('editable_images')
+
+    def _refresh(self, status_msg=None):
+        doc = self._get_doc()
+        texts = self._get_collection('editable_texts')
+        shapes = self._get_collection('editable_shapes')
+        strokes = self._get_collection('editable_strokes')
+        images = self._get_collection('editable_images')
+        measurements = self._get_collection('measurements')
+        sticky_notes = self._get_collection('sticky_notes')
+
+        sess = self._get_target_session()
+        fallback_page = getattr(sess, 'current_page_index', getattr(self.window, 'current_page_index', 0))
+        page_num = getattr(self.target_object, 'page_number', fallback_page)
+        if doc is not None:
+            pdf_handler.rebuild_page(
+                doc, page_num,
+                texts,
+                shapes,
+                images,
+                all_strokes=strokes,
+                all_measurements=measurements,
+                all_sticky_notes=sticky_notes
+            )
+
+        if sess is not None:
+            sess.document_modified = True
+        self.window.document_modified = True
+
+        if self._is_session_active():
+            if hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(page_num)
+            if status_msg and hasattr(self.window, 'status_label') and self.window.status_label:
+                self.window.status_label.set_text(status_msg)
+            self.window._update_ui_state()
+            self.window.pdf_view.queue_draw()
+        elif doc is not None and page_num is not None:
+            pdf_handler.invalidate_page_cache(doc, page_num)
+
+    def execute(self):
+        col = self._get_target_collection()
+        if self.target_object in col:
+            col.remove(self.target_object)
+            insert_idx = max(0, min(len(col), self.new_index))
+            col.insert(insert_idx, self.target_object)
+            self._refresh()
+
+    def undo(self):
+        col = self._get_target_collection()
+        if self.target_object in col:
+            col.remove(self.target_object)
+            insert_idx = max(0, min(len(col), self.old_index))
+            col.insert(insert_idx, self.target_object)
+            self._refresh(_("reverted"))
+
 
 class DeleteObjectCommand(Command):
     """Command for deleting canvas objects with restoration on undo."""

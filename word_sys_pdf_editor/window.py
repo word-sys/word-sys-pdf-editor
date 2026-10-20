@@ -5,7 +5,8 @@ from .undo_manager import (
     RotatePageCommand, RotateObjectCommand, EditFormFieldCommand, AddFormFieldCommand,
     DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand,
     ReplaceImageCommand, CalibrateScaleCommand, AddMeasurementCommand, DeleteMeasurementCommand,
-    AddStickyNoteCommand, DeleteStickyNoteCommand, EditStickyNoteCommand, MoveStickyNoteCommand
+    AddStickyNoteCommand, DeleteStickyNoteCommand, EditStickyNoteCommand, MoveStickyNoteCommand,
+    ReorderObjectCommand
 )
 from .i18n import _, get_language, set_language, get_supported_languages, get_setting, set_setting
 
@@ -32,7 +33,7 @@ from .welcome_view import WelcomeView
 from .models import (
     PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke,
     DocumentSession, AcroFormField, ScaleCalibration, PRESET_SCALES, MeasurementObject,
-    StickyNoteObject
+    StickyNoteObject, PatchObject
 )
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_confirm_dialog,
@@ -2329,6 +2330,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             app.set_accels_for_action("win.go_to_page", ["<Control>g"])
             app.set_accels_for_action("win.rotate_page_cw", ["<Control><Shift>r"])
             app.set_accels_for_action("win.rotate_page_ccw", ["<Control><Shift>l"])
+            app.set_accels_for_action("win.bring_to_front", ["<Control><Shift>bracketright"])
+            app.set_accels_for_action("win.send_to_back", ["<Control><Shift>bracketleft"])
+            app.set_accels_for_action("win.bring_forward", ["<Control>bracketright"])
+            app.set_accels_for_action("win.send_backward", ["<Control>bracketleft"])
 
         action_rotate_cw = Gio.SimpleAction.new('rotate_page_cw', None)
         action_rotate_cw.connect('activate', lambda a, p: self.rotate_current_page(90))
@@ -2337,6 +2342,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_rotate_ccw = Gio.SimpleAction.new('rotate_page_ccw', None)
         action_rotate_ccw.connect('activate', lambda a, p: self.rotate_current_page(-90))
         self.add_action(action_rotate_ccw)
+
+        action_bring_front = Gio.SimpleAction.new('bring_to_front', None)
+        action_bring_front.connect('activate', lambda a, p: self.reorder_selected_object("front"))
+        self.add_action(action_bring_front)
+
+        action_send_back = Gio.SimpleAction.new('send_to_back', None)
+        action_send_back.connect('activate', lambda a, p: self.reorder_selected_object("back"))
+        self.add_action(action_send_back)
+
+        action_bring_fwd = Gio.SimpleAction.new('bring_forward', None)
+        action_bring_fwd.connect('activate', lambda a, p: self.reorder_selected_object("forward"))
+        self.add_action(action_bring_fwd)
+
+        action_send_bkwd = Gio.SimpleAction.new('send_backward', None)
+        action_send_bkwd.connect('activate', lambda a, p: self.reorder_selected_object("backward"))
+        self.add_action(action_send_bkwd)
 
     def _update_ui_state(self):
         """Update UI state."""
@@ -4271,6 +4292,48 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     cr.stroke()
             cr.restore()
             
+        for img_obj in images:
+            if getattr(img_obj, 'page_number', page_index) != page_index:
+                continue
+            if getattr(img_obj, 'is_baked', False):
+                continue
+            if img_obj is self.dragged_object:
+                continue
+            if not getattr(img_obj, 'bbox', None) or not getattr(img_obj, 'image_bytes', None):
+                continue
+            x1, y1, x2, y2 = img_obj.bbox
+            draw_w = x2 - x1
+            draw_h = y2 - y1
+            if draw_w <= 0 or draw_h <= 0:
+                continue
+            cr.save()
+            rot = getattr(img_obj, 'rotation', 0.0) % 360.0
+            if rot != 0.0:
+                cx = x1 + draw_w / 2.0
+                cy = y1 + draw_h / 2.0
+                cr.translate(cx, cy)
+                cr.rotate(math.radians(rot))
+                cr.translate(-cx, -cy)
+            try:
+                loader = GdkPixbuf.PixbufLoader.new()
+                loader.write(img_obj.image_bytes)
+                loader.close()
+                pixbuf = loader.get_pixbuf()
+                if pixbuf:
+                    cr.save()
+                    cr.translate(x1, y1)
+                    cr.scale(draw_w / pixbuf.get_width(), draw_h / pixbuf.get_height())
+                    Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0)
+                    img_opacity = getattr(img_obj, 'opacity', 1.0)
+                    if img_opacity < 1.0:
+                        cr.paint_with_alpha(img_opacity)
+                    else:
+                        cr.paint()
+                    cr.restore()
+            except Exception:
+                pass
+            cr.restore()
+
         for text_obj in texts:
             if getattr(text_obj, 'page_number', page_index) != page_index:
                 continue
@@ -4371,44 +4434,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             layout.set_attributes(attr_list)
             cr.move_to(draw_x, draw_y)
             PangoCairo.show_layout(cr, layout)
-            cr.restore()
-
-        for img_obj in images:
-            if getattr(img_obj, 'page_number', page_index) != page_index:
-                continue
-            if getattr(img_obj, 'is_baked', False):
-                continue
-            if img_obj is self.dragged_object:
-                continue
-            if not getattr(img_obj, 'bbox', None) or not getattr(img_obj, 'image_bytes', None):
-                continue
-            x1, y1, x2, y2 = img_obj.bbox
-            draw_w = x2 - x1
-            draw_h = y2 - y1
-            if draw_w <= 0 or draw_h <= 0:
-                continue
-            cr.save()
-            rot = getattr(img_obj, 'rotation', 0.0) % 360.0
-            if rot != 0.0:
-                cx = x1 + draw_w / 2.0
-                cy = y1 + draw_h / 2.0
-                cr.translate(cx, cy)
-                cr.rotate(math.radians(rot))
-                cr.translate(-cx, -cy)
-            try:
-                loader = GdkPixbuf.PixbufLoader.new()
-                loader.write(img_obj.image_bytes)
-                loader.close()
-                pixbuf = loader.get_pixbuf()
-                if pixbuf:
-                    cr.save()
-                    cr.translate(x1, y1)
-                    cr.scale(draw_w / pixbuf.get_width(), draw_h / pixbuf.get_height())
-                    Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0)
-                    cr.paint()
-                    cr.restore()
-            except Exception:
-                pass
             cr.restore()
 
         for shape in shapes:
@@ -9834,6 +9859,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         )
         is_input_focused = is_editing_entry or isinstance(focus_w, (Gtk.Editable, Gtk.TextView, Gtk.DropDown))
 
+        if ctrl and not is_input_focused:
+            shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+            if keyval in (Gdk.KEY_v, Gdk.KEY_V):
+                if getattr(self, 'last_captured_patch', None):
+                    if self.paste_clone_patch():
+                        return True
+                clipboard = self.get_clipboard()
+                def _on_paste_finished(cb, task):
+                    try:
+                        text = cb.read_text_finish(task)
+                        if text and text.strip():
+                            cx = getattr(self, 'last_mouse_page_pos', (100.0, 100.0))[0] if getattr(self, 'last_mouse_page_pos', None) else 100.0
+                            cy = getattr(self, 'last_mouse_page_pos', (100.0, 100.0))[1] if getattr(self, 'last_mouse_page_pos', None) else 100.0
+                            self._create_text_from_paste(cx, cy, text)
+                    except Exception:
+                        pass
+                clipboard.read_text_async(None, _on_paste_finished)
+                return True
+            elif keyval in (Gdk.KEY_bracketright, Gdk.KEY_braceright):
+                return self.reorder_selected_object("front" if shift else "forward")
+            elif keyval in (Gdk.KEY_bracketleft, Gdk.KEY_braceleft):
+                return self.reorder_selected_object("back" if shift else "backward")
+
         if getattr(self, 'selected_text', None) and not is_input_focused and not getattr(self, 'view_mode', False):
             if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_F2):
                 self._show_inline_editor(self.selected_text)
@@ -11308,11 +11356,67 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             "page_number": target_page,
                             "dpi": 300,
                         }
+                        patch_obj = PatchObject(
+                            bbox=(min_x, min_y, max_x, max_y),
+                            page_number=target_page,
+                            image_bytes=patch_bytes,
+                            is_new=True,
+                            opacity=1.0,
+                        )
+                        command = AddObjectCommand(self, patch_obj)
+                        command.execute()
+                        if getattr(self, 'undo_manager', None):
+                            self.undo_manager.add_command(command)
+
+                        self.selected_image = patch_obj
+                        self.selected_text = None
+                        self.selected_shape = None
+                        self.selected_stroke = None
+                        self.selected_form_field = None
+                        self.selected_measurement = None
+
+                        self.tool_mode = "select"
+                        self.document_modified = True
+                        if hasattr(self, '_refresh_thumbnail'):
+                            self._refresh_thumbnail(target_page)
                         if hasattr(self, 'status_label') and self.status_label:
-                            self.status_label.set_text(_("patch_captured_status", w, h))
+                            self.status_label.set_text(_("patch_placed_status"))
                     else:
                         if hasattr(self, 'status_label') and self.status_label:
                             self.status_label.set_text(_("patch_capture_failed"))
+                elif getattr(self, 'last_captured_patch', None) and (w < 4.0 or h < 4.0) and self.doc:
+                    target_page = getattr(self, 'drag_start_page_index', self.current_page_index)
+                    cx, cy = getattr(self, 'drag_start_page_pos', (min_x, min_y))
+                    patch_data = self.last_captured_patch
+                    orig_b = patch_data["bbox"]
+                    pw = orig_b[2] - orig_b[0]
+                    ph = orig_b[3] - orig_b[1]
+                    stamp_bbox = (cx - pw / 2.0, cy - ph / 2.0, cx + pw / 2.0, cy + ph / 2.0)
+                    patch_obj = PatchObject(
+                        bbox=stamp_bbox,
+                        page_number=target_page,
+                        image_bytes=patch_data["image_bytes"],
+                        is_new=True,
+                        opacity=1.0,
+                    )
+                    command = AddObjectCommand(self, patch_obj)
+                    command.execute()
+                    if getattr(self, 'undo_manager', None):
+                        self.undo_manager.add_command(command)
+
+                    self.selected_image = patch_obj
+                    self.selected_text = None
+                    self.selected_shape = None
+                    self.selected_stroke = None
+                    self.selected_form_field = None
+                    self.selected_measurement = None
+
+                    self.tool_mode = "select"
+                    self.document_modified = True
+                    if hasattr(self, '_refresh_thumbnail'):
+                        self._refresh_thumbnail(target_page)
+                    if hasattr(self, 'status_label') and self.status_label:
+                        self.status_label.set_text(_("patch_pasted_status"))
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
                 return
@@ -12227,6 +12331,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.show_link_popover(clicked_text, parent_widget=self.pdf_view)
             btn_link.connect("clicked", on_link_ctx)
             popover_box.append(btn_link)
+
+            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+            layer_box_t = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            btn_front_t = Gtk.Button(label=_("action_bring_to_front"))
+            btn_front_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("front")))
+            layer_box_t.append(btn_front_t)
+            btn_fwd_t = Gtk.Button(label=_("action_bring_forward"))
+            btn_fwd_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("forward")))
+            layer_box_t.append(btn_fwd_t)
+            btn_back_t = Gtk.Button(label=_("action_send_backward"))
+            btn_back_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("backward")))
+            layer_box_t.append(btn_back_t)
+            btn_bottom_t = Gtk.Button(label=_("action_send_to_back"))
+            btn_bottom_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("back")))
+            layer_box_t.append(btn_bottom_t)
+            popover_box.append(layer_box_t)
+            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
             
             btn_del = Gtk.Button(label=_("delete_confirm"))
             btn_del.add_css_class("destructive-action")
@@ -12239,6 +12360,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_shape = clicked_shape
             self.selected_text = None
             self.selected_image = None
+
+            layer_box_s = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            btn_front_s = Gtk.Button(label=_("action_bring_to_front"))
+            btn_front_s.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("front")))
+            layer_box_s.append(btn_front_s)
+            btn_fwd_s = Gtk.Button(label=_("action_bring_forward"))
+            btn_fwd_s.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("forward")))
+            layer_box_s.append(btn_fwd_s)
+            btn_back_s = Gtk.Button(label=_("action_send_backward"))
+            btn_back_s.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("backward")))
+            layer_box_s.append(btn_back_s)
+            btn_bottom_s = Gtk.Button(label=_("action_send_to_back"))
+            btn_bottom_s.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("back")))
+            layer_box_s.append(btn_bottom_s)
+            popover_box.append(layer_box_s)
+            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
             
             btn_del = Gtk.Button(label=_("menu_delete_shape"))
             btn_del.add_css_class("destructive-action")
@@ -12260,6 +12397,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_replace.connect("clicked", lambda b: self._handle_context_action("replace_image", clicked_image, x, y))
             popover_box.append(btn_replace)
 
+            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+            layer_box_i = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            btn_front_i = Gtk.Button(label=_("action_bring_to_front"))
+            btn_front_i.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("front")))
+            layer_box_i.append(btn_front_i)
+            btn_fwd_i = Gtk.Button(label=_("action_bring_forward"))
+            btn_fwd_i.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("forward")))
+            layer_box_i.append(btn_fwd_i)
+            btn_back_i = Gtk.Button(label=_("action_send_backward"))
+            btn_back_i.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("backward")))
+            layer_box_i.append(btn_back_i)
+            btn_bottom_i = Gtk.Button(label=_("action_send_to_back"))
+            btn_bottom_i.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("back")))
+            layer_box_i.append(btn_bottom_i)
+            popover_box.append(layer_box_i)
             popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
             btn_del = Gtk.Button(label=_("menu_delete_image"))
@@ -12292,6 +12444,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_paste_new = Gtk.Button(label=_("btn_paste_new"))
             btn_paste_new.connect("clicked", lambda b: self._handle_context_action("paste_new_text", (page_x, page_y), x, y))
             popover_box_empty.append(btn_paste_new)
+
+            if getattr(self, 'last_captured_patch', None):
+                btn_paste_patch = Gtk.Button(label=_("btn_paste_patch"))
+                btn_paste_patch.connect("clicked", lambda b: self._handle_context_action("paste_clone_patch", (page_x, page_y), x, y))
+                popover_box_empty.append(btn_paste_patch)
             
             if hasattr(self, 'context_popover') and self.context_popover:
                 try:
@@ -12369,6 +12526,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 except Exception:
                     pass
             clipboard.read_text_async(None, _on_paste_finished)
+        elif action == "paste_clone_patch":
+            page_x, page_y = obj
+            self.paste_clone_patch(center_pos=(page_x, page_y))
         elif action == "toggle_bold":
             if self.view_mode:
                 self._convert_view_selection_to_editable()
@@ -12909,6 +13069,134 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             
         except Exception as e:
             print(f"Error creating text from paste: {e}")
+
+    def paste_clone_patch(self, center_pos=None):
+        """Paste a copy of the last captured clone patch onto current page."""
+        if not getattr(self, 'last_captured_patch', None) or not self.doc:
+            return False
+        patch_data = self.last_captured_patch
+        orig_bbox = patch_data["bbox"]
+        pw = orig_bbox[2] - orig_bbox[0]
+        ph = orig_bbox[3] - orig_bbox[1]
+
+        page_num = self.current_page_index
+        try:
+            page = self.doc.load_page(page_num)
+            p_width, p_height = page.rect.width, page.rect.height
+        except Exception:
+            p_width, p_height = 595.0, 842.0
+
+        if center_pos:
+            cx, cy = center_pos
+        elif getattr(self, 'last_mouse_page_pos', None):
+            cx, cy = self.last_mouse_page_pos
+        elif getattr(self, '_last_pointer_pos', None):
+            try:
+                screen_x, screen_y = self._last_pointer_pos
+                p_idx, px, py = self.find_page_at_point(screen_x, screen_y)
+                if p_idx == page_num and px is not None:
+                    cx, cy = px, py
+                else:
+                    cx, cy = p_width / 2.0, p_height / 2.0
+            except Exception:
+                cx, cy = p_width / 2.0, p_height / 2.0
+        else:
+            cx, cy = p_width / 2.0, p_height / 2.0
+
+        x1 = cx - pw / 2.0
+        y1 = cy - ph / 2.0
+        x2 = cx + pw / 2.0
+        y2 = cy + ph / 2.0
+
+        if x1 < 0:
+            x2 += -x1
+            x1 = 0.0
+        if y1 < 0:
+            y2 += -y1
+            y1 = 0.0
+        if x2 > p_width:
+            shift = x2 - p_width
+            x1 = max(0.0, x1 - shift)
+            x2 = p_width
+        if y2 > p_height:
+            shift = y2 - p_height
+            y1 = max(0.0, y1 - shift)
+            y2 = p_height
+
+        new_patch = PatchObject(
+            bbox=(x1, y1, x2, y2),
+            page_number=page_num,
+            image_bytes=patch_data["image_bytes"],
+            is_new=True,
+            opacity=1.0,
+        )
+        command = AddObjectCommand(self, new_patch)
+        command.execute()
+        if getattr(self, 'undo_manager', None):
+            self.undo_manager.add_command(command)
+
+        self.selected_image = new_patch
+        self.selected_text = None
+        self.selected_shape = None
+        self.selected_stroke = None
+        self.selected_form_field = None
+        self.selected_measurement = None
+
+        self.tool_mode = "select"
+        self.document_modified = True
+        if hasattr(self, '_refresh_thumbnail'):
+            self._refresh_thumbnail(page_num)
+        if hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(_("patch_pasted_status"))
+        self._update_ui_state()
+        self.pdf_view.queue_draw()
+        return True
+
+    def reorder_selected_object(self, direction):
+        """Move selected canvas object in z-index order."""
+        selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
+                        getattr(self, 'selected_stroke', None))
+        if not selected_obj:
+            return False
+
+        if isinstance(selected_obj, EditableText):
+            col = self.editable_texts
+        elif isinstance(selected_obj, EditableShape):
+            col = self.editable_shapes
+        elif isinstance(selected_obj, EditableStroke):
+            col = getattr(self, 'editable_strokes', [])
+        else:
+            col = getattr(self, 'editable_images', [])
+
+        if selected_obj not in col or len(col) <= 1:
+            return False
+
+        old_idx = col.index(selected_obj)
+        if direction == "front":
+            new_idx = len(col) - 1
+            msg = _("status_reordered_front")
+        elif direction == "back":
+            new_idx = 0
+            msg = _("status_reordered_back")
+        elif direction == "forward":
+            new_idx = min(len(col) - 1, old_idx + 1)
+            msg = _("status_reordered_forward")
+        elif direction == "backward":
+            new_idx = max(0, old_idx - 1)
+            msg = _("status_reordered_backward")
+        else:
+            return False
+
+        if old_idx == new_idx:
+            return False
+
+        command = ReorderObjectCommand(self, selected_obj, old_idx, new_idx)
+        command.execute()
+        if getattr(self, 'undo_manager', None):
+            self.undo_manager.add_command(command)
+        if hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(msg)
+        return True
 
     def toggle_annotations_sidebar(self, visible: Optional[bool] = None):
         """Toggle or explicitly set visibility of the annotations sidebar."""

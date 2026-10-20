@@ -124,6 +124,7 @@ class MockClonePatchWindow:
         self.selected_stroke = None
         self.selected_form_field = None
         self.inline_editor_widget = None
+        self.undo_manager = MagicMock()
 
     def get_focus(self):
         return None
