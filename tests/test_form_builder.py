@@ -119,6 +119,7 @@ class MockBuilderWindow:
     _update_form_field_overlay_interactivity = PdfEditorWindow._update_form_field_overlay_interactivity
     _update_form_field_overlay_positions = PdfEditorWindow._update_form_field_overlay_positions
     _handle_resize_update = PdfEditorWindow._handle_resize_update
+    calculate_resize_geometry = PdfEditorWindow.calculate_resize_geometry
     _delete_selected_form_field = PdfEditorWindow._delete_selected_form_field
     _on_form_builder_delete_clicked = PdfEditorWindow._on_form_builder_delete_clicked
     _on_form_builder_name_changed = PdfEditorWindow._on_form_builder_name_changed

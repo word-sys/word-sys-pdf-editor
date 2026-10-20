@@ -6776,6 +6776,144 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         return None
 
+    def calculate_resize_geometry(
+        self,
+        start_bbox: Tuple[float, float, float, float],
+        handle_name: str,
+        delta_x: float,
+        delta_y: float,
+        shift_pressed: bool = False,
+        min_size: float = 10.0
+    ) -> Tuple[float, float, float, float]:
+        """Calculate transformed bounding box for corner/edge handles with proportional vs free-form rules."""
+        x1, y1, x2, y2 = float(start_bbox[0]), float(start_bbox[1]), float(start_bbox[2]), float(start_bbox[3])
+        orig_w = max(1.0, x2 - x1)
+        orig_h = max(1.0, y2 - y1)
+        aspect = orig_w / orig_h
+
+        is_corner = handle_name in ("nw", "ne", "sw", "se")
+        is_edge = handle_name in ("n", "s", "w", "e")
+
+        if not is_corner and not is_edge:
+            return (x1, y1, x2, y2)
+
+        # Corner handles preserve aspect ratio by default; Shift inverts to free-form
+        # Edge handles resize free-form along axis by default; Shift inverts to uniform scaling
+        proportional = (not shift_pressed) if is_corner else shift_pressed
+
+        if is_corner:
+            if not proportional:
+                new_x1, new_y1, new_x2, new_y2 = x1, y1, x2, y2
+                if "w" in handle_name:
+                    new_x1 = x1 + delta_x
+                if "e" in handle_name:
+                    new_x2 = x2 + delta_x
+                if "n" in handle_name:
+                    new_y1 = y1 + delta_y
+                if "s" in handle_name:
+                    new_y2 = y2 + delta_y
+
+                if new_x2 - new_x1 < min_size:
+                    if "e" in handle_name:
+                        new_x2 = new_x1 + min_size
+                    else:
+                        new_x1 = new_x2 - min_size
+                if new_y2 - new_y1 < min_size:
+                    if "s" in handle_name:
+                        new_y2 = new_y1 + min_size
+                    else:
+                        new_y1 = new_y2 - min_size
+                return (round(new_x1, 2), round(new_y1, 2), round(new_x2, 2), round(new_y2, 2))
+            else:
+                dir_x = 1.0 if "e" in handle_name else -1.0
+                dir_y = 1.0 if "s" in handle_name else -1.0
+
+                eff_dx = dir_x * delta_x
+                eff_dy = dir_y * delta_y
+
+                sx = (orig_w + eff_dx) / orig_w
+                sy = (orig_h + eff_dy) / orig_h
+
+                scale = sx if abs(sx - 1.0) >= abs(sy - 1.0) else sy
+
+                scaled_w = orig_w * scale
+                scaled_h = orig_h * scale
+
+                if scaled_w < min_size:
+                    scaled_w = min_size
+                    scaled_h = scaled_w / aspect
+                if scaled_h < min_size:
+                    scaled_h = min_size
+                    scaled_w = scaled_h * aspect
+
+                if handle_name == "se":
+                    new_x1 = x1
+                    new_y1 = y1
+                    new_x2 = x1 + scaled_w
+                    new_y2 = y1 + scaled_h
+                elif handle_name == "nw":
+                    new_x2 = x2
+                    new_y2 = y2
+                    new_x1 = x2 - scaled_w
+                    new_y1 = y2 - scaled_h
+                elif handle_name == "ne":
+                    new_x1 = x1
+                    new_y2 = y2
+                    new_x2 = x1 + scaled_w
+                    new_y1 = y2 - scaled_h
+                elif handle_name == "sw":
+                    new_x2 = x2
+                    new_y1 = y1
+                    new_x1 = x2 - scaled_w
+                    new_y2 = y1 + scaled_h
+
+                return (round(new_x1, 2), round(new_y1, 2), round(new_x2, 2), round(new_y2, 2))
+
+        else:
+            if not proportional:
+                new_x1, new_y1, new_x2, new_y2 = x1, y1, x2, y2
+                if handle_name == "e":
+                    new_x2 = max(x1 + min_size, x2 + delta_x)
+                elif handle_name == "w":
+                    new_x1 = min(x2 - min_size, x1 + delta_x)
+                elif handle_name == "s":
+                    new_y2 = max(y1 + min_size, y2 + delta_y)
+                elif handle_name == "n":
+                    new_y1 = min(y2 - min_size, y1 + delta_y)
+
+                return (round(new_x1, 2), round(new_y1, 2), round(new_x2, 2), round(new_y2, 2))
+            else:
+                if handle_name in ("e", "w"):
+                    eff_dx = delta_x if handle_name == "e" else -delta_x
+                    scaled_w = max(min_size, orig_w + eff_dx)
+                    scale = scaled_w / orig_w
+                    scaled_h = max(min_size, orig_h * scale)
+                    cy = (y1 + y2) / 2.0
+                    new_y1 = cy - scaled_h / 2.0
+                    new_y2 = cy + scaled_h / 2.0
+                    if handle_name == "e":
+                        new_x1 = x1
+                        new_x2 = x1 + scaled_w
+                    else:
+                        new_x2 = x2
+                        new_x1 = x2 - scaled_w
+                else:
+                    eff_dy = delta_y if handle_name == "s" else -delta_y
+                    scaled_h = max(min_size, orig_h + eff_dy)
+                    scale = scaled_h / orig_h
+                    scaled_w = max(min_size, orig_w * scale)
+                    cx = (x1 + x2) / 2.0
+                    new_x1 = cx - scaled_w / 2.0
+                    new_x2 = cx + scaled_w / 2.0
+                    if handle_name == "s":
+                        new_y1 = y1
+                        new_y2 = y1 + scaled_h
+                    else:
+                        new_y2 = y2
+                        new_y1 = y2 - scaled_h
+
+                return (round(new_x1, 2), round(new_y1, 2), round(new_x2, 2), round(new_y2, 2))
+
     def calculate_image_import_geometry(
         self,
         intrinsic_w: int,
@@ -10655,7 +10793,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if self.resize_handle == "rotate":
                 self._handle_rotate_update(gesture, offset_x, offset_y)
             else:
-                self._handle_resize_update(offset_x, offset_y)
+                self._handle_resize_update(offset_x, offset_y, gesture=gesture)
             return
         if self.tool_mode not in ("drag", "form_builder"):
             gesture.set_state(Gtk.EventSequenceState.DENIED)
@@ -10769,36 +10907,43 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.pdf_view.queue_draw()
 
-    def _handle_resize_update(self, offset_x, offset_y):
+    def _handle_resize_update(self, offset_x, offset_y, gesture=None):
         """Handle resize update."""
         if not self.resize_handle or not self.resize_start_bbox or not self.dragged_object:
             return
 
-        x1, y1, x2, y2 = self.resize_start_bbox
+        shift_pressed = False
+        if gesture is not None:
+            try:
+                state = gesture.get_current_event_state()
+                shift_pressed = bool(state & Gdk.ModifierType.SHIFT_MASK)
+            except Exception:
+                pass
+        if not shift_pressed and getattr(self, '_shift_pressed', False):
+            shift_pressed = True
+
         delta_x, delta_y = self._visual_to_unrotated_delta(offset_x / self.zoom_level, offset_y / self.zoom_level)
 
-        new_x1, new_y1, new_x2, new_y2 = x1, y1, x2, y2
-
-        if "w" in self.resize_handle:  # Left handles
-            new_x1 = x1 + delta_x
-        if "e" in self.resize_handle:  # Right handles
-            new_x2 = x2 + delta_x
-        if "n" in self.resize_handle:  # Top handles
-            new_y1 = y1 + delta_y
-        if "s" in self.resize_handle:  # Bottom handles
-            new_y2 = y2 + delta_y
-
-        min_size = 10
-        if new_x2 - new_x1 < min_size:
-            if "e" in self.resize_handle:
-                new_x2 = new_x1 + min_size
-            else:
-                new_x1 = new_x2 - min_size
-        if new_y2 - new_y1 < min_size:
-            if "s" in self.resize_handle:
-                new_y2 = new_y1 + min_size
-            else:
-                new_y1 = new_y2 - min_size
+        calc_geom = getattr(self, 'calculate_resize_geometry', None)
+        if calc_geom is not None:
+            new_x1, new_y1, new_x2, new_y2 = calc_geom(
+                start_bbox=self.resize_start_bbox,
+                handle_name=self.resize_handle,
+                delta_x=delta_x,
+                delta_y=delta_y,
+                shift_pressed=shift_pressed,
+                min_size=10.0
+            )
+        else:
+            new_x1, new_y1, new_x2, new_y2 = PdfEditorWindow.calculate_resize_geometry(
+                self,
+                start_bbox=self.resize_start_bbox,
+                handle_name=self.resize_handle,
+                delta_x=delta_x,
+                delta_y=delta_y,
+                shift_pressed=shift_pressed,
+                min_size=10.0
+            )
 
         if isinstance(self.dragged_object, EditableStroke):
             start_points = self.drag_begin_state.get('points', self.dragged_object.points)
