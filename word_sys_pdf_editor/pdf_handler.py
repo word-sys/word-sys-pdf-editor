@@ -1553,6 +1553,36 @@ def add_image_to_page(doc, page_number, image_path, rect):
         traceback.print_exc()
         return False, _("err_placing_image", e)
 
+def get_image_pixel_dimensions(image_bytes: bytes) -> Tuple[int, int]:
+    """Extract intrinsic pixel width and height from image bytes."""
+    if not image_bytes:
+        return 200, 200
+    try:
+        pix = fitz.Pixmap(image_bytes)
+        w, h = int(pix.width), int(pix.height)
+        pix = None
+        if w > 0 and h > 0:
+            return w, h
+    except Exception:
+        pass
+    try:
+        from gi.repository import GdkPixbuf
+        loader = GdkPixbuf.PixbufLoader()
+        loader.write(image_bytes)
+        loader.close()
+        pb = loader.get_pixbuf()
+        if pb:
+            return int(pb.get_width()), int(pb.get_height())
+    except Exception:
+        pass
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            return int(img.width), int(img.height)
+    except Exception:
+        pass
+    return 200, 200
+
 def delete_image_from_page(doc, image_obj: EditableImage):
     """Remove image drawing from page snapshot via targeted redaction."""
     if not doc or image_obj.page_number is None:

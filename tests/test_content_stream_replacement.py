@@ -198,6 +198,7 @@ class TestContentStreamReplacement(unittest.TestCase):
     @unittest.skipUnless(has_screen_display(), "Screen display not available")
     def test_single_click_selects_underlying_text_and_return_key_opens_editor(self):
         """Verify single click on underlying PDF text selects it, and Return key opens editor."""
+        self.win.font_scan_in_progress = False
         self.win.view_mode = False
         self.win.tool_mode = "select"
         self.win.selected_text = None
@@ -226,6 +227,7 @@ class TestContentStreamReplacement(unittest.TestCase):
     @unittest.skipUnless(has_screen_display(), "Screen display not available")
     def test_undo_redo_content_stream_replacement(self):
         """Verify committing an inline edit updates PDF and undo/redo cleanly reverts and reapplies."""
+        self.win.font_scan_in_progress = False
         self.win.view_mode = False
         self.win.tool_mode = "select"
 

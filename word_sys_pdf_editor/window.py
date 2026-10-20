@@ -6776,44 +6776,123 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         return None
 
-    def _handle_add_image_action(self, page_x_unzoomed, page_y_unzoomed):
-        """Handle add image action."""
+    def calculate_image_import_geometry(
+        self,
+        intrinsic_w: int,
+        intrinsic_h: int,
+        click_pos: Tuple[float, float],
+        page_bounds: Tuple[float, float],
+        margin: float = 36.0,
+        dpi_scale: float = 0.75
+    ) -> Tuple[float, float, float, float]:
+        """Calculate natural scale bounding box fitted within page margins preserving aspect ratio."""
+        if intrinsic_w <= 0 or intrinsic_h <= 0:
+            intrinsic_w, intrinsic_h = 200, 200
+
+        aspect_ratio = float(intrinsic_w) / float(intrinsic_h)
+        page_w, page_h = float(page_bounds[0]), float(page_bounds[1])
+
+        effective_margin = min(margin, page_w * 0.1, page_h * 0.1)
+        max_w = max(40.0, page_w - 2.0 * effective_margin)
+        max_h = max(40.0, page_h - 2.0 * effective_margin)
+
+        target_w = float(intrinsic_w) * dpi_scale
+        target_h = float(intrinsic_h) * dpi_scale
+
+        if target_w > max_w:
+            target_w = max_w
+            target_h = target_w / aspect_ratio
+        if target_h > max_h:
+            target_h = max_h
+            target_w = target_h * aspect_ratio
+        if target_w > max_w:
+            target_w = max_w
+            target_h = target_w / aspect_ratio
+
+        click_x, click_y = float(click_pos[0]), float(click_pos[1])
+        x0 = click_x
+        y0 = click_y
+
+        if x0 + target_w > page_w - effective_margin:
+            x0 = (page_w - effective_margin) - target_w
+        if x0 < effective_margin:
+            x0 = effective_margin
+
+        if y0 + target_h > page_h - effective_margin:
+            y0 = (page_h - effective_margin) - target_h
+        if y0 < effective_margin:
+            y0 = effective_margin
+
+        x1 = x0 + target_w
+        y1 = y0 + target_h
+
+        return (round(x0, 2), round(y0, 2), round(x1, 2), round(y1, 2))
+
+    def _handle_add_image_click(self, page_x_unzoomed: float, page_y_unzoomed: float, page_index: Optional[int] = None):
+        """Handle single-click image insertion at specified page position."""
+        target_page = page_index if page_index is not None else self.current_page_index
+        if not self.doc or not (0 <= target_page < len(self.doc)):
+            return
+
         filter_img = Gtk.FileFilter(name=_("image_filter_label"))
-        for mime in ["image/png", "image/jpeg", "image/gif", "image/bmp"]:
+        for mime in ["image/png", "image/jpeg", "image/webp", "image/bmp", "image/gif", "image/tiff"]:
             filter_img.add_mime_type(mime)
+        for pat in ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.bmp", "*.gif", "*.tiff", "*.PNG", "*.JPG", "*.JPEG"]:
+            filter_img.add_pattern(pat)
 
         def on_open_finish(file):
-            if file:
-                image_path = file.get_path()
-                try:
-                    with open(image_path, 'rb') as f:
-                        image_bytes = f.read()
+            if not file:
+                return
+            image_path = file.get_path()
+            try:
+                with open(image_path, 'rb') as f:
+                    image_bytes = f.read()
+                if not image_bytes:
+                    return
 
-                    pixbuf = GdkPixbuf.Pixbuf.new_from_file(image_path)
-                    img_w, img_h = pixbuf.get_width(), pixbuf.get_height()
+                img_w, img_h = pdf_handler.get_image_pixel_dimensions(image_bytes)
 
-                    target_w = 150.0
-                    target_h = (img_h / img_w) * target_w if img_w > 0 else 150.0
-                    unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed)
-                    rect = (unrot_x, unrot_y,
-                            unrot_x + target_w, unrot_y + target_h)
+                page = self.doc[target_page]
+                page_bounds = (float(page.rect.width), float(page.rect.height))
 
-                    new_image_obj = EditableImage(
-                        bbox=rect,
-                        page_number=self.current_page_index,
-                        xref=None,
-                        image_bytes=image_bytes,
-                        is_new=True
-                    )
+                rect = self.calculate_image_import_geometry(
+                    img_w, img_h,
+                    (page_x_unzoomed, page_y_unzoomed),
+                    page_bounds
+                )
 
-                    command = AddObjectCommand(self, new_image_obj)
-                    command.execute()
-                    self.undo_manager.add_command(command)
+                new_image_obj = EditableImage(
+                    bbox=rect,
+                    page_number=target_page,
+                    xref=None,
+                    image_bytes=image_bytes,
+                    is_new=True
+                )
 
-                except Exception as e:
-                    show_error_dialog(self, _("image_add_error", e), _("image_error_title"))
+                command = AddObjectCommand(self, new_image_obj)
+                command.execute()
+                self.undo_manager.add_command(command)
+
+                self.selected_image = new_image_obj
+                self.selected_text = None
+                self.selected_shape = None
+                self.selected_stroke = None
+                self.selected_form_field = None
+                self.selected_measurement = None
+
+                self.tool_mode = "select"
+                self.document_modified = True
+                self._refresh_thumbnail(target_page)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+            except Exception as e:
+                show_error_dialog(self, _("image_add_error", e), _("image_error_title"))
 
         show_open_file_dialog(self, _("image_select_title"), filters=[filter_img], callback=on_open_finish)
+
+    def _handle_add_image_action(self, page_x_unzoomed, page_y_unzoomed):
+        """Alias for backward compatibility."""
+        self._handle_add_image_click(page_x_unzoomed, page_y_unzoomed)
 
     def _update_text_format_controls(self, text_obj):
         """Update text format controls."""
@@ -9101,8 +9180,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._update_ui_state()
 
         elif self.tool_mode == "add_image":
-            # patched
-            pass
+            unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed, page_index=target_page)
+            self._handle_add_image_click(unrot_x, unrot_y, page_index=target_page)
+            if gesture is not None:
+                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            return
 
         elif self.tool_mode == "add_ellipse":
             # patched
@@ -10827,14 +10909,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_ui_state()
             elif self.temp_image_bbox:
                 x1, y1, x2, y2 = self.temp_image_bbox
-                if (x2 - x1) < 20 or (y2 - y1) < 20:
-                    self.temp_image_bbox = None
+                self.temp_image_bbox = None
+                drag_w = abs(x2 - x1)
+                drag_h = abs(y2 - y1)
+                min_x = min(x1, x2)
+                min_y = min(y1, y2)
+
+                if drag_w < 12 or drag_h < 12:
                     self.pdf_view.queue_draw()
+                    cx, cy = self.drag_start_page_pos if getattr(self, 'drag_start_page_pos', None) else (min_x, min_y)
+                    self._handle_add_image_click(cx, cy, page_index=self.current_page_index)
                     return
-                
+
                 filter_img = Gtk.FileFilter(name=_("image_filter_label"))
-                for mime in ["image/png", "image/jpeg", "image/gif", "image/bmp"]:
+                for mime in ["image/png", "image/jpeg", "image/webp", "image/bmp", "image/gif", "image/tiff"]:
                     filter_img.add_mime_type(mime)
+                for pat in ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.bmp", "*.gif", "*.tiff", "*.PNG", "*.JPG", "*.JPEG"]:
+                    filter_img.add_pattern(pat)
 
                 def on_image_selected(file):
                     if file:
@@ -10842,8 +10933,28 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             with open(file.get_path(), 'rb') as f:
                                 image_bytes = f.read()
 
+                            if not image_bytes:
+                                return
+
+                            img_w, img_h = pdf_handler.get_image_pixel_dimensions(image_bytes)
+                            aspect_ratio = float(img_w) / float(img_h) if img_h > 0 else 1.0
+
+                            box_w = max(1.0, float(drag_w))
+                            box_h = max(1.0, float(drag_h))
+
+                            if (box_w / box_h) > aspect_ratio:
+                                fit_h = box_h
+                                fit_w = fit_h * aspect_ratio
+                            else:
+                                fit_w = box_w
+                                fit_h = fit_w / aspect_ratio
+
+                            fx0 = min_x + (box_w - fit_w) / 2.0
+                            fy0 = min_y + (box_h - fit_h) / 2.0
+                            final_bbox = (round(fx0, 2), round(fy0, 2), round(fx0 + fit_w, 2), round(fy0 + fit_h, 2))
+
                             image_obj = EditableImage(
-                                bbox=self.temp_image_bbox,
+                                bbox=final_bbox,
                                 page_number=self.current_page_index,
                                 xref=None,
                                 image_bytes=image_bytes,
@@ -10853,16 +10964,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             self.selected_image = image_obj
                             self.selected_text = None
                             self.selected_shape = None
+                            self.selected_stroke = None
+                            self.selected_form_field = None
+                            self.selected_measurement = None
+                            self.tool_mode = "select"
+
                             command = AddObjectCommand(self, image_obj)
                             command.execute()
                             self.undo_manager.add_command(command)
                             self.document_modified = True
+                            self._refresh_thumbnail(self.current_page_index)
                             self.pdf_view.queue_draw()
                             self._update_ui_state()
                         except Exception as e:
-                            show_error_dialog(self, _("err_adding_image_dialog", e), _("err_title"))
+                            show_error_dialog(self, _("image_add_error", e), _("image_error_title"))
 
-                    self.temp_image_bbox = None
                     self.pdf_view.queue_draw()
 
                 show_open_file_dialog(
