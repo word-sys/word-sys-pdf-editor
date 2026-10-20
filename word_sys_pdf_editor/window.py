@@ -312,6 +312,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.active_stamp = self.stamp_library.get_active_stamp()
         self.temp_stamp_bbox = None
         self.temp_sig_bbox = None
+        self.temp_clone_patch_bbox = None
+        self.last_captured_patch = None
+        self.clone_patch_tool_button = None
         self.temp_form_field_rect = None
         self.form_builder_field_type = "text"
         self.form_builder_tool_button = None
@@ -1616,8 +1619,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.measure_area_tool_button = _make_tool_btn("view-grid-symbolic", _("tool_measure_area"), _("tool_measure_area_tip"), "measure_area")
         tools_grid.attach(self.measure_area_tool_button, 1, 6, 1, 1)
 
+        self.clone_patch_tool_button = _make_tool_btn("image-crop-symbolic", _("tool_clone_patch"), _("tool_clone_patch_tip"), "clone_patch")
+        tools_grid.attach(self.clone_patch_tool_button, 0, 7, 1, 1)
+
         self.signature_tool_button = _make_tool_btn("channel-secure-symbolic", _("tool_place_signature"), _("tool_place_signature_tip"), "place_signature")
-        tools_grid.attach(self.signature_tool_button, 0, 7, 2, 1)
+        tools_grid.attach(self.signature_tool_button, 1, 7, 1, 1)
 
         self.calibrate_tool_button = None
         self.stamp_menu_button = None
@@ -2409,6 +2415,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          getattr(self, 'stamp_tool_button', None),
                          getattr(self, 'measure_distance_tool_button', None),
                          getattr(self, 'measure_area_tool_button', None),
+                         getattr(self, 'clone_patch_tool_button', None),
                          getattr(self, 'signature_tool_button', None)]
         for btn in sidebar_tools:
             if btn:
@@ -2588,6 +2595,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.measure_area_tool_button.get_style_context().remove_class('active')
         if hasattr(self, 'stamp_tool_button') and self.stamp_tool_button:
             self.stamp_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'clone_patch_tool_button') and self.clone_patch_tool_button:
+            self.clone_patch_tool_button.get_style_context().remove_class('active')
         if hasattr(self, 'signature_tool_button') and self.signature_tool_button:
             self.signature_tool_button.get_style_context().remove_class('active')
 
@@ -2646,6 +2655,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif self.tool_mode == "add_stamp":
             if hasattr(self, 'stamp_tool_button') and self.stamp_tool_button:
                 self.stamp_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "clone_patch":
+            if hasattr(self, 'clone_patch_tool_button') and self.clone_patch_tool_button:
+                self.clone_patch_tool_button.get_style_context().add_class('active')
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
         elif self.tool_mode == "place_signature":
             if hasattr(self, 'signature_tool_button') and self.signature_tool_button:
@@ -4581,6 +4594,24 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.set_source_rgba(col_rgba.red, col_rgba.green, col_rgba.blue, 0.90)
             cr.set_line_width(2.0 / self.zoom_level)
             cr.set_dash([6.0 / self.zoom_level, 4.0 / self.zoom_level])
+            cr.rectangle(draw_x, draw_y, draw_w, draw_h)
+            cr.stroke()
+            cr.set_dash([])
+
+        if getattr(self, 'temp_clone_patch_bbox', None) is not None and page_index == active_create_page:
+            x1, y1, x2, y2 = self.temp_clone_patch_bbox
+            draw_x = min(x1, x2)
+            draw_y = min(y1, y2)
+            draw_w = abs(x2 - x1)
+            draw_h = abs(y2 - y1)
+
+            cr.set_source_rgba(0.12, 0.65, 0.85, 0.20)
+            cr.rectangle(draw_x, draw_y, draw_w, draw_h)
+            cr.fill()
+
+            cr.set_source_rgba(0.08, 0.55, 0.80, 0.95)
+            cr.set_line_width(2.0 / self.zoom_level)
+            cr.set_dash([4.0 / self.zoom_level, 3.0 / self.zoom_level])
             cr.rectangle(draw_x, draw_y, draw_w, draw_h)
             cr.stroke()
             cr.set_dash([])
@@ -8985,7 +9016,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if is_on_page and target_page != self.current_page_index:
             self._switch_active_page(target_page)
 
-        modifiers = Gtk.EventController.get_current_event_state(gesture) if gesture is not None else 0
+        modifiers = Gtk.EventController.get_current_event_state(gesture) if isinstance(gesture, Gtk.EventController) else 0
         ctrl_pressed = bool(modifiers & Gdk.ModifierType.CONTROL_MASK)
 
         clicked_text = self._find_text_at_pos(page_x_unzoomed, page_y_unzoomed)
@@ -9320,6 +9351,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif self.tool_mode == "add_image":
             unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed, page_index=target_page)
             self._handle_add_image_click(unrot_x, unrot_y, page_index=target_page)
+            if gesture is not None:
+                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            return
+
+        elif self.tool_mode == "clone_patch":
             if gesture is not None:
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             return
@@ -9919,8 +9955,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 Gdk.KEY_I: "add_image",
                 Gdk.KEY_m: "drag",
                 Gdk.KEY_M: "drag",
-                Gdk.KEY_c: "add_ellipse",
-                Gdk.KEY_C: "add_ellipse",
+                Gdk.KEY_c: "clone_patch",
+                Gdk.KEY_C: "clone_patch",
+                Gdk.KEY_e: "add_ellipse",
+                Gdk.KEY_E: "add_ellipse",
+                Gdk.KEY_o: "add_ellipse",
+                Gdk.KEY_O: "add_ellipse",
                 Gdk.KEY_r: "add_rectangle",
                 Gdk.KEY_R: "add_rectangle",
                 Gdk.KEY_f: "form_builder",
@@ -10505,6 +10545,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.temp_sig_bbox = (unrot_px, unrot_py, unrot_px, unrot_py)
             self.pdf_view.queue_draw()
             return
+        elif self.tool_mode == "clone_patch":
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (unrot_px, unrot_py)
+            self.temp_clone_patch_bbox = (unrot_px, unrot_py, unrot_px, unrot_py)
+            self.pdf_view.queue_draw()
+            return
         elif self.tool_mode == "form_builder":
             self._close_active_form_field_editor()
             clicked_form_field = self._find_form_field_at_pos(unrot_px, unrot_py)
@@ -10682,6 +10729,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if y2 - y1 < 10:
                     y2 = y1 + 10
                 self.temp_sig_bbox = (x1, y1, x2, y2)
+                self.pdf_view.queue_draw()
+                return
+            if getattr(self, 'temp_clone_patch_bbox', None) is not None:
+                start_x, start_y = self.drag_start_page_pos
+                current_x = start_x + delta_x
+                current_y = start_y + delta_y
+                x1 = min(start_x, current_x)
+                y1 = min(start_y, current_y)
+                x2 = max(start_x, current_x)
+                y2 = max(start_y, current_y)
+                self.temp_clone_patch_bbox = (x1, y1, x2, y2)
                 self.pdf_view.queue_draw()
                 return
             if self.temp_shape:
@@ -11217,6 +11275,41 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 )
                 self._digital_sig_dialog.connect("close-request", self._on_digital_sig_dialog_closed)
                 self._digital_sig_dialog.present()
+                return
+            elif getattr(self, 'temp_clone_patch_bbox', None) is not None:
+                x1, y1, x2, y2 = self.temp_clone_patch_bbox
+                self.temp_clone_patch_bbox = None
+                w = abs(x2 - x1)
+                h = abs(y2 - y1)
+                min_x = min(x1, x2)
+                min_y = min(y1, y2)
+                max_x = max(x1, x2)
+                max_y = max(y1, y2)
+                if w >= 4.0 and h >= 4.0 and self.doc:
+                    target_page = getattr(self, 'drag_start_page_index', self.current_page_index)
+                    patch_bytes = pdf_handler.extract_page_region_patch(
+                        self.doc,
+                        target_page,
+                        (min_x, min_y, max_x, max_y),
+                        dpi=300
+                    )
+                    if patch_bytes:
+                        self.last_captured_patch = {
+                            "image_bytes": patch_bytes,
+                            "bbox": (min_x, min_y, max_x, max_y),
+                            "page_number": target_page,
+                            "dpi": 300,
+                        }
+                        if hasattr(self, 'status_label') and self.status_label:
+                            self.status_label.set_text(_("patch_captured_status", w, h))
+                    else:
+                        if hasattr(self, 'status_label') and self.status_label:
+                            self.status_label.set_text(_("patch_capture_failed"))
+                else:
+                    if hasattr(self, 'status_label') and self.status_label:
+                        self.status_label.set_text(_("patch_capture_failed"))
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
                 return
             elif getattr(self, 'temp_form_field_rect', None) is not None:
                 x1, y1, x2, y2 = self.temp_form_field_rect

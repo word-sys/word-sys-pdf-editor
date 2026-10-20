@@ -51,8 +51,8 @@ STRINGS_FR = {   'app_subtitle': 'Éditeur PDF simple, rapide et open-source',
     'tool_add_image_tip': 'Ajouter une image (I)',
     'tool_drag': 'Déplacer (M)',
     'tool_drag_tip': 'Glisser & Déplacer des objets (M)',
-    'tool_ellipse': 'Ellipse (C)',
-    'tool_ellipse_tip': 'Ajouter une forme ellipse (C)',
+    'tool_ellipse': 'Ellipse (E)',
+    'tool_ellipse_tip': 'Ajouter une forme ellipse (E)',
     'tool_rectangle': 'Rectangle (R)',
     'tool_rectangle_tip': 'Ajouter une forme rectangle (R)',
     'tool_pen': 'Stylo (P)',
@@ -600,8 +600,8 @@ STRINGS_DE = {   'app_subtitle': 'Einfacher, schneller und quelloffener PDF-Edit
     'tool_add_image_tip': 'Bild hinzufügen (I)',
     'tool_drag': 'Verschieben (M)',
     'tool_drag_tip': 'Objekte ziehen & verschieben (M)',
-    'tool_ellipse': 'Ellipse (C)',
-    'tool_ellipse_tip': 'Ellipsenform hinzufügen (C)',
+    'tool_ellipse': 'Ellipse (E)',
+    'tool_ellipse_tip': 'Ellipsenform hinzufügen (E)',
     'tool_rectangle': 'Rechteck (R)',
     'tool_rectangle_tip': 'Rechteckform hinzufügen (R)',
     'tool_pen': 'Stift (P)',
@@ -1145,8 +1145,8 @@ STRINGS_ES = {   'app_subtitle': 'Editor de PDF simple, rápido y de código abi
     'tool_add_image_tip': 'Añadir imagen (I)',
     'tool_drag': 'Mover (M)',
     'tool_drag_tip': 'Arrastrar y mover objetos (M)',
-    'tool_ellipse': 'Elipse (C)',
-    'tool_ellipse_tip': 'Añadir forma elipse (C)',
+    'tool_ellipse': 'Elipse (E)',
+    'tool_ellipse_tip': 'Añadir forma elipse (E)',
     'tool_rectangle': 'Rectángulo (R)',
     'tool_rectangle_tip': 'Añadir forma rectángulo (R)',
     'tool_pen': 'Pluma (P)',
@@ -1688,8 +1688,8 @@ STRINGS_IT = {   'app_subtitle': 'Editor PDF semplice, veloce e open-source',
     'tool_add_image_tip': 'Aggiungi immagine (I)',
     'tool_drag': 'Sposta (M)',
     'tool_drag_tip': 'Trascina e sposta oggetti (M)',
-    'tool_ellipse': 'Ellisse (C)',
-    'tool_ellipse_tip': 'Aggiungi forma ellisse (C)',
+    'tool_ellipse': 'Ellisse (E)',
+    'tool_ellipse_tip': 'Aggiungi forma ellisse (E)',
     'tool_rectangle': 'Rettangolo (R)',
     'tool_rectangle_tip': 'Aggiungi forma rettangolo (R)',
     'tool_pen': 'Penna (P)',
@@ -2230,8 +2230,8 @@ STRINGS_RU = {   'app_subtitle': 'Простой, быстрый и свобод
     'tool_add_image_tip': 'Добавить изображение (I)',
     'tool_drag': 'Перемещение (M)',
     'tool_drag_tip': 'Перетаскивание и перемещение объектов (M)',
-    'tool_ellipse': 'Эллипс (C)',
-    'tool_ellipse_tip': 'Добавить фигуру эллипса (C)',
+    'tool_ellipse': 'Эллипс (E)',
+    'tool_ellipse_tip': 'Добавить фигуру эллипса (E)',
     'tool_rectangle': 'Прямоугольник (R)',
     'tool_rectangle_tip': 'Добавить фигуру прямоугольника (R)',
     'tool_pen': 'Перо (P)',
@@ -3644,6 +3644,11 @@ STRINGS_FR.update({
     'compress_compare_next_page': 'Page suivante',
     'compress_compare_page_info': 'Page {0} sur {1}',
     'compress_compare_save_btn': 'Enregistrer le PDF compressé…',
+    'tool_clone_patch': 'Cloner / Rustine (C)',
+    'tool_clone_patch_tip': 'Capturer une zone de page pour cloner ou corriger (C)',
+    'patch_captured_status': 'Rustine capturée ({:.0f} × {:.0f} pt)',
+    'patch_capture_failed': 'Échec de capture de la rustine (sélection trop petite ou hors limites)',
+    'guide_sc_tool_clone_patch': 'Outil Cloner / Rustine',
 })
 
 STRINGS_DE.update({
@@ -3800,6 +3805,11 @@ STRINGS_DE.update({
     'compress_compare_next_page': 'Nächste Seite',
     'compress_compare_page_info': 'Seite {0} von {1}',
     'compress_compare_save_btn': 'Komprimiertes PDF speichern…',
+    'tool_clone_patch': 'Klonen / Flicken (C)',
+    'tool_clone_patch_tip': 'Seitenbereich aufnehmen zum Klonen oder Flicken (C)',
+    'patch_captured_status': 'Klonflicken aufgenommen ({:.0f} × {:.0f} pt)',
+    'patch_capture_failed': 'Klonflicken konnte nicht aufgenommen werden (Auswahl zu klein oder außerhalb)',
+    'guide_sc_tool_clone_patch': 'Klon- / Flicken-Werkzeug',
 })
 
 STRINGS_ES.update({
@@ -3956,6 +3966,11 @@ STRINGS_ES.update({
     'compress_compare_next_page': 'Página siguiente',
     'compress_compare_page_info': 'Página {0} de {1}',
     'compress_compare_save_btn': 'Guardar PDF comprimido…',
+    'tool_clone_patch': 'Clonar / Parche (C)',
+    'tool_clone_patch_tip': 'Capturar área de página para clonar o parchear (C)',
+    'patch_captured_status': 'Parche de clonación capturado ({:.0f} × {:.0f} pt)',
+    'patch_capture_failed': 'Error al capturar parche (selección demasiado pequeña o fuera de límites)',
+    'guide_sc_tool_clone_patch': 'Herramienta Clonar / Parche',
 })
 
 STRINGS_IT.update({
@@ -4112,6 +4127,11 @@ STRINGS_IT.update({
     'compress_compare_next_page': 'Pagina successiva',
     'compress_compare_page_info': 'Pagina {0} di {1}',
     'compress_compare_save_btn': 'Salva PDF compresso…',
+    'tool_clone_patch': 'Clona / Toppa (C)',
+    'tool_clone_patch_tip': "Cattura un'area della pagina per clonare o applicare toppe (C)",
+    'patch_captured_status': 'Toppa di clonazione catturata ({:.0f} × {:.0f} pt)',
+    'patch_capture_failed': 'Impossibile catturare la toppa (selezione troppo piccola o fuori dai limiti)',
+    'guide_sc_tool_clone_patch': 'Strumento Clona / Toppa',
 })
 
 STRINGS_RU.update({
@@ -4268,6 +4288,11 @@ STRINGS_RU.update({
     'compress_compare_next_page': 'Следующая страница',
     'compress_compare_page_info': 'Страница {0} из {1}',
     'compress_compare_save_btn': 'Сохранить сжатый PDF…',
+    'tool_clone_patch': 'Клон / Заплатка (C)',
+    'tool_clone_patch_tip': 'Сделать снимок области страницы для клонирования или заплатки (C)',
+    'patch_captured_status': 'Заплатка клонирования захвачена ({:.0f} × {:.0f} pt)',
+    'patch_capture_failed': 'Не удалось захватить заплатку (выделение слишком мало или вне границ)',
+    'guide_sc_tool_clone_patch': 'Инструмент Клон / Заплатка',
 })
 
 

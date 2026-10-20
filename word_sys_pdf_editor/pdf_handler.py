@@ -4069,3 +4069,42 @@ def inspect_document_signatures(doc_or_bytes_or_path) -> List[Dict[str, Any]]:
 
 
 inspect_digital_signatures = inspect_document_signatures
+
+def extract_page_region_patch(
+    doc: fitz.Document,
+    page_number: int,
+    bbox: Tuple[float, float, float, float],
+    dpi: int = 300
+) -> Optional[bytes]:
+    """Extract a pixel-perfect PNG bitmap crop from a page region at specified DPI."""
+    if not doc or not (0 <= page_number < len(doc)):
+        return None
+    try:
+        x1, y1, x2, y2 = bbox
+        min_x, max_x = min(x1, x2), max(x1, x2)
+        min_y, max_y = min(y1, y2), max(y1, y2)
+        if (max_x - min_x) < 2.0 or (max_y - min_y) < 2.0:
+            return None
+
+        page = doc.load_page(page_number)
+        unrot_box = fitz.Rect(min_x, min_y, max_x, max_y)
+        if (page.rotation % 360) != 0:
+            vis_box = (unrot_box * page.rotation_matrix).normalize()
+        else:
+            vis_box = unrot_box
+
+        clip_rect = vis_box.intersect(page.rect)
+        if clip_rect.is_empty or not clip_rect.is_valid:
+            return None
+
+        effective_dpi = max(72, dpi)
+        pix = page.get_pixmap(clip=clip_rect, dpi=effective_dpi, annots=True)
+        if not pix or pix.width <= 0 or pix.height <= 0:
+            return None
+
+        patch_bytes = pix.tobytes("png")
+        pix = None
+        return patch_bytes
+    except Exception as e:
+        print(f"Error extracting page patch: {e}")
+        return None
