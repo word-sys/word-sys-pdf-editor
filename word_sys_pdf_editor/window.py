@@ -3154,6 +3154,166 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         return (scroll_x, scroll_y, vp_w, vp_h)
 
+    def get_object_canvas_rect(
+        self,
+        obj: Any,
+        page_index: Optional[int] = None,
+        is_visual_coords: bool = False
+    ) -> Optional[Tuple[int, int, int, int]]:
+        """Return (x, y, width, height) of an object in canvas pixel coordinates."""
+        if obj is None:
+            return None
+
+        p_idx = page_index if isinstance(page_index, int) else (
+            getattr(obj, 'page_number', None) if isinstance(getattr(obj, 'page_number', None), int) else getattr(self, 'current_page_index', 0)
+        )
+        if not isinstance(p_idx, int):
+            p_idx = 0
+
+        raw_bbox = None
+        if hasattr(obj, 'bbox') and getattr(obj, 'bbox', None) is not None:
+            raw_bbox = getattr(obj, 'bbox')
+        elif hasattr(obj, 'x') and hasattr(obj, 'width') and hasattr(obj, 'y') and hasattr(obj, 'height'):
+            try:
+                raw_bbox = (float(obj.x), float(obj.y), float(obj.x + obj.width), float(obj.y + obj.height))
+            except (TypeError, ValueError):
+                raw_bbox = None
+        elif hasattr(obj, 'rect') and getattr(obj, 'rect', None) is not None:
+            raw_bbox = getattr(obj, 'rect')
+        elif isinstance(obj, (tuple, list)) and len(obj) == 4:
+            raw_bbox = obj
+
+        if not raw_bbox or len(raw_bbox) != 4:
+            return None
+
+        try:
+            x0 = float(min(raw_bbox[0], raw_bbox[2]))
+            y0 = float(min(raw_bbox[1], raw_bbox[3]))
+            x1 = float(max(raw_bbox[0], raw_bbox[2]))
+            y1 = float(max(raw_bbox[1], raw_bbox[3]))
+        except (TypeError, ValueError):
+            return None
+
+        rot = getattr(obj, 'rotation', 0.0) % 360.0 if hasattr(obj, 'rotation') else 0.0
+        if rot != 0.0:
+            cx = (x0 + x1) / 2.0
+            cy = (y0 + y1) / 2.0
+            p1 = pdf_handler.rotate_point(x0, y0, cx, cy, rot)
+            p2 = pdf_handler.rotate_point(x1, y0, cx, cy, rot)
+            p3 = pdf_handler.rotate_point(x1, y1, cx, cy, rot)
+            p4 = pdf_handler.rotate_point(x0, y1, cx, cy, rot)
+            x0 = min(p1[0], p2[0], p3[0], p4[0])
+            y0 = min(p1[1], p2[1], p3[1], p4[1])
+            x1 = max(p1[0], p2[0], p3[0], p4[0])
+            y1 = max(p1[1], p2[1], p3[1], p4[1])
+
+        if is_visual_coords:
+            vis_r = fitz.Rect(x0, y0, x1, y1).normalize()
+        else:
+            try:
+                page = self.doc[p_idx] if self.doc and 0 <= p_idx < len(self.doc) else None
+                if page and (page.rotation % 360) != 0:
+                    vis_r = (fitz.Rect(x0, y0, x1, y1) * page.rotation_matrix).normalize()
+                else:
+                    vis_r = fitz.Rect(x0, y0, x1, y1).normalize()
+            except Exception:
+                vis_r = fitz.Rect(x0, y0, x1, y1).normalize()
+
+        page_offset_x, page_offset_y, _, _ = self.get_page_canvas_rect(p_idx)
+        zoom = float(getattr(self, 'zoom_level', 1.0))
+        cx = int(page_offset_x + vis_r.x0 * zoom)
+        cy = int(page_offset_y + vis_r.y0 * zoom)
+        cw = max(1, int(vis_r.width * zoom))
+        ch = max(1, int(vis_r.height * zoom))
+
+        return (cx, cy, cw, ch)
+
+    def calculate_smart_popover_placement(
+        self,
+        anchor_rect: Optional[Tuple[int, int, int, int]] = None,
+        click_pos: Optional[Tuple[float, float]] = None,
+        estimated_size: Tuple[int, int] = (240, 300),
+        margin: int = 8
+    ) -> Tuple[Gdk.Rectangle, Gtk.PositionType]:
+        """Compute non-obstructive pointing rectangle and Gtk.PositionType for popovers."""
+        if anchor_rect is None:
+            if click_pos is not None:
+                anchor_rect = (int(click_pos[0]), int(click_pos[1]), 1, 1)
+            else:
+                anchor_rect = (0, 0, 1, 1)
+
+        ax, ay, aw, ah = anchor_rect
+        is_point = (aw <= 1 and ah <= 1)
+
+        vp_x, vp_y, vp_w, vp_h = self.get_visible_viewport_rect()
+        vp_right = vp_x + vp_w
+        vp_bottom = vp_y + vp_h
+
+        est_w, est_h = estimated_size
+
+        space_right = vp_right - (ax + aw)
+        space_left = ax - vp_x
+        space_bottom = vp_bottom - (ay + ah)
+        space_top = ay - vp_y
+
+        if space_right >= est_w + margin:
+            chosen_pos = Gtk.PositionType.RIGHT
+        elif space_left >= est_w + margin:
+            chosen_pos = Gtk.PositionType.LEFT
+        elif space_bottom >= est_h + margin:
+            chosen_pos = Gtk.PositionType.BOTTOM
+        elif space_top >= est_h + margin:
+            chosen_pos = Gtk.PositionType.TOP
+        else:
+            scores = [
+                (space_right / max(est_w, 1), Gtk.PositionType.RIGHT),
+                (space_left / max(est_w, 1), Gtk.PositionType.LEFT),
+                (space_bottom / max(est_h, 1), Gtk.PositionType.BOTTOM),
+                (space_top / max(est_h, 1), Gtk.PositionType.TOP),
+            ]
+            chosen_pos = max(scores, key=lambda s: s[0])[1]
+
+        rect = Gdk.Rectangle()
+        if is_point:
+            rect.x = max(0, ax)
+            rect.y = max(0, ay)
+            rect.width = 1
+            rect.height = 1
+            return rect, chosen_pos
+
+        if chosen_pos in (Gtk.PositionType.RIGHT, Gtk.PositionType.LEFT):
+            rx0 = max(0, ax - margin)
+            rx1 = ax + aw + margin
+            rect.x = rx0
+            rect.width = max(1, rx1 - rx0)
+            if click_pos is not None and ah > 120:
+                cy_min = max(ay, int(click_pos[1] - 20))
+                cy_max = min(ay + ah, int(click_pos[1] + 20))
+                ry0 = max(0, cy_min)
+                ry1 = max(ry0 + 1, cy_max)
+                rect.y = ry0
+                rect.height = ry1 - ry0
+            else:
+                rect.y = max(0, ay)
+                rect.height = max(1, ah)
+        else:
+            ry0 = max(0, ay - margin)
+            ry1 = ay + ah + margin
+            rect.y = ry0
+            rect.height = max(1, ry1 - ry0)
+            if click_pos is not None and aw > 160:
+                cx_min = max(ax, int(click_pos[0] - 20))
+                cx_max = min(ax + aw, int(click_pos[0] + 20))
+                rx0 = max(0, cx_min)
+                rx1 = max(rx0 + 1, cx_max)
+                rect.x = rx0
+                rect.width = rx1 - rx0
+            else:
+                rect.x = max(0, ax)
+                rect.width = max(1, aw)
+
+        return rect, chosen_pos
+
     def get_visible_page_indices(self, prefetch_margin: Optional[float] = None) -> List[int]:
         """Return sorted list of page indices intersecting visible viewport plus prefetch buffer."""
         if not self.doc or len(self.doc) == 0:
@@ -11351,19 +11511,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_sticky_note = note
 
         p_idx = getattr(note, 'page_number', self.current_page_index)
-        page_offset_x, page_offset_y, _, _ = self.get_page_canvas_rect(p_idx)
-        vis_x, vis_y = self._unrotated_to_visual_page_coords(note.x + note.width / 2.0, note.y + note.height / 2.0, page_index=p_idx)
-        screen_x = int(page_offset_x + vis_x * self.zoom_level)
-        screen_y = int(page_offset_y + vis_y * self.zoom_level)
-
-        rect = Gdk.Rectangle()
-        rect.x = max(0, screen_x)
-        rect.y = max(0, screen_y)
-        rect.width = 1
-        rect.height = 1
+        obj_rect = self.get_object_canvas_rect(note, page_index=p_idx)
+        rect, pos = self.calculate_smart_popover_placement(obj_rect, estimated_size=(280, 260))
 
         popover = StickyNotePopover(editor_window=self, note=note)
         popover.set_pointing_to(rect)
+        popover.set_position(pos)
         popover.popup()
 
     def delete_sticky_note(self, note):
@@ -11555,12 +11708,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 btn_del.connect("clicked", lambda b: (self.context_popover.popdown() if hasattr(self, 'context_popover') else None, self._delete_sticky_note(clicked_note)))
                 popover_box.append(btn_del)
                 
+                if hasattr(self, 'context_popover') and self.context_popover:
+                    try:
+                        self.context_popover.popdown()
+                        self.context_popover.unparent()
+                    except Exception:
+                        pass
                 self.context_popover = Gtk.Popover(autohide=True, has_arrow=True)
                 self.context_popover.set_child(popover_box)
                 self.context_popover.set_parent(self.pdf_view)
-                rect = Gdk.Rectangle()
-                rect.x = int(x); rect.y = int(y); rect.width = 1; rect.height = 1
+                note_rect = self.get_object_canvas_rect(clicked_note, page_index=getattr(clicked_note, 'page_number', target_page))
+                rect, pos = self.calculate_smart_popover_placement(note_rect, click_pos=(x, y))
                 self.context_popover.set_pointing_to(rect)
+                self.context_popover.set_position(pos)
                 self.context_popover.popup()
                 return
 
@@ -11596,15 +11756,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_add_note.connect("clicked", lambda b: (self.context_popover.popdown() if hasattr(self, 'context_popover') else None, self._create_sticky_note_at(page_x, page_y)))
             popover_box.append(btn_add_note)
 
+            if hasattr(self, 'context_popover') and self.context_popover:
+                try:
+                    self.context_popover.popdown()
+                    self.context_popover.unparent()
+                except Exception:
+                    pass
             self.context_popover = Gtk.Popover(autohide=True, has_arrow=True)
             self.context_popover.set_child(popover_box)
             self.context_popover.set_parent(self.pdf_view)
-            rect = Gdk.Rectangle()
-            rect.x = int(x)
-            rect.y = int(y)
-            rect.width = 1
-            rect.height = 1
+            sel_rect = self.get_object_canvas_rect(self.view_sel_rect, page_index=self.current_page_index, is_visual_coords=True) if self.view_sel_rect else None
+            rect, pos = self.calculate_smart_popover_placement(sel_rect, click_pos=(x, y))
             self.context_popover.set_pointing_to(rect)
+            self.context_popover.set_position(pos)
             self.context_popover.popup()
             return
 
@@ -11701,9 +11865,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             def on_link_ctx(b):
                 if hasattr(self, 'context_popover') and self.context_popover:
                     self.context_popover.popdown()
-                pt_rect = Gdk.Rectangle()
-                pt_rect.x = int(x); pt_rect.y = int(y); pt_rect.width = 1; pt_rect.height = 1
-                self.show_link_popover(clicked_text, parent_widget=self.pdf_view, point_rect=pt_rect)
+                self.show_link_popover(clicked_text, parent_widget=self.pdf_view)
             btn_link.connect("clicked", on_link_ctx)
             popover_box.append(btn_link)
             
@@ -11773,34 +11935,39 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             popover_box_empty.append(btn_paste_new)
             
             if hasattr(self, 'context_popover') and self.context_popover:
-                self.context_popover.popdown()
+                try:
+                    self.context_popover.popdown()
+                    self.context_popover.unparent()
+                except Exception:
+                    pass
                 
             self.context_popover = Gtk.Popover(autohide=True, has_arrow=True)
             self.context_popover.set_child(popover_box_empty)
             self.context_popover.set_parent(self.pdf_view)
-            rect = Gdk.Rectangle()
-            rect.x = int(x)
-            rect.y = int(y)
-            rect.width = 1
-            rect.height = 1
+            rect, pos = self.calculate_smart_popover_placement(None, click_pos=(x, y))
             self.context_popover.set_pointing_to(rect)
-            self.context_popover.set_position(Gtk.PositionType.RIGHT)
+            self.context_popover.set_position(pos)
             self.context_popover.popup()
             return
             
         self._update_ui_state()
         self.pdf_view.queue_draw()
         
+        if hasattr(self, 'context_popover') and self.context_popover:
+            try:
+                self.context_popover.popdown()
+                self.context_popover.unparent()
+            except Exception:
+                pass
+
         self.context_popover = Gtk.Popover(autohide=True, has_arrow=True)
         self.context_popover.set_child(popover_box)
         self.context_popover.set_parent(self.pdf_view)
-        rect = Gdk.Rectangle()
-        rect.x = int(x)
-        rect.y = int(y)
-        rect.width = 1
-        rect.height = 1
+        clicked_obj = clicked_text or clicked_shape or clicked_image or clicked_measurement
+        obj_rect = self.get_object_canvas_rect(clicked_obj, page_index=target_page)
+        rect, pos = self.calculate_smart_popover_placement(obj_rect, click_pos=(x, y))
         self.context_popover.set_pointing_to(rect)
-        self.context_popover.set_position(Gtk.PositionType.RIGHT)
+        self.context_popover.set_position(pos)
         self.context_popover.popup()
 
     def _handle_context_action(self, action, obj, x, y):
@@ -12131,6 +12298,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         popover.set_parent(anchor)
         if point_rect:
             popover.set_pointing_to(point_rect)
+        elif text_obj and anchor == self.pdf_view:
+            obj_rect = self.get_object_canvas_rect(text_obj)
+            if obj_rect:
+                p_rect, pos = self.calculate_smart_popover_placement(obj_rect, estimated_size=(280, 200))
+                popover.set_pointing_to(p_rect)
+                popover.set_position(pos)
         self._link_popover = popover
         popover.popup()
 
