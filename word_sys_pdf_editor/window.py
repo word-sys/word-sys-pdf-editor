@@ -315,6 +315,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.temp_clone_patch_bbox = None
         self.last_captured_patch = None
         self.clone_patch_tool_button = None
+        self._image_dialog_open = False
         self.temp_form_field_rect = None
         self.form_builder_field_type = "text"
         self.form_builder_tool_button = None
@@ -7002,6 +7003,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         target_page = page_index if page_index is not None else self.current_page_index
         if not self.doc or not (0 <= target_page < len(self.doc)):
             return
+        if getattr(self, '_image_dialog_open', False) is True:
+            return
+        self._image_dialog_open = True
 
         filter_img = Gtk.FileFilter(name=_("image_filter_label"))
         for mime in ["image/png", "image/jpeg", "image/webp", "image/bmp", "image/gif", "image/tiff"]:
@@ -7010,6 +7014,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             filter_img.add_pattern(pat)
 
         def on_open_finish(file):
+            self._image_dialog_open = False
             if not file:
                 return
             image_path = file.get_path()
@@ -7055,6 +7060,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
             except Exception as e:
+                self._image_dialog_open = False
                 show_error_dialog(self, _("image_add_error", e), _("image_error_title"))
 
         show_open_file_dialog(self, _("image_select_title"), filters=[filter_img], callback=on_open_finish)
@@ -9356,9 +9362,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
 
         elif self.tool_mode == "clone_patch":
-            if gesture is not None:
-                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-            return
+            # Handled by drag controller (on_drag_begin / on_drag_update / on_drag_end)
+            pass
 
         elif self.tool_mode == "add_ellipse":
             # patched
@@ -11120,8 +11125,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
                 if drag_w < 12 or drag_h < 12:
                     self.pdf_view.queue_draw()
-                    cx, cy = self.drag_start_page_pos if getattr(self, 'drag_start_page_pos', None) else (min_x, min_y)
-                    self._handle_add_image_click(cx, cy, page_index=self.current_page_index)
+                    if getattr(self, '_image_dialog_open', False) is not True:
+                        cx, cy = self.drag_start_page_pos if getattr(self, 'drag_start_page_pos', None) else (min_x, min_y)
+                        self._handle_add_image_click(cx, cy, page_index=self.current_page_index)
                     return
 
                 filter_img = Gtk.FileFilter(name=_("image_filter_label"))
@@ -11131,6 +11137,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     filter_img.add_pattern(pat)
 
                 def on_image_selected(file):
+                    self._image_dialog_open = False
                     if file:
                         try:
                             with open(file.get_path(), 'rb') as f:
@@ -11184,6 +11191,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
                     self.pdf_view.queue_draw()
 
+                self._image_dialog_open = True
                 show_open_file_dialog(
                     self,
                     _("image_select_title"),
@@ -11305,9 +11313,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     else:
                         if hasattr(self, 'status_label') and self.status_label:
                             self.status_label.set_text(_("patch_capture_failed"))
-                else:
-                    if hasattr(self, 'status_label') and self.status_label:
-                        self.status_label.set_text(_("patch_capture_failed"))
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
                 return

@@ -242,7 +242,7 @@ class TestClonePatchWindowIntegration(unittest.TestCase):
         self.assertIsNotNone(self.win.last_captured_patch)
         self.assertEqual(self.win.last_captured_patch["page_number"], 0)
 
-    def test_on_pdf_view_pressed_claims_gesture(self):
+    def test_on_pdf_view_pressed_does_not_block_drag(self):
         import gi
         gi.require_version('Gtk', '4.0')
         from gi.repository import Gtk
@@ -254,7 +254,7 @@ class TestClonePatchWindowIntegration(unittest.TestCase):
         gesture = MagicMock()
 
         self.win.on_pdf_view_pressed(gesture, 1, 100.0, 100.0)
-        gesture.set_state.assert_called_with(Gtk.EventSequenceState.CLAIMED)
+        gesture.set_state.assert_not_called()
 
     def test_shortcuts_c_and_e(self):
         import gi
