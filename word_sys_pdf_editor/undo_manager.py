@@ -16,6 +16,8 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
     """Redact original object strictly from snapshot without affecting any other objects."""
     if getattr(target_object, 'is_new', True) or getattr(target_object, '_ghost_redacted', False):
         return
+    if getattr(target_object, 'is_patch', False):
+        return
 
     from .models import DocumentSession
     sess = session if isinstance(session, DocumentSession) else None
@@ -641,11 +643,30 @@ class AddObjectCommand(Command):
 
 class ReorderObjectCommand(Command):
     """Command for changing z-index / layer ordering of canvas objects."""
-    def __init__(self, window, target_object, old_index, new_index):
+    def __init__(self, window, target_object, old_index, new_index, z_changes=None):
         super().__init__(window)
         self.target_object = target_object
         self.old_index = old_index
         self.new_index = new_index
+        # list of (object, old_z_index, new_z_index)
+        self.z_changes = z_changes
+
+    _LIST_NAMES = ('editable_images', 'editable_shapes', 'editable_strokes', 'editable_texts')
+
+    def _apply_z(self, use_new):
+        if getattr(self, '_orig_lists', None) is None:
+            self._orig_lists = {n: list(self._get_collection(n) or []) for n in self._LIST_NAMES}
+        for obj, old_z, new_z in self.z_changes:
+            obj.z_index = new_z if use_new else old_z
+        for name in self._LIST_NAMES:
+            col = self._get_collection(name)
+            if col is None or len(col) <= 1:
+                continue
+            if use_new:
+                col[:] = pdf_handler.sort_by_layer(col)
+            else:
+                orig = self._orig_lists[name]
+                col[:] = [o for o in orig if o in col] + [o for o in col if o not in orig]
 
     def _get_target_collection(self):
         if isinstance(self.target_object, EditableText):
@@ -694,7 +715,33 @@ class ReorderObjectCommand(Command):
         elif doc is not None and page_num is not None:
             pdf_handler.invalidate_page_cache(doc, page_num)
 
+    def _lift_original_objects(self):
+        """Bake original PDF objects that must take part in layering.
+
+        The reordered object is always lifted. Any other original object that sits
+        above an already-baked object in the new order is lifted too, otherwise it
+        would stay below every baked object in the base stream.
+        """
+        ordered = [o for o, _old, _new in sorted(self.z_changes, key=lambda c: c[2])]
+        baked_seen = False
+        for obj in ordered:
+            is_orig = (not getattr(obj, 'is_new', True)
+                       and not getattr(obj, '_ghost_redacted', False)
+                       and isinstance(obj, (EditableText, EditableImage, EditableShape, EditableStroke)))
+            if is_orig and (obj is self.target_object or baked_seen):
+                page_num = getattr(obj, 'page_number', None)
+                if page_num is not None:
+                    _perform_ghost_erasure(self.window, obj, page_num, session=self._get_target_session())
+            if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False) \
+                    or not isinstance(obj, (EditableText, EditableImage, EditableShape, EditableStroke)):
+                baked_seen = True
+
     def execute(self):
+        if self.z_changes:
+            self._apply_z(True)
+            self._lift_original_objects()
+            self._refresh()
+            return
         col = self._get_target_collection()
         if self.target_object in col:
             col.remove(self.target_object)
@@ -703,6 +750,10 @@ class ReorderObjectCommand(Command):
             self._refresh()
 
     def undo(self):
+        if self.z_changes:
+            self._apply_z(False)
+            self._refresh(_("reverted"))
+            return
         col = self._get_target_collection()
         if self.target_object in col:
             col.remove(self.target_object)

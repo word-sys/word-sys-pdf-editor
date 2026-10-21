@@ -4328,6 +4328,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 continue
             if getattr(img_obj, 'is_baked', False):
                 continue
+            if getattr(img_obj, 'is_new', True) is False:
+                continue
             if img_obj is self.dragged_object:
                 continue
             if not getattr(img_obj, 'bbox', None) or not getattr(img_obj, 'image_bytes', None):
@@ -5462,6 +5464,27 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                (y1 - tolerance) <= py <= (y2 + tolerance):
                 return text_obj
         return None
+
+    def _keep_topmost_hit(self, clicked_text, clicked_image, clicked_shape):
+        """Return (text, image, shape) with only the topmost-by-layer hit kept."""
+        hits = [o for o in (clicked_text, clicked_image, clicked_shape) if o is not None]
+        if len(hits) <= 1:
+            return clicked_text, clicked_image, clicked_shape
+        page_objs = []
+        for coll in (getattr(self, 'editable_images', []), self.editable_shapes,
+                     getattr(self, 'editable_strokes', []), self.editable_texts):
+            page_objs.extend(o for o in coll
+                             if getattr(o, 'page_number', None) == self.current_page_index)
+        ordered = pdf_handler.sort_by_layer(page_objs)
+        def rank(o):
+            for i, p in enumerate(ordered):
+                if p is o:
+                    return i
+            return -1
+        top = max(hits, key=rank)
+        return (top if top is clicked_text else None,
+                top if top is clicked_image else None,
+                top if top is clicked_shape else None)
 
     def _find_image_at_pos(self, page_x, page_y):
         """Find image at pos."""
@@ -9175,6 +9198,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             clicked_text = self._find_text_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_image = self._find_image_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_shape = self._find_shape_at_pos(page_x_unzoomed, page_y_unzoomed)
+            clicked_text, clicked_image, clicked_shape = self._keep_topmost_hit(
+                clicked_text, clicked_image, clicked_shape)
             clicked_stroke = self._find_stroke_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_form_field = self._find_form_field_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_measurement = self._find_measurement_at_pos(page_x_unzoomed, page_y_unzoomed)
@@ -12372,6 +12397,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         clicked_text = self._find_text_at_pos(page_x, page_y)
         clicked_shape = self._find_shape_at_pos(page_x, page_y)
         clicked_image = self._find_image_at_pos(page_x, page_y)
+        clicked_text, clicked_image, clicked_shape = self._keep_topmost_hit(
+            clicked_text, clicked_image, clicked_shape)
         clicked_measurement = self._find_measurement_at_pos(page_x, page_y)
         
         popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -13395,33 +13422,36 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return new_text_obj
 
     def reorder_selected_object(self, direction):
-        """Move selected canvas object in z-index order."""
-        selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
-                        getattr(self, 'selected_stroke', None))
+        """Move selected canvas object in the unified per-page z-order."""
+        selected_obj = (self.selected_text or self.selected_image or self.selected_shape or
+                        getattr(self, 'selected_stroke', None) or
+                        getattr(self, 'selected_measurement', None))
         if not selected_obj:
             return False
 
-        if isinstance(selected_obj, EditableText):
-            col = self.editable_texts
-        elif isinstance(selected_obj, EditableShape):
-            col = self.editable_shapes
-        elif isinstance(selected_obj, EditableStroke):
-            col = getattr(self, 'editable_strokes', [])
-        else:
-            col = getattr(self, 'editable_images', [])
+        page_no = getattr(selected_obj, 'page_number', self.current_page_index)
+        page_objs = []
+        for coll in (getattr(self, 'editable_images', []), self.editable_shapes,
+                     getattr(self, 'editable_strokes', []), self.editable_texts,
+                     getattr(self, 'measurements', []), getattr(self, 'sticky_notes', [])):
+            for o in coll:
+                if getattr(o, 'page_number', None) == page_no and o not in page_objs:
+                    page_objs.append(o)
 
-        if selected_obj not in col or len(col) <= 1:
+        if selected_obj not in page_objs or len(page_objs) <= 1:
             return False
 
-        old_idx = col.index(selected_obj)
+        ordered = pdf_handler.sort_by_layer(page_objs)
+        old_idx = ordered.index(selected_obj)
+        last = len(ordered) - 1
         if direction == "front":
-            new_idx = len(col) - 1
+            new_idx = last
             msg = _("status_reordered_front")
         elif direction == "back":
             new_idx = 0
             msg = _("status_reordered_back")
         elif direction == "forward":
-            new_idx = min(len(col) - 1, old_idx + 1)
+            new_idx = min(last, old_idx + 1)
             msg = _("status_reordered_forward")
         elif direction == "backward":
             new_idx = max(0, old_idx - 1)
@@ -13432,7 +13462,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if old_idx == new_idx:
             return False
 
-        command = ReorderObjectCommand(self, selected_obj, old_idx, new_idx)
+        new_order = list(ordered)
+        new_order.remove(selected_obj)
+        new_order.insert(new_idx, selected_obj)
+        z_changes = [(o, getattr(o, 'z_index', None), i) for i, o in enumerate(new_order)]
+
+        command = ReorderObjectCommand(self, selected_obj, old_idx, new_idx, z_changes=z_changes)
         command.execute()
         if getattr(self, 'undo_manager', None):
             self.undo_manager.add_command(command)

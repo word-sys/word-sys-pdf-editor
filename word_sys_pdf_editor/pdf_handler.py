@@ -2716,6 +2716,13 @@ def update_form_widget_choices(
 
 _page_snapshots: dict = {}
 _page_original_links: dict = {}
+# Maps md5(snapshot content) -> {xobject resource name: xref}. Keyed by content digest
+# so it survives page re-keying of _page_snapshots.
+_snapshot_xobject_names: dict = {}
+
+def _content_digest(content: bytes) -> str:
+    import hashlib
+    return hashlib.md5(content).hexdigest()
 
 def save_page_snapshot(doc, page_num: int, force: bool = False):
     """Cache an unedited copy of a PDF page to allow cleanly erasing original objects."""
@@ -2733,6 +2740,15 @@ def save_page_snapshot(doc, page_num: int, force: bool = False):
                 content += raw
         _page_snapshots[key] = content
         _page_original_links[key] = page.get_links()
+        try:
+            names = {}
+            for img in doc.get_page_images(page_num):
+                names[img[7]] = img[0]
+            for xo in doc.get_page_xobjects(page_num):
+                names.setdefault(xo[1], xo[0])
+            _snapshot_xobject_names[_content_digest(content)] = names
+        except Exception:
+            pass
     except Exception as e:
         print(f"Warning: could not save snapshot for page {page_num}: {e}")
 
@@ -2758,7 +2774,28 @@ def restore_page_from_snapshot(doc, page_num: int) -> bool:
         else:
             xref = doc._newXref()
             doc.update_stream(xref, content)
-            
+
+        bindings = _snapshot_xobject_names.get(_content_digest(content), {})
+        if bindings:
+            current = {}
+            for img in doc.get_page_images(page_num):
+                current[img[7]] = img[0]
+            for xo in doc.get_page_xobjects(page_num):
+                current.setdefault(xo[1], xo[0])
+            for name, xobj_xref in bindings.items():
+                if current.get(name) == xobj_xref:
+                    continue
+                try:
+                    doc.xref_set_key(page.xref, f"Resources/XObject/{name}", f"{xobj_xref} 0 R")
+                except Exception:
+                    try:
+                        res = doc.xref_get_key(page.xref, "Resources")
+                        if res[0] == "xref":
+                            res_xref = int(res[1].split()[0])
+                            doc.xref_set_key(res_xref, f"XObject/{name}", f"{xobj_xref} 0 R")
+                    except Exception as bind_err:
+                        print(f"Warning: could not rebind xobject {name}: {bind_err}")
+
         original_links = _page_original_links.get(key, [])
         original_signatures = set()
         for link in original_links:
@@ -3172,6 +3209,31 @@ def _apply_single_object_to_page(doc, page, obj):
         obj.native_annot = annot
     return True, None
 
+def _default_layer_rank(obj):
+    if isinstance(obj, EditableImage):
+        return 0
+    if isinstance(obj, EditableShape):
+        return 1
+    if isinstance(obj, EditableStroke):
+        return 2
+    if isinstance(obj, EditableText):
+        return 3
+    return 4
+
+def sort_by_layer(objs):
+    """Return objects in bottom-to-top order.
+
+    Objects with an explicit z_index come first, ordered by it; objects without one
+    (never reordered, or newly added) follow in default type order, keeping list order.
+    """
+    def key(item):
+        idx, obj = item
+        z = getattr(obj, 'z_index', None)
+        if z is not None:
+            return (0, z, 0, idx)
+        return (1, 0, _default_layer_rank(obj), idx)
+    return [o for _, o in sorted(enumerate(objs), key=key)]
+
 def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
                  exclude_obj=None, all_strokes=None, all_measurements=None,
                  all_sticky_notes=None):
@@ -3181,37 +3243,21 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
     try:
         page = doc.load_page(page_num)
         seen_objs = set()
-        for obj in all_images:
-            if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
+        to_bake = []
+        groups = (
+            (all_images, True), (all_shapes, True), (all_strokes, True),
+            (all_texts, True), (all_measurements, False), (all_sticky_notes, False),
+        )
+        for coll, needs_flag in groups:
+            for obj in (coll or []):
+                if id(obj) in seen_objs or getattr(obj, 'page_number', None) != page_num or obj is exclude_obj:
+                    continue
                 seen_objs.add(id(obj))
-                if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
-                    _apply_single_object_to_page(doc, page, obj)
-        for obj in all_shapes:
-            if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
-                seen_objs.add(id(obj))
-                if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
-                    _apply_single_object_to_page(doc, page, obj)
-        if all_strokes:
-            for obj in all_strokes:
-                if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
-                    seen_objs.add(id(obj))
-                    if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
-                        _apply_single_object_to_page(doc, page, obj)
-        for obj in all_texts:
-            if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
-                seen_objs.add(id(obj))
-                if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
-                    _apply_single_object_to_page(doc, page, obj)
-        if all_measurements:
-            for obj in all_measurements:
-                if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
-                    seen_objs.add(id(obj))
-                    _apply_single_object_to_page(doc, page, obj)
-        if all_sticky_notes:
-            for obj in all_sticky_notes:
-                if id(obj) not in seen_objs and getattr(obj, 'page_number', None) == page_num and obj is not exclude_obj:
-                    seen_objs.add(id(obj))
-                    _apply_single_object_to_page(doc, page, obj)
+                if needs_flag and not (getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False)):
+                    continue
+                to_bake.append(obj)
+        for obj in sort_by_layer(to_bake):
+            _apply_single_object_to_page(doc, page, obj)
         invalidate_page_cache(doc, page_num)
         return True, None
     except Exception as e:
