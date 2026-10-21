@@ -1553,6 +1553,71 @@ class MoveStickyNoteCommand(Command):
             self.window._set_sticky_note_pos(self.note, self.old_pos[0], self.old_pos[1])
 
 
+class AddRedactionCommand(Command):
+    """Command to add a visual staged redaction mark."""
+    def __init__(self, window, mark):
+        super().__init__(window)
+        self.mark = mark
+
+    def execute(self):
+        sess = self._get_target_session()
+        try:
+            self.window._add_redaction_mark_to_session(self.mark, session=sess)
+        except TypeError:
+            self.window._add_redaction_mark_to_session(self.mark)
+
+    def undo(self):
+        sess = self._get_target_session()
+        try:
+            self.window._remove_redaction_mark_from_session(self.mark, session=sess)
+        except TypeError:
+            self.window._remove_redaction_mark_from_session(self.mark)
+
+
+class DeleteRedactionCommand(Command):
+    """Command to delete a visual staged redaction mark."""
+    def __init__(self, window, mark):
+        super().__init__(window)
+        self.mark = mark
+
+    def execute(self):
+        sess = self._get_target_session()
+        try:
+            self.window._remove_redaction_mark_from_session(self.mark, session=sess)
+        except TypeError:
+            self.window._remove_redaction_mark_from_session(self.mark)
+
+    def undo(self):
+        sess = self._get_target_session()
+        try:
+            self.window._add_redaction_mark_to_session(self.mark, session=sess)
+        except TypeError:
+            self.window._add_redaction_mark_to_session(self.mark)
+
+
+class EditRedactionCommand(Command):
+    """Command to modify a redaction mark's bounding box, fill color, or overlay text."""
+    def __init__(self, window, mark, old_state: dict, new_state: dict):
+        super().__init__(window)
+        self.mark = mark
+        self.old_state = dict(old_state)
+        self.new_state = dict(new_state)
+
+    def execute(self):
+        sess = self._get_target_session()
+        try:
+            self.window._apply_redaction_mark_state(self.mark, self.new_state, session=sess)
+        except TypeError:
+            self.window._apply_redaction_mark_state(self.mark, self.new_state)
+
+    def undo(self):
+        sess = self._get_target_session()
+        try:
+            self.window._apply_redaction_mark_state(self.mark, self.old_state, session=sess)
+        except TypeError:
+            self.window._apply_redaction_mark_state(self.mark, self.old_state)
+
+
 class FlattenCommand(Command):
     """Command to flatten annotations into page content streams with complete undo/redo support."""
     def __init__(self, window, page_indices: List[int], include_forms: bool = False):

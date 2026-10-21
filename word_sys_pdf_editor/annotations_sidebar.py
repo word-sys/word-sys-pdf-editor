@@ -22,6 +22,8 @@ from .models import (
     EditableStroke,
     AcroFormField,
     MeasurementObject,
+    StickyNoteObject,
+    RedactionMark,
 )
 
 
@@ -148,6 +150,7 @@ class AnnotationsSidebar(Gtk.Box):
     CATEGORY_FORMS = "forms"
     CATEGORY_MEASUREMENTS = "measurements"
     CATEGORY_NOTES = "notes"
+    CATEGORY_REDACTIONS = "redactions"
 
     def __init__(self, editor_window=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -217,6 +220,7 @@ class AnnotationsSidebar(Gtk.Box):
             _("filter_forms"),
             _("filter_measurements"),
             _("filter_notes"),
+            _("category_redactions"),
         ]
         self.category_keys = [
             self.CATEGORY_ALL,
@@ -228,6 +232,7 @@ class AnnotationsSidebar(Gtk.Box):
             self.CATEGORY_FORMS,
             self.CATEGORY_MEASUREMENTS,
             self.CATEGORY_NOTES,
+            self.CATEGORY_REDACTIONS,
         ]
         self.category_dropdown = Gtk.DropDown.new_from_strings(categories)
         self.category_dropdown.connect("notify::selected", self._on_category_changed)
@@ -580,6 +585,29 @@ class AnnotationsSidebar(Gtk.Box):
                             icon_name="dialog-information-symbolic",
                             target_obj=note,
                             bbox=note.bbox,
+                        )
+                    )
+
+            # 8. Session Redaction Marks (Pending Staged Redactions)
+            if session and hasattr(session, "redaction_marks"):
+                page_redacts = session.redaction_marks.get(p, [])
+                for mark in page_redacts:
+                    otext = (mark.overlay_text or "").strip()
+                    title = f"Redact: {otext}" if otext else _("redaction_mark")
+                    bx = mark.bbox
+                    w, h = abs(bx[2] - bx[0]), abs(bx[3] - bx[1])
+                    sub = f"{int(w)}×{int(h)} pt • {'White' if mark.fill_color == (1.0, 1.0, 1.0) else 'Black'}"
+                    items.append(
+                        AnnotationListItem(
+                            item_id=f"redact_{p}_{mark.id}",
+                            item_type="redaction_mark",
+                            category=self.CATEGORY_REDACTIONS,
+                            title=title,
+                            subtitle=sub,
+                            page_number=p,
+                            icon_name="edit-clear-symbolic",
+                            target_obj=mark,
+                            bbox=mark.bbox,
                         )
                     )
 

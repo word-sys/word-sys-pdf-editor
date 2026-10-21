@@ -4177,3 +4177,31 @@ def extract_page_region_patch(
     except Exception as e:
         print(f"Error extracting page patch: {e}")
         return None
+
+
+def apply_redaction_marks(doc, redaction_marks_dict):
+    """Permanently burn staged redaction marks into the PyMuPDF document."""
+    if not doc or not redaction_marks_dict:
+        return False
+    applied = False
+    try:
+        for page_num, marks in list(redaction_marks_dict.items()):
+            if page_num < 0 or page_num >= len(doc) or not marks:
+                continue
+            page = doc[page_num]
+            for mark in marks:
+                rect = fitz.Rect(mark.bbox)
+                page.add_redact_annot(
+                    rect,
+                    text=getattr(mark, 'overlay_text', None) or "",
+                    fill=getattr(mark, 'fill_color', (0, 0, 0)),
+                    text_color=getattr(mark, 'text_color', (1, 1, 1)),
+                    fontsize=getattr(mark, 'font_size', 11.0),
+                    align=fitz.TEXT_ALIGN_CENTER,
+                )
+            page.apply_redactions()
+            applied = True
+        return applied
+    except Exception as e:
+        print(f"Error applying redaction marks: {e}")
+        return False

@@ -33,7 +33,7 @@ from .welcome_view import WelcomeView
 from .models import (
     PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke,
     DocumentSession, AcroFormField, ScaleCalibration, PRESET_SCALES, MeasurementObject,
-    StickyNoteObject, PatchObject
+    StickyNoteObject, PatchObject, RedactionMark
 )
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_confirm_dialog,
@@ -233,6 +233,165 @@ class StickyNotePopover(Gtk.Popover):
             self.on_close_callback()
 
 
+class RedactionInspectorPopover(Gtk.Popover):
+    """Floating inspector popover for editing staged redaction mark properties."""
+    PRESET_CODES = [
+        "[REDACTED]",
+        "CONFIDENTIAL",
+        "FOIA Exemption (b)(4)",
+        "FOIA Exemption (b)(6)",
+        "FOIA Exemption (b)(7)(C)",
+        "PRIVILEGED & CONFIDENTIAL",
+        "",
+    ]
+
+    def __init__(self, editor_window, mark, on_close_callback=None):
+        super().__init__(autohide=True, has_arrow=True)
+        self.editor_window = editor_window
+        self.mark = mark
+        self.on_close_callback = on_close_callback
+        self.set_parent(editor_window.pdf_view)
+
+        self.initial_state = {
+            "bbox": mark.bbox,
+            "fill_color": mark.fill_color,
+            "overlay_text": mark.overlay_text,
+            "text_color": mark.text_color,
+            "font_size": mark.font_size,
+        }
+        self.is_committing = False
+
+        self._build_ui()
+        self.connect("closed", self._on_popover_closed)
+
+    def _build_ui(self):
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        main_box.set_margin_top(8)
+        main_box.set_margin_bottom(8)
+        main_box.set_margin_start(8)
+        main_box.set_margin_end(8)
+        main_box.set_size_request(280, -1)
+
+        # Header: Title & Delete / Close
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        title_lbl = Gtk.Label(label=_("redaction_mark_title"))
+        title_lbl.add_css_class("heading")
+        header_box.append(title_lbl)
+
+        spacer = Gtk.Box(hexpand=True)
+        header_box.append(spacer)
+
+        del_btn = Gtk.Button.new_from_icon_name("user-trash-symbolic")
+        del_btn.add_css_class("flat")
+        del_btn.add_css_class("destructive-action")
+        del_btn.set_tooltip_text(_("redaction_btn_delete"))
+        del_btn.connect("clicked", self._on_delete_clicked)
+        header_box.append(del_btn)
+
+        close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
+        close_btn.add_css_class("flat")
+        close_btn.connect("clicked", lambda b: self.popdown())
+        header_box.append(close_btn)
+
+        main_box.append(header_box)
+        main_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # Fill Color Row: Black vs White
+        fill_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        fill_lbl = Gtk.Label(label=_("redaction_fill_color"), xalign=0.0, hexpand=True)
+        fill_box.append(fill_lbl)
+
+        btn_black = Gtk.Button(label=_("color_black"))
+        btn_black.add_css_class("flat")
+        btn_white = Gtk.Button(label=_("color_white"))
+        btn_white.add_css_class("flat")
+
+        is_white = (getattr(self.mark, 'fill_color', (0.0, 0.0, 0.0)) == (1.0, 1.0, 1.0))
+        if is_white:
+            btn_white.add_css_class("suggested-action")
+        else:
+            btn_black.add_css_class("suggested-action")
+
+        def set_fill(color):
+            self.mark.fill_color = color
+            if color == (0.0, 0.0, 0.0):
+                self.mark.text_color = (1.0, 1.0, 1.0)
+                btn_black.add_css_class("suggested-action")
+                btn_white.remove_css_class("suggested-action")
+            else:
+                self.mark.text_color = (0.0, 0.0, 0.0)
+                btn_white.add_css_class("suggested-action")
+                btn_black.remove_css_class("suggested-action")
+            self.editor_window.pdf_view.queue_draw()
+
+        btn_black.connect("clicked", lambda b: set_fill((0.0, 0.0, 0.0)))
+        btn_white.connect("clicked", lambda b: set_fill((1.0, 1.0, 1.0)))
+        fill_box.append(btn_black)
+        fill_box.append(btn_white)
+        main_box.append(fill_box)
+
+        # Overlay Text Row
+        text_lbl = Gtk.Label(label=_("redaction_overlay_text"), xalign=0.0)
+        main_box.append(text_lbl)
+
+        self.text_entry = Gtk.Entry()
+        self.text_entry.set_text(self.mark.overlay_text or "")
+        def on_text_changed(entry):
+            self.mark.overlay_text = entry.get_text()
+            self.editor_window.pdf_view.queue_draw()
+        self.text_entry.connect("changed", on_text_changed)
+        main_box.append(self.text_entry)
+
+        # Quick Presets Dropdown
+        preset_strings = [
+            _("redaction_mark") + " ([REDACTED])",
+            "CONFIDENTIAL",
+            "FOIA Exemption (b)(4)",
+            "FOIA Exemption (b)(6)",
+            "FOIA Exemption (b)(7)(C)",
+            "PRIVILEGED & CONFIDENTIAL",
+            "[None] (Solid)",
+        ]
+        self.preset_dropdown = Gtk.DropDown.new_from_strings(preset_strings)
+        def on_preset_selected(dd, param):
+            idx = dd.get_selected()
+            if 0 <= idx < len(self.PRESET_CODES):
+                code = self.PRESET_CODES[idx]
+                self.text_entry.set_text(code)
+                self.mark.overlay_text = code
+                self.editor_window.pdf_view.queue_draw()
+        self.preset_dropdown.connect("notify::selected", on_preset_selected)
+        main_box.append(self.preset_dropdown)
+
+        self.set_child(main_box)
+
+    def _on_delete_clicked(self, btn):
+        self.is_committing = True
+        self.popdown()
+        if self.editor_window:
+            self.editor_window.delete_redaction_mark(self.mark)
+
+    def _on_popover_closed(self, popover):
+        if not self.is_committing and self.editor_window:
+            current_state = {
+                "bbox": self.mark.bbox,
+                "fill_color": self.mark.fill_color,
+                "overlay_text": self.mark.overlay_text,
+                "text_color": self.mark.text_color,
+                "font_size": self.mark.font_size,
+            }
+            if current_state != self.initial_state:
+                from .undo_manager import EditRedactionCommand
+                cmd = EditRedactionCommand(self.editor_window, self.mark, self.initial_state, current_state)
+                if self.editor_window.undo_manager:
+                    self.editor_window.undo_manager.record(cmd)
+                self.editor_window.document_modified = True
+                if hasattr(self.editor_window, "annotations_sidebar"):
+                    self.editor_window.annotations_sidebar.refresh()
+        if self.on_close_callback:
+            self.on_close_callback()
+
+
 class PdfEditorWindow(Adw.ApplicationWindow):
     """Main application window providing PDF viewing, editing, annotation, and exporting capabilities."""
     _active_session = None
@@ -316,6 +475,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.temp_clone_patch_bbox = None
         self.last_captured_patch = None
         self.clone_patch_tool_button = None
+        self.temp_redact_bbox = None
+        self.selected_redaction_mark = None
+        self.redact_tool_button = None
         self._image_dialog_open = False
         self.temp_form_field_rect = None
         self.form_builder_field_type = "text"
@@ -1627,6 +1789,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.signature_tool_button = _make_tool_btn("channel-secure-symbolic", _("tool_place_signature"), _("tool_place_signature_tip"), "place_signature")
         tools_grid.attach(self.signature_tool_button, 1, 7, 1, 1)
 
+        self.redact_tool_button = _make_tool_btn("edit-clear-symbolic", _("tool_redact"), _("tool_redact_tip"), "redact")
+        tools_grid.attach(self.redact_tool_button, 0, 8, 2, 1)
+
         self.calibrate_tool_button = None
         self.stamp_menu_button = None
         
@@ -2438,7 +2603,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          getattr(self, 'measure_distance_tool_button', None),
                          getattr(self, 'measure_area_tool_button', None),
                          getattr(self, 'clone_patch_tool_button', None),
-                         getattr(self, 'signature_tool_button', None)]
+                         getattr(self, 'signature_tool_button', None),
+                         getattr(self, 'redact_tool_button', None)]
         for btn in sidebar_tools:
             if btn:
                 btn.set_sensitive(in_edit and has_doc)
@@ -2621,6 +2787,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.clone_patch_tool_button.get_style_context().remove_class('active')
         if hasattr(self, 'signature_tool_button') and self.signature_tool_button:
             self.signature_tool_button.get_style_context().remove_class('active')
+        if hasattr(self, 'redact_tool_button') and self.redact_tool_button:
+            self.redact_tool_button.get_style_context().remove_class('active')
 
         if self.view_mode:
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
@@ -2685,6 +2853,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif self.tool_mode == "place_signature":
             if hasattr(self, 'signature_tool_button') and self.signature_tool_button:
                 self.signature_tool_button.get_style_context().add_class('active')
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == "redact":
+            if hasattr(self, 'redact_tool_button') and self.redact_tool_button:
+                self.redact_tool_button.get_style_context().add_class('active')
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
 
         if has_doc:
@@ -4003,6 +4175,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if all_meas_dicts:
                 pdf_handler.embed_measurements(self.doc, all_meas_dicts)
             pdf_handler.sync_sticky_notes(self.doc, getattr(self._active_session, 'sticky_notes', {}))
+            if getattr(self._active_session, 'redaction_marks', None):
+                pdf_handler.apply_redaction_marks(self.doc, self._active_session.redaction_marks)
+                self._active_session.redaction_marks.clear()
             if hasattr(self._active_session, 'pdf_password'):
                 self.doc._pdf_password = self._active_session.pdf_password
             if hasattr(self._active_session, 'pdf_owner_password'):
@@ -4675,6 +4850,32 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.stroke()
             cr.set_dash([])
 
+        if getattr(self, 'temp_redact_bbox', None) is not None and page_index == active_create_page:
+            x1, y1, x2, y2 = self.temp_redact_bbox
+            draw_x = min(x1, x2)
+            draw_y = min(y1, y2)
+            draw_w = abs(x2 - x1)
+            draw_h = abs(y2 - y1)
+
+            cr.set_source_rgba(0.90, 0.15, 0.15, 0.22)
+            cr.rectangle(draw_x, draw_y, draw_w, draw_h)
+            cr.fill()
+
+            cr.set_source_rgba(0.85, 0.15, 0.15, 0.95)
+            cr.set_line_width(2.0 / self.zoom_level)
+            cr.set_dash([4.0 / self.zoom_level, 3.0 / self.zoom_level])
+            cr.rectangle(draw_x, draw_y, draw_w, draw_h)
+            cr.stroke()
+            cr.set_dash([])
+
+            cr.save()
+            font_sz = max(min(11.0 / self.zoom_level, max(draw_h * 0.6, 6.0)), 7.0)
+            cr.set_font_size(font_sz)
+            cr.set_source_rgba(0.85, 0.15, 0.15, 0.95)
+            cr.move_to(draw_x + 4.0 / self.zoom_level, draw_y + min(font_sz + 2.0 / self.zoom_level, max(draw_h - 2.0, 8.0)))
+            cr.show_text("[REDACTION MARK]")
+            cr.restore()
+
         if getattr(self, 'temp_form_field_rect', None) is not None and page_index == active_create_page:
             x1, y1, x2, y2 = self.temp_form_field_rect
             draw_x = x1
@@ -4803,7 +5004,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
                         self.selected_stroke or getattr(self, 'selected_form_field', None) or
-                        getattr(self, 'selected_measurement', None))
+                        getattr(self, 'selected_measurement', None) or
+                        getattr(self, 'selected_redaction_mark', None))
         if page_index == self.current_page_index and selected_obj and not self.dragged_object and not (
             isinstance(selected_obj, AcroFormField) and getattr(self, '_active_editing_form_field', None) == selected_obj
         ) and not (self.inline_editor_widget is not None and selected_obj == getattr(self, 'inline_editor_text_obj', None)):
@@ -5212,6 +5414,76 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     cr.move_to(l_x, cy + 5.5)
                     cr.line_to(l_x + l_w * 0.65, cy + 5.5)
                     cr.stroke()
+
+                cr.restore()
+
+        # Draw persistent visual redaction marks
+        if self._active_session:
+            page_redacts = self._active_session.redaction_marks.get(page_index, [])
+            for mark in page_redacts:
+                if getattr(mark, 'is_applied', False):
+                    continue
+                x0, y0, x1, y1 = mark.bbox
+                rw = abs(x1 - x0)
+                rh = abs(y1 - y0)
+                if rw <= 0 or rh <= 0:
+                    continue
+
+                min_x = min(x0, x1)
+                min_y = min(y0, y1)
+
+                cr.save()
+                # 1. Fill preview (semi-transparent representation of target fill color)
+                fc = getattr(mark, 'fill_color', (0.0, 0.0, 0.0))
+                fill_alpha = 0.75 if fc == (0.0, 0.0, 0.0) else 0.85
+                cr.set_source_rgba(fc[0], fc[1], fc[2], fill_alpha)
+                cr.rectangle(min_x, min_y, rw, rh)
+                cr.fill()
+
+                # 2. Hazard diagonal warning hatch stripes (45 degrees) in red tint
+                cr.save()
+                cr.rectangle(min_x, min_y, rw, rh)
+                cr.clip()
+                cr.set_source_rgba(0.85, 0.15, 0.15, 0.32)
+                cr.set_line_width(1.5 / self.zoom_level)
+                diag_step = max(12.0 / self.zoom_level, 6.0)
+                diag_start = min_x - rh
+                diag_end = min_x + rw + rh
+                d = diag_start
+                while d <= diag_end:
+                    cr.move_to(d, min_y)
+                    cr.line_to(d + rh, min_y + rh)
+                    d += diag_step
+                cr.stroke()
+                cr.restore()
+
+                # 3. Solid red outline
+                bc = getattr(mark, 'border_color', (0.85, 0.15, 0.15, 0.95))
+                cr.set_source_rgba(bc[0], bc[1], bc[2], bc[3] if len(bc) > 3 else 0.95)
+                cr.set_line_width(1.5 / self.zoom_level)
+                cr.rectangle(min_x, min_y, rw, rh)
+                cr.stroke()
+
+                # 4. Overlay Text centered in bounding box
+                otext = getattr(mark, 'overlay_text', '')
+                if otext and otext.strip():
+                    cr.save()
+                    tc = getattr(mark, 'text_color', (1.0, 1.0, 1.0))
+                    cr.set_source_rgb(tc[0], tc[1], tc[2])
+                    target_sz = getattr(mark, 'font_size', 10.0) / self.zoom_level
+                    target_sz = max(min(target_sz, rh * 0.7), 6.0)
+                    cr.set_font_size(target_sz)
+                    extents = cr.text_extents(otext)
+                    if extents.width > rw - (6.0 / self.zoom_level):
+                        scale_factor = (rw - (6.0 / self.zoom_level)) / max(extents.width, 1.0)
+                        target_sz = max(target_sz * scale_factor, 5.0)
+                        cr.set_font_size(target_sz)
+                        extents = cr.text_extents(otext)
+                    tx = min_x + (rw - extents.width) / 2.0 - extents.x_bearing
+                    ty = min_y + (rh - extents.height) / 2.0 - extents.y_bearing
+                    cr.move_to(tx, ty)
+                    cr.show_text(otext)
+                    cr.restore()
 
                 cr.restore()
 
@@ -9198,11 +9470,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             clicked_text = self._find_text_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_image = self._find_image_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_shape = self._find_shape_at_pos(page_x_unzoomed, page_y_unzoomed)
-            clicked_text, clicked_image, clicked_shape = self._keep_topmost_hit(
-                clicked_text, clicked_image, clicked_shape)
+            if hasattr(self, '_keep_topmost_hit'):
+                clicked_text, clicked_image, clicked_shape = self._keep_topmost_hit(
+                    clicked_text, clicked_image, clicked_shape)
             clicked_stroke = self._find_stroke_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_form_field = self._find_form_field_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_measurement = self._find_measurement_at_pos(page_x_unzoomed, page_y_unzoomed)
+            clicked_redaction = self._find_redaction_mark_at_pos(page_x_unzoomed, page_y_unzoomed) if hasattr(self, '_find_redaction_mark_at_pos') else None
+
+            if clicked_redaction:
+                self._close_active_form_field_editor()
+                self.selected_text = None
+                self.selected_image = None
+                self.selected_shape = None
+                self.selected_stroke = None
+                self.selected_form_field = None
+                self.selected_measurement = None
+                self.selected_redaction_mark = clicked_redaction
+                self._open_redaction_popover(clicked_redaction)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+                return
+
+            self.selected_redaction_mark = None
 
             if clicked_text:
                 self._close_active_form_field_editor()
@@ -9459,6 +9749,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif self.tool_mode == "clone_patch":
             # Handled by drag controller (on_drag_begin / on_drag_update / on_drag_end)
             pass
+
+        elif self.tool_mode == "redact":
+            clicked_redaction = self._find_redaction_mark_at_pos(page_x_unzoomed, page_y_unzoomed) if hasattr(self, '_find_redaction_mark_at_pos') else None
+            if clicked_redaction:
+                self.selected_redaction_mark = clicked_redaction
+                self._open_redaction_popover(clicked_redaction)
+                self.pdf_view.queue_draw()
+                return
 
         elif self.tool_mode == "add_ellipse":
             # patched
@@ -9976,6 +10274,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if getattr(self, 'selected_form_field', None) and not is_editing_entry:
                 self._delete_selected_form_field()
                 return True
+            if getattr(self, 'selected_redaction_mark', None) and not is_editing_entry:
+                self.delete_redaction_mark(self.selected_redaction_mark)
+                return True
 
         if keyval == Gdk.KEY_Delete:
             self.commit_pending_format_change()
@@ -10002,7 +10303,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not is_input_focused and keyval in (Gdk.KEY_Left, Gdk.KEY_Right, Gdk.KEY_Up, Gdk.KEY_Down):
             selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
                             getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None) or
-                            getattr(self, 'selected_measurement', None))
+                            getattr(self, 'selected_measurement', None) or getattr(self, 'selected_redaction_mark', None))
             if selected_obj:
                 step = 10.0 if bool(state & Gdk.ModifierType.SHIFT_MASK) else 1.0
                 dx, dy = 0.0, 0.0
@@ -10053,7 +10354,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.pdf_view.queue_draw()
                     self._update_ui_state()
                     return True
-                elif isinstance(selected_obj, (EditableShape, EditableImage)):
+                elif isinstance(selected_obj, (EditableShape, EditableImage, RedactionMark)):
                     x1, y1, x2, y2 = selected_obj.bbox
                     selected_obj.bbox = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
                     selected_obj.x = selected_obj.bbox[0]
@@ -10097,6 +10398,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     cmd1 = EditObjectCommand(self, selected_obj, old_properties, new_properties)
                     cmd2 = EditObjectCommand(self, lt, old_lt_props, new_lt_props)
                     command = CompositeCommand(self, [cmd1, cmd2])
+                elif isinstance(selected_obj, RedactionMark):
+                    from .undo_manager import EditRedactionCommand
+                    command = EditRedactionCommand(self, selected_obj, old_properties, new_properties)
                 else:
                     command = EditObjectCommand(self, selected_obj, old_properties, new_properties)
                 command.execute()
@@ -10583,7 +10887,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         # Allow direct resize handle interaction on already selected objects regardless of active tool
         selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
                         getattr(self, 'selected_stroke', None) or getattr(self, 'selected_form_field', None) or
-                        getattr(self, 'selected_measurement', None))
+                        getattr(self, 'selected_measurement', None) or getattr(self, 'selected_redaction_mark', None))
         if selected_obj:
             resize_handle = self._find_resize_handle_at_pos(start_x, start_y, selected_obj)
             if resize_handle:
@@ -10721,6 +11025,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.dragging_to_create = True
             self.drag_start_page_pos = (unrot_px, unrot_py)
             self.temp_clone_patch_bbox = (unrot_px, unrot_py, unrot_px, unrot_py)
+            self.pdf_view.queue_draw()
+            return
+        elif self.tool_mode == "redact":
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (unrot_px, unrot_py)
+            self.temp_redact_bbox = (unrot_px, unrot_py, unrot_px, unrot_py)
             self.pdf_view.queue_draw()
             return
         elif self.tool_mode == "form_builder":
@@ -10930,6 +11241,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.temp_clone_patch_bbox = (x1, y1, x2, y2)
                 self.pdf_view.queue_draw()
                 return
+            if getattr(self, 'temp_redact_bbox', None) is not None:
+                start_x, start_y = self.drag_start_page_pos
+                current_x = start_x + delta_x
+                current_y = start_y + delta_y
+                x1 = min(start_x, current_x)
+                y1 = min(start_y, current_y)
+                x2 = max(start_x, current_x)
+                y2 = max(start_y, current_y)
+                self.temp_redact_bbox = (x1, y1, x2, y2)
+                self.pdf_view.queue_draw()
+                return
             if self.temp_shape:
                 start_x, start_y = self.drag_start_page_pos
                 current_x = start_x + delta_x
@@ -11117,6 +11439,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_shape = None
             self.selected_stroke = None
             self.selected_form_field = None
+
+        elif isinstance(self.dragged_object, RedactionMark):
+            self.dragged_object.set_position(new_x, new_y)
+            self.selected_redaction_mark = self.dragged_object
+            self.selected_text = None
+            self.selected_image = None
+            self.selected_shape = None
+            self.selected_stroke = None
+            self.selected_form_field = None
+            self.selected_measurement = None
 
         self.pdf_view.queue_draw()
 
@@ -11567,6 +11899,37 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
                 return
+            elif getattr(self, 'temp_redact_bbox', None) is not None:
+                x1, y1, x2, y2 = self.temp_redact_bbox
+                self.temp_redact_bbox = None
+                w = abs(x2 - x1)
+                h = abs(y2 - y1)
+                min_x = min(x1, x2)
+                min_y = min(y1, y2)
+                max_x = max(x1, x2)
+                max_y = max(y1, y2)
+                if w >= 4.0 and h >= 4.0 and self.doc:
+                    target_page = getattr(self, 'drag_start_page_index', self.current_page_index)
+                    mark = RedactionMark(
+                        page_number=target_page,
+                        bbox=(min_x, min_y, max_x, max_y),
+                        fill_color=(0.0, 0.0, 0.0),
+                        overlay_text="[REDACTED]",
+                        text_color=(1.0, 1.0, 1.0),
+                    )
+                    from .undo_manager import AddRedactionCommand
+                    cmd = AddRedactionCommand(self, mark)
+                    cmd.execute()
+                    if self.undo_manager:
+                        self.undo_manager.record(cmd)
+                    self.selected_redaction_mark = mark
+                    self.tool_mode = "select"
+                    self._update_ui_state()
+                    self.pdf_view.queue_draw()
+                    self._open_redaction_popover(mark)
+                    return
+                self.pdf_view.queue_draw()
+                return
             elif getattr(self, 'temp_form_field_rect', None) is not None:
                 x1, y1, x2, y2 = self.temp_form_field_rect
                 self.temp_form_field_rect = None
@@ -11692,6 +12055,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_shape = None
             self.selected_stroke = None
             self._update_form_builder_controls_for_selected()
+            self._update_ui_state()
+            self.pdf_view.queue_draw()
+            return
+
+        if isinstance(dragged_obj_ref, RedactionMark):
+            if old_properties != new_properties:
+                from .undo_manager import EditRedactionCommand
+                command = EditRedactionCommand(self, dragged_obj_ref, old_properties, new_properties)
+                self.undo_manager.add_command(command)
+                self.document_modified = True
+            self.selected_redaction_mark = dragged_obj_ref
+            self.selected_text = None
+            self.selected_image = None
+            self.selected_shape = None
+            self.selected_stroke = None
+            self.selected_form_field = None
+            self.selected_measurement = None
             self._update_ui_state()
             self.pdf_view.queue_draw()
             return
@@ -12218,6 +12598,176 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.annotations_sidebar.refresh()
         self.pdf_view.queue_draw()
 
+    def _find_redaction_mark_at_pos(self, page_x, page_y):
+        """Find interactive visual redaction mark at coordinates."""
+        try:
+            coords = self._visual_to_unrotated_page_coords(page_x, page_y)
+            if isinstance(coords, (tuple, list)) and len(coords) == 2:
+                page_x, page_y = coords
+        except Exception:
+            pass
+        if not self._active_session:
+            return None
+        marks = self._active_session.redaction_marks.get(self.current_page_index, [])
+        for mark in reversed(marks):
+            if getattr(mark, 'is_applied', False):
+                continue
+            if mark.contains_point(page_x, page_y):
+                return mark
+        return None
+
+    def _open_redaction_popover(self, mark):
+        """Open floating inspector popover for the specified redaction mark."""
+        if not mark:
+            return
+        self.selected_redaction_mark = mark
+        p_idx = getattr(mark, 'page_number', self.current_page_index)
+        obj_rect = self.get_object_canvas_rect(mark, page_index=p_idx)
+        rect, pos = self.calculate_smart_popover_placement(obj_rect, estimated_size=(280, 240))
+
+        popover = RedactionInspectorPopover(editor_window=self, mark=mark)
+        popover.set_pointing_to(rect)
+        popover.set_position(pos)
+        popover.popup()
+
+    def delete_redaction_mark(self, mark):
+        """Delete visual redaction mark with undo support."""
+        if not mark:
+            return
+        from .undo_manager import DeleteRedactionCommand
+        cmd = DeleteRedactionCommand(self, mark)
+        cmd.execute()
+        if self.undo_manager:
+            self.undo_manager.record(cmd)
+        if hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(_("status_redaction_removed"))
+
+    def _delete_redaction_mark(self, mark):
+        """Delete visual redaction mark alias."""
+        self.delete_redaction_mark(mark)
+
+    def _add_redaction_mark_to_session(self, mark, session=None):
+        """Add visual redaction mark to active session and trigger canvas/sidebar refresh."""
+        sess = session or self._active_session
+        if not sess:
+            return
+        p = mark.page_number
+        if p not in sess.redaction_marks:
+            sess.redaction_marks[p] = []
+        if mark not in sess.redaction_marks[p]:
+            sess.redaction_marks[p].append(mark)
+        if sess is self._active_session:
+            self.selected_redaction_mark = mark
+        self.document_modified = True
+        if hasattr(self, 'annotations_sidebar'):
+            self.annotations_sidebar.refresh()
+            if sess is self._active_session:
+                self.annotations_sidebar.sync_selection(mark)
+        self.pdf_view.queue_draw()
+
+    def _remove_redaction_mark_from_session(self, mark, session=None):
+        """Remove visual redaction mark from active session."""
+        sess = session or self._active_session
+        if not sess:
+            return
+        p = mark.page_number
+        if p in sess.redaction_marks and mark in sess.redaction_marks[p]:
+            sess.redaction_marks[p].remove(mark)
+        if sess is self._active_session and self.selected_redaction_mark == mark:
+            self.selected_redaction_mark = None
+        self.document_modified = True
+        if hasattr(self, 'annotations_sidebar'):
+            self.annotations_sidebar.refresh()
+        self.pdf_view.queue_draw()
+
+    def _apply_redaction_mark_state(self, mark, state, session=None):
+        """Apply state dictionary to visual redaction mark."""
+        sess = session or self._active_session
+        if not mark or not state:
+            return
+        if "bbox" in state:
+            mark.update_bbox(*state["bbox"])
+        if "fill_color" in state:
+            mark.fill_color = tuple(state["fill_color"])
+        if "overlay_text" in state:
+            mark.overlay_text = state["overlay_text"]
+        if "text_color" in state:
+            mark.text_color = tuple(state["text_color"])
+        if "font_size" in state:
+            mark.font_size = float(state["font_size"])
+        self.document_modified = True
+        if hasattr(self, 'annotations_sidebar'):
+            self.annotations_sidebar.refresh()
+        self.pdf_view.queue_draw()
+
+    def mark_selection_for_redaction(self):
+        """Mark currently selected text or object for visual redaction."""
+        if not self.doc or not self._active_session:
+            return
+        # 1. Selected editable text object
+        if getattr(self, 'selected_text', None) and getattr(self.selected_text, 'bbox', None):
+            t = self.selected_text
+            p = getattr(t, 'page_number', self.current_page_index)
+            mark = RedactionMark(
+                page_number=p,
+                bbox=tuple(t.bbox),
+                fill_color=(0.0, 0.0, 0.0),
+                overlay_text="[REDACTED]",
+                text_color=(1.0, 1.0, 1.0),
+            )
+            from .undo_manager import AddRedactionCommand
+            cmd = AddRedactionCommand(self, mark)
+            cmd.execute()
+            if self.undo_manager:
+                self.undo_manager.record(cmd)
+            self._open_redaction_popover(mark)
+            return
+
+        # 2. View mode text selection rectangle
+        if getattr(self, 'view_sel_rect', None):
+            vx0, vy0, vx1, vy1 = self.view_sel_rect
+            if abs(vx1 - vx0) >= 2.0 and abs(vy1 - vy0) >= 2.0:
+                p = self.current_page_index
+                mark = RedactionMark(
+                    page_number=p,
+                    bbox=(min(vx0, vx1), min(vy0, vy1), max(vx0, vx1), max(vy0, vy1)),
+                    fill_color=(0.0, 0.0, 0.0),
+                    overlay_text="[REDACTED]",
+                    text_color=(1.0, 1.0, 1.0),
+                )
+                from .undo_manager import AddRedactionCommand
+                cmd = AddRedactionCommand(self, mark)
+                cmd.execute()
+                if self.undo_manager:
+                    self.undo_manager.record(cmd)
+                self.view_sel_rect = None
+                self.view_selected_text = ""
+                self._open_redaction_popover(mark)
+                return
+
+    def apply_all_redactions(self):
+        """Burn all staged visual redaction marks permanently into the active PDF document."""
+        if not self.doc or not self._active_session:
+            return False
+        redacts = getattr(self._active_session, 'redaction_marks', {})
+        total_marks = sum(len(marks) for marks in redacts.values())
+        if total_marks == 0:
+            return False
+        applied = pdf_handler.apply_redaction_marks(self.doc, redacts)
+        if applied:
+            redacts.clear()
+            self.selected_redaction_mark = None
+            self.document_modified = True
+            for pno in range(self.doc.page_count):
+                self._refresh_thumbnail(pno)
+            self.pdf_view.queue_draw()
+            if hasattr(self, 'annotations_sidebar'):
+                self.annotations_sidebar.refresh()
+            self._update_ui_state()
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(_("status_redactions_applied"))
+        return applied
+
     def _extract_word_at_position(self, text, click_pos_in_text):
         """Extract contiguous non-whitespace word and its character indices at cursor."""
         if not text or click_pos_in_text < 0 or click_pos_in_text > len(text):
@@ -12397,8 +12947,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         clicked_text = self._find_text_at_pos(page_x, page_y)
         clicked_shape = self._find_shape_at_pos(page_x, page_y)
         clicked_image = self._find_image_at_pos(page_x, page_y)
-        clicked_text, clicked_image, clicked_shape = self._keep_topmost_hit(
-            clicked_text, clicked_image, clicked_shape)
+        if hasattr(self, '_keep_topmost_hit'):
+            clicked_text, clicked_image, clicked_shape = self._keep_topmost_hit(
+                clicked_text, clicked_image, clicked_shape)
         clicked_measurement = self._find_measurement_at_pos(page_x, page_y)
         
         popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)

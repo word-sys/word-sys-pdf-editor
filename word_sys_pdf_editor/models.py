@@ -1162,6 +1162,90 @@ class StickyNoteObject:
             note_id=data.get("id"),
         )
 
+class RedactionMark:
+    """Data model representing a visual staged redaction mark on a PDF page."""
+    DEFAULT_FILL_BLACK = (0.0, 0.0, 0.0)
+    DEFAULT_FILL_WHITE = (1.0, 1.0, 1.0)
+    DEFAULT_TEXT_COLOR_WHITE = (1.0, 1.0, 1.0)
+    DEFAULT_TEXT_COLOR_BLACK = (0.0, 0.0, 0.0)
+    DEFAULT_BORDER_COLOR = (0.85, 0.15, 0.15, 0.95)
+
+    def __init__(self, page_number: int = 0,
+                 bbox: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),
+                 fill_color: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+                 overlay_text: str = "[REDACTED]",
+                 text_color: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+                 font_size: float = 10.0,
+                 font_name: str = "helv",
+                 border_color: Tuple[float, float, float, float] = (0.85, 0.15, 0.15, 0.95),
+                 mark_id: Optional[str] = None,
+                 is_applied: bool = False,
+                 z_index: int = 0):
+        self.id = mark_id or str(uuid.uuid4())[:8]
+        self.page_number = int(page_number)
+        self.fill_color = tuple(fill_color) if fill_color else self.DEFAULT_FILL_BLACK
+        self.overlay_text = overlay_text or ""
+        self.text_color = tuple(text_color) if text_color else self.DEFAULT_TEXT_COLOR_WHITE
+        self.font_size = float(font_size)
+        self.font_name = font_name
+        self.border_color = tuple(border_color) if border_color else self.DEFAULT_BORDER_COLOR
+        self.is_applied = bool(is_applied)
+        self.selected = False
+        self.z_index = int(z_index)
+        self.rotation = 0.0
+        self.update_bbox(*bbox)
+
+    def update_bbox(self, x0: float, y0: float, x1: float, y1: float):
+        """Update and normalize bounding box coordinates."""
+        min_x = min(float(x0), float(x1))
+        max_x = max(float(x0), float(x1))
+        min_y = min(float(y0), float(y1))
+        max_y = max(float(y0), float(y1))
+        self.bbox = (min_x, min_y, max_x, max_y)
+        self.x = min_x
+        self.y = min_y
+        self.width = max_x - min_x
+        self.height = max_y - min_y
+
+    def contains_point(self, px: float, py: float, tolerance: float = 2.0) -> bool:
+        """Hit test checking whether (px, py) falls within or on the border of this redaction mark."""
+        x0, y0, x1, y1 = self.bbox
+        return (x0 - tolerance <= px <= x1 + tolerance and
+                y0 - tolerance <= py <= y1 + tolerance)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize redaction mark to dictionary."""
+        return {
+            "id": self.id,
+            "page_number": self.page_number,
+            "bbox": list(self.bbox),
+            "fill_color": list(self.fill_color),
+            "overlay_text": self.overlay_text,
+            "text_color": list(self.text_color),
+            "font_size": self.font_size,
+            "font_name": self.font_name,
+            "border_color": list(self.border_color),
+            "is_applied": self.is_applied,
+            "z_index": self.z_index,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RedactionMark":
+        """Reconstruct redaction mark from serialized dictionary."""
+        return cls(
+            page_number=data.get("page_number", 0),
+            bbox=tuple(data.get("bbox", (0.0, 0.0, 0.0, 0.0))),
+            fill_color=tuple(data.get("fill_color", cls.DEFAULT_FILL_BLACK)),
+            overlay_text=data.get("overlay_text", "[REDACTED]"),
+            text_color=tuple(data.get("text_color", cls.DEFAULT_TEXT_COLOR_WHITE)),
+            font_size=data.get("font_size", 10.0),
+            font_name=data.get("font_name", "helv"),
+            border_color=tuple(data.get("border_color", cls.DEFAULT_BORDER_COLOR)),
+            mark_id=data.get("id"),
+            is_applied=data.get("is_applied", False),
+            z_index=data.get("z_index", 0),
+        )
+
 
 class PdfPage(GObject.GObject):
     """GObject model for PDF page index and thumbnail in sidebar list."""
@@ -1241,6 +1325,10 @@ class DocumentSession:
     # Sticky Notes & Comments
     sticky_notes: Dict[int, List[StickyNoteObject]] = field(default_factory=dict)
     selected_sticky_note: Optional[Any] = None
+
+    # Redactions (Staged visual marks)
+    redaction_marks: Dict[int, List[RedactionMark]] = field(default_factory=dict)
+    selected_redaction_mark: Optional[Any] = None
 
     # Tab integration
     tab_page: Any = None
