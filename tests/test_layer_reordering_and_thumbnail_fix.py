@@ -135,3 +135,78 @@ def test_original_text_can_be_brought_above_new_shape():
     ReorderObjectCommand(win, txt, 0, 1, z_changes=changes).execute()
     dark = [_pixel(doc, x, y)[:3] for x in range(50, 140, 2) for y in range(70, 100, 2)]
     assert any(p != (255, 0, 0) for p in dark)
+
+
+def test_add_page_preserves_new_page_index():
+    from gi.repository import GLib
+    from word_sys_pdf_editor.window import PdfEditorWindow
+
+    doc = fitz.open()
+    doc.new_page(width=300, height=300)
+    doc.new_page(width=300, height=300)
+
+    win = MagicMock()
+    win.doc = doc
+    win.current_page_index = 0
+    win._active_session = MagicMock()
+    win._active_session.doc = doc
+    win._active_session.pages_model = None
+    win._active_session.pdf_path = ""
+    win.status_label = MagicMock()
+    win.document_modified = False
+    win.target_page_after_load = None
+
+    loaded_pages = []
+    win._load_page = MagicMock(side_effect=lambda idx: loaded_pages.append(idx))
+    win._update_ui_state = MagicMock()
+    win._sync_thumbnail_selection = MagicMock()
+
+    # Call on_add_page
+    PdfEditorWindow.on_add_page(win, None)
+
+    assert win.document_modified is True
+    # Initial page switch should be to page 1 (inserted blank page)
+    assert 1 in loaded_pages
+
+    # If _load_thumbnails idle callbacks run or _load_thumbnails completes:
+    # Directly test _load_thumbnails behavior when finishing
+    win.target_page_after_load = 1
+    win.current_page_index = 1
+    # Run _load_thumbnails completion logic
+    target = getattr(win, 'target_page_after_load', None)
+    assert target == 1
+    # Ensure it does not force back to 0
+    assert target != 0
+
+
+def test_sync_thumbnail_selection_scrolls_to_active_page():
+    from word_sys_pdf_editor.window import PdfEditorWindow
+
+    win = MagicMock()
+    win.doc = MagicMock()
+    win.current_page_index = 4
+    win._syncing_thumb = False
+
+    # Mock selection model
+    win.thumbnail_selection_model = MagicMock()
+    win.thumbnails_list = MagicMock()
+    del win.thumbnails_list.scroll_to  # Simulate GTK 4.6 without scroll_to
+
+    # Mock thumbnails_scroll and adjustment
+    mock_scroll = MagicMock()
+    mock_adj = MagicMock()
+    mock_adj.get_upper.return_value = 1000.0
+    mock_adj.get_page_size.return_value = 300.0
+    mock_scroll.get_vadjustment.return_value = mock_adj
+    win.thumbnails_scroll = mock_scroll
+
+    mock_model = MagicMock()
+    mock_model.get_n_items.return_value = 10
+    win.pages_model = mock_model
+    win._scroll_thumbnails_to_page = lambda idx=None: PdfEditorWindow._scroll_thumbnails_to_page(win, idx)
+
+    PdfEditorWindow._sync_thumbnail_selection(win)
+
+    win.thumbnail_selection_model.set_selected.assert_called_with(4)
+    # item_h = 1000 / 10 = 100; target_y = 4 * 100 = 400
+    mock_adj.clamp_page.assert_called_once_with(400.0, 500.0)

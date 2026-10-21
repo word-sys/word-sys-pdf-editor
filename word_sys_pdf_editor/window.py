@@ -533,6 +533,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._active_editing_form_field = None
         self.current_pdf_page_width = 0
         self.current_pdf_page_height = 0
+        self.thumbnails_scroll = None
         self.bold_button = None
         self.italic_button = None
         self.font_scan_in_progress = True
@@ -1836,10 +1837,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.thumbnails_list.set_model(self.thumbnail_selection_model)
         self.thumbnail_selection_model.connect("selection-changed", self.on_thumbnail_selected)
 
-        thumbnails_scroll = Gtk.ScrolledWindow(vexpand=True)
-        thumbnails_scroll.set_child(self.thumbnails_list)
-        thumbnails_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        sidebar_box.append(thumbnails_scroll)
+        self.thumbnails_scroll = Gtk.ScrolledWindow(vexpand=True)
+        self.thumbnails_scroll.set_child(self.thumbnails_list)
+        self.thumbnails_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sidebar_box.append(self.thumbnails_scroll)
 
         self.paned.set_start_child(sidebar_box)
 
@@ -3234,11 +3235,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.measure_area_tool_button.set_sensitive(True)
         self._update_ui_state()
 
-    def _load_thumbnails(self, session=None):
+    def _load_thumbnails(self, session=None, target_page=None):
         """Asynchronously generate and populate sidebar thumbnails for each document page."""
         sess = session or self._active_session
         if not sess or not sess.doc:
             return
+
+        if target_page is not None:
+            self.target_page_after_load = target_page
 
         target_doc = sess.doc
         target_model = sess.pages_model
@@ -3261,6 +3265,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if self._active_session == sess:
                     if index % 5 == 0 or index == page_count - 1:
                         self.status_label.set_text(_("thumbnail_loaded").format(index + 1, page_count))
+                    cur = getattr(self, 'current_page_index', 0)
+                    if index == cur:
+                        self._sync_thumbnail_selection(cur)
                 return GLib.SOURCE_CONTINUE 
             else:
                 if self._active_session == sess:
@@ -3269,9 +3276,24 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     else:
                         self.status_label.set_text(_("new_doc_loaded"))                
                     if page_count > 0:
-                        target = getattr(self, 'target_page_after_load', 0)
-                        if target >= page_count: target = 0
-                        self._load_page(target)
+                        target = getattr(self, 'target_page_after_load', None)
+                        self.target_page_after_load = None
+                        if target is not None:
+                            if target >= page_count: target = page_count - 1
+                            if target < 0: target = 0
+                            if getattr(self, 'current_page_index', None) != target:
+                                self._load_page(target)
+                            else:
+                                self._sync_thumbnail_selection()
+                                self._update_ui_state()
+                        else:
+                            curr = getattr(self, 'current_page_index', 0)
+                            if curr >= page_count:
+                                curr = max(0, page_count - 1)
+                                self._load_page(curr)
+                            else:
+                                self._sync_thumbnail_selection()
+                                self._update_ui_state()
                     else:
                         self._update_ui_state()
                 return GLib.SOURCE_REMOVE
@@ -8250,8 +8272,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if success:
             self.document_modified = True
             self.status_label.set_text(message)
-            self._load_thumbnails()
             self._load_page(insert_position)
+            self._load_thumbnails(target_page=insert_position)
             self._update_ui_state()
         else:
             show_error_dialog(self, message, _("err_merge_title"))
@@ -9192,8 +9214,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if success:
             self.document_modified = True
             self.status_label.set_text(message)
-            self._load_thumbnails()
             self._load_page(insert_position)
+            self._load_thumbnails(target_page=insert_position)
             self._update_ui_state()
         else:
             show_error_dialog(self, message, _("err_add_page_title"))
@@ -9230,8 +9252,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.status_label.set_text(message)
             new_page_count = pdf_handler.get_page_count(self.doc)
             new_page_index = min(page_to_delete, new_page_count - 1)
-            self._load_thumbnails()
             self._load_page(new_page_index)
+            self._load_thumbnails(target_page=new_page_index)
             self._update_ui_state()
         else:
             show_error_dialog(self, message, _("err_delete_page_title"))
@@ -9332,18 +9354,59 @@ class PdfEditorWindow(Adw.ApplicationWindow):
               else:
                   self._load_page(selected_index)
 
-    def _sync_thumbnail_selection(self):
+    def _sync_thumbnail_selection(self, page_index=None):
          """Update sidebar thumbnail selection without re-triggering navigation."""
          if not self.doc or not self.thumbnail_selection_model: return
+         target_idx = self.current_page_index if page_index is None else page_index
          self._syncing_thumb = True
-         self.thumbnail_selection_model.set_selected(self.current_page_index)
+         self.thumbnail_selection_model.set_selected(target_idx)
+         scrolled = False
          if hasattr(self, 'thumbnails_list') and hasattr(self.thumbnails_list, 'scroll_to'):
              try:
                  flags = getattr(Gtk.ListScrollFlags, 'NONE', 0) if hasattr(Gtk, 'ListScrollFlags') else 0
-                 self.thumbnails_list.scroll_to(self.current_page_index, flags, None)
+                 self.thumbnails_list.scroll_to(target_idx, flags, None)
+                 scrolled = True
              except Exception:
                  pass
+         if not scrolled:
+             self._scroll_thumbnails_to_page(target_idx)
          self._syncing_thumb = False
+
+    def _scroll_thumbnails_to_page(self, page_index=None):
+        """Scroll the thumbnail sidebar to make the specified page visible."""
+        if not hasattr(self, 'thumbnails_scroll') or not self.thumbnails_scroll:
+            return
+        target_idx = self.current_page_index if page_index is None else page_index
+        model = getattr(self, 'pages_model', None)
+        n = model.get_n_items() if model else 0
+        if n <= 0 or not (0 <= target_idx < n):
+            return
+
+        adj = self.thumbnails_scroll.get_vadjustment()
+        if not adj:
+            return
+
+        upper = adj.get_upper()
+        page_size = adj.get_page_size()
+        if upper > page_size and upper > 0:
+            item_h = upper / n
+            target_y = target_idx * item_h
+            adj.clamp_page(target_y, target_y + item_h)
+        else:
+            attempts = [0]
+            def _retry_scroll():
+                attempts[0] += 1
+                u = adj.get_upper()
+                ps = adj.get_page_size()
+                m = getattr(self, 'pages_model', None)
+                total = m.get_n_items() if m else 0
+                if total > 0 and 0 <= target_idx < total and u > ps and u > 0:
+                    ih = u / total
+                    ty = target_idx * ih
+                    adj.clamp_page(ty, ty + ih)
+                    return False
+                return attempts[0] < 5
+            GLib.timeout_add(25, _retry_scroll)
 
     @property
     def edit_mode(self):
@@ -9362,8 +9425,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
          if success:
              self.document_modified = True
              self.status_label.set_text(message)
-             self._load_thumbnails()
              self._load_page(to_index)
+             self._load_thumbnails(target_page=to_index)
              self._update_ui_state()
          else:
              show_error_dialog(self, message, _("err_move_page_title"))
