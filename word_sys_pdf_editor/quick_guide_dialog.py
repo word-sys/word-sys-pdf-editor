@@ -299,6 +299,7 @@ class QuickGuideDialog(Adw.Window):
         add_shortcut_row(grp_edit, _("guide_sc_zoom_scroll"), "Ctrl + Scroll")
         add_shortcut_row(grp_edit, _("guide_sc_delete"), "Delete")
         add_shortcut_row(grp_edit, _("guide_sc_deselect"), "Esc")
+        add_shortcut_row(grp_edit, _("guide_sc_type_over_patch"), "Enter", "T")
         add_shortcut_row(grp_edit, _("guide_sc_layer_front"), "Ctrl + Shift + ]")
         add_shortcut_row(grp_edit, _("guide_sc_layer_forward"), "Ctrl + ]")
         add_shortcut_row(grp_edit, _("guide_sc_layer_backward"), "Ctrl + [")

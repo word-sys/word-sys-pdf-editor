@@ -6,7 +6,7 @@ from .undo_manager import (
     DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand,
     ReplaceImageCommand, CalibrateScaleCommand, AddMeasurementCommand, DeleteMeasurementCommand,
     AddStickyNoteCommand, DeleteStickyNoteCommand, EditStickyNoteCommand, MoveStickyNoteCommand,
-    ReorderObjectCommand
+    ReorderObjectCommand, CompositeCommand
 )
 from .i18n import _, get_language, set_language, get_supported_languages, get_setting, set_setting
 
@@ -4138,6 +4138,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.set_dash([])
                 cr.restore()
 
+            lt = getattr(self.dragged_object, 'linked_text', None)
+            if lt and getattr(lt, 'original_bbox', None):
+                lt_orig_x1, lt_orig_y1, lt_orig_x2, lt_orig_y2 = lt.original_bbox
+                cr.save()
+                cr.set_source_rgba(0.85, 0.85, 0.85, 0.55)
+                cr.rectangle(lt_orig_x1, lt_orig_y1, lt_orig_x2 - lt_orig_x1, lt_orig_y2 - lt_orig_y1)
+                cr.fill()
+                cr.set_source_rgba(0.5, 0.5, 0.5, 0.7)
+                cr.set_line_width(1.5 / self.zoom_level)
+                cr.set_dash([4.0 / self.zoom_level, 3.0 / self.zoom_level])
+                cr.rectangle(lt_orig_x1, lt_orig_y1, lt_orig_x2 - lt_orig_x1, lt_orig_y2 - lt_orig_y1)
+                cr.stroke()
+                cr.set_dash([])
+                cr.restore()
+
             x1, y1, x2, y2 = self.dragged_object.bbox
             ghost_x = x1
             ghost_y = y1
@@ -4169,6 +4184,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     cr.set_source_rgba(0.2, 0.5, 0.8, 0.5)
                     cr.rectangle(ghost_x, ghost_y, ghost_w, ghost_h)
                     cr.fill()
+                if lt and getattr(lt, 'bbox', None) and getattr(lt, 'text', None):
+                    lx1, ly1, lx2, ly2 = lt.bbox
+                    cr.save()
+                    layout = PangoCairo.create_layout(cr)
+                    font_desc_str = f"{getattr(lt, 'font_family_base', 'Liberation Sans')} {getattr(lt, 'font_size', 11)}"
+                    if getattr(lt, 'is_bold', False): font_desc_str += " Bold"
+                    if getattr(lt, 'is_italic', False): font_desc_str += " Italic"
+                    font_desc = Pango.FontDescription(font_desc_str)
+                    font_desc.set_absolute_size(int(getattr(lt, 'font_size', 11) * Pango.SCALE))
+                    layout.set_font_description(font_desc)
+                    layout.set_text(lt.text, -1)
+                    r, g, b = getattr(lt, 'color', (0.0, 0.0, 0.0))[:3]
+                    cr.set_source_rgba(r, g, b, 0.75)
+                    cr.move_to(lx1, ly1)
+                    PangoCairo.show_layout(cr, layout)
+                    cr.restore()
             elif isinstance(self.dragged_object, EditableText):
                 layout = PangoCairo.create_layout(cr)
                 font_desc_str = f"{self.dragged_object.font_family_base} {self.dragged_object.font_size}"
@@ -7657,6 +7688,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if getattr(text_obj, 'is_new', False):
                 if text_obj in getattr(self, 'editable_texts', []):
                     self.editable_texts.remove(text_obj)
+                if getattr(text_obj, 'linked_patch', None):
+                    text_obj.linked_patch.linked_text = None
                 self.selected_text = None
             else:
                 init_text = getattr(self, '_inline_editor_initial_text', None)
@@ -7730,6 +7763,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if not new_text.strip():
                 if text_obj_to_apply in getattr(self, 'editable_texts', []):
                     self.editable_texts.remove(text_obj_to_apply)
+                if getattr(text_obj_to_apply, 'linked_patch', None):
+                    text_obj_to_apply.linked_patch.linked_text = None
                 self.selected_text = None
                 self._update_ui_state()
                 self.pdf_view.queue_draw()
@@ -7744,6 +7779,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._refresh_thumbnail(self.current_page_index)
         else:
             if not new_text.strip():
+                if getattr(text_obj_to_apply, 'linked_patch', None):
+                    text_obj_to_apply.linked_patch.linked_text = None
                 command = DeleteObjectCommand(self, text_obj_to_apply)
                 command.execute()
                 self.undo_manager.add_command(command)
@@ -9135,22 +9172,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if self.inline_editor_widget is not None:
                 self._apply_and_hide_editor()
 
-            clicked_image = self._find_image_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_text = self._find_text_at_pos(page_x_unzoomed, page_y_unzoomed)
+            clicked_image = self._find_image_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_shape = self._find_shape_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_stroke = self._find_stroke_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_form_field = self._find_form_field_at_pos(page_x_unzoomed, page_y_unzoomed)
             clicked_measurement = self._find_measurement_at_pos(page_x_unzoomed, page_y_unzoomed)
 
-            if clicked_image:
-                self._close_active_form_field_editor()
-                self.selected_image = clicked_image
-                self.selected_text = None
-                self.selected_shape = None
-                self.selected_stroke = None
-                self.selected_form_field = None
-                self.selected_measurement = None
-            elif clicked_text:
+            if clicked_text:
                 self._close_active_form_field_editor()
                 self.selected_image = None
                 self.selected_shape = None
@@ -9164,6 +9193,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_text_format_controls(self.selected_text)
                 if n_press >= 2 and not self.view_mode:
                     self._show_inline_editor(clicked_text, click_x=x, click_y=y)
+            elif clicked_image:
+                self._close_active_form_field_editor()
+                self.selected_image = clicked_image
+                self.selected_text = None
+                self.selected_shape = None
+                self.selected_stroke = None
+                self.selected_form_field = None
+                self.selected_measurement = None
+                if n_press >= 2 and not self.view_mode and getattr(clicked_image, 'is_patch', False):
+                    self.initiate_text_over_patch(clicked_image)
+                    return
             elif clicked_shape:
                 self._close_active_form_field_editor()
                 self.selected_shape = clicked_shape
@@ -9372,6 +9412,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             new_text_obj.alignment = alignment
             new_text_obj.pdf_fontname_base14 = target_base14
             new_text_obj.page_number = self.current_page_index
+
+            clicked_patch = self._find_image_at_pos(page_x_unzoomed, page_y_unzoomed)
+            if clicked_patch and getattr(clicked_patch, 'is_patch', False):
+                new_text_obj.linked_patch = clicked_patch
+                clicked_patch.linked_text = new_text_obj
 
             self.selected_text = new_text_obj
             self.selected_image = None
@@ -9887,6 +9932,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._show_inline_editor(self.selected_text)
                 return True
 
+        if getattr(self, 'selected_image', None) and getattr(self.selected_image, 'is_patch', False) and not is_input_focused and not getattr(self, 'view_mode', False):
+            if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_t, Gdk.KEY_T):
+                self.initiate_text_over_patch(self.selected_image)
+                return True
+
         if getattr(self, 'selected_form_field', None) and not is_input_focused:
             if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_F2):
                 if getattr(self, 'view_mode', False):
@@ -9940,7 +9990,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 elif keyval == Gdk.KEY_Down:
                     dy = step
 
+                orig_lt = getattr(selected_obj, 'linked_text', None)
+                orig_lp = getattr(selected_obj, 'linked_patch', None)
+
                 old_properties = copy.deepcopy(selected_obj.__dict__)
+                if orig_lt is not None:
+                    old_properties['linked_text'] = orig_lt
+                if orig_lp is not None:
+                    old_properties['linked_patch'] = orig_lp
 
                 if isinstance(selected_obj, EditableText):
                     selected_obj.x += dx
@@ -9978,9 +10035,45 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     selected_obj.y = selected_obj.bbox[1]
 
                 new_properties = copy.deepcopy(selected_obj.__dict__)
-                selected_obj.__dict__.update(old_properties)
+                if orig_lt is not None:
+                    new_properties['linked_text'] = orig_lt
+                if orig_lp is not None:
+                    new_properties['linked_patch'] = orig_lp
 
-                command = EditObjectCommand(self, selected_obj, old_properties, new_properties)
+                selected_obj.__dict__.update(old_properties)
+                if orig_lt is not None:
+                    selected_obj.linked_text = orig_lt
+                if orig_lp is not None:
+                    selected_obj.linked_patch = orig_lp
+
+                lt = orig_lt
+                if lt and lt in getattr(self, 'editable_texts', []):
+                    orig_lt_patch = getattr(lt, 'linked_patch', None)
+                    old_lt_props = copy.deepcopy(lt.__dict__)
+                    if orig_lt_patch is not None:
+                        old_lt_props['linked_patch'] = orig_lt_patch
+
+                    lt.x += dx
+                    lt.y += dy
+                    if getattr(lt, 'baseline', None) is not None:
+                        lt.baseline += dy
+                    if lt.bbox:
+                        lx1, ly1, lx2, ly2 = lt.bbox
+                        lt.bbox = (lx1 + dx, ly1 + dy, lx2 + dx, ly2 + dy)
+
+                    new_lt_props = copy.deepcopy(lt.__dict__)
+                    if orig_lt_patch is not None:
+                        new_lt_props['linked_patch'] = orig_lt_patch
+
+                    lt.__dict__.update(old_lt_props)
+                    if orig_lt_patch is not None:
+                        lt.linked_patch = orig_lt_patch
+
+                    cmd1 = EditObjectCommand(self, selected_obj, old_properties, new_properties)
+                    cmd2 = EditObjectCommand(self, lt, old_lt_props, new_lt_props)
+                    command = CompositeCommand(self, [cmd1, cmd2])
+                else:
+                    command = EditObjectCommand(self, selected_obj, old_properties, new_properties)
                 command.execute()
                 self.undo_manager.add_command(command)
                 self.document_modified = True
@@ -10670,8 +10763,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if self.tool_mode == "drag":
             self._close_active_form_field_editor()
-            self.dragged_object = (self._find_image_at_pos(page_x, page_y) or 
-                                   self._find_text_at_pos(page_x, page_y) or 
+            self.dragged_object = (self._find_text_at_pos(page_x, page_y) or 
+                                   self._find_image_at_pos(page_x, page_y) or 
                                    self._find_shape_at_pos(page_x, page_y) or 
                                    self._find_stroke_at_pos(page_x, page_y) or
                                    self._find_form_field_at_pos(page_x, page_y) or
@@ -10689,7 +10782,24 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.dragged_object:
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             self.drag_start_pos = (start_x, start_y)
+            orig_lt = getattr(self.dragged_object, 'linked_text', None)
+            orig_lp = getattr(self.dragged_object, 'linked_patch', None)
             self.drag_begin_state = copy.deepcopy(self.dragged_object.__dict__)
+            if orig_lt is not None:
+                self.drag_begin_state['linked_text'] = orig_lt
+            if orig_lp is not None:
+                self.drag_begin_state['linked_patch'] = orig_lp
+            if orig_lt is not None:
+                lt = orig_lt
+                orig_lt_patch = getattr(lt, 'linked_patch', None)
+                self.linked_drag_begin_state = copy.deepcopy(lt.__dict__)
+                if orig_lt_patch is not None:
+                    self.linked_drag_begin_state['linked_patch'] = orig_lt_patch
+                self.linked_drag_start_pos = (lt.x, lt.y)
+                if not hasattr(lt, 'original_bbox') or not lt.original_bbox:
+                    lt.original_bbox = lt.bbox
+                if not hasattr(lt, 'original_baseline') or lt.original_baseline is None:
+                    lt.original_baseline = getattr(lt, 'baseline', None)
 
         if self.dragged_object:
             if not hasattr(self.dragged_object, 'original_bbox') or not self.dragged_object.original_bbox:
@@ -10946,6 +11056,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_image = self.dragged_object
             self.selected_text = None
             self.selected_shape = None
+            if getattr(self.dragged_object, 'linked_text', None) is not None and hasattr(self, 'linked_drag_start_pos'):
+                lt = self.dragged_object.linked_text
+                lt_start_x, lt_start_y = self.linked_drag_start_pos
+                lt_new_x = lt_start_x + delta_x
+                lt_new_y = lt_start_y + delta_y
+                lt_orig_bbox = getattr(lt, 'original_bbox', lt.bbox)
+                lt_w = lt_orig_bbox[2] - lt_orig_bbox[0]
+                lt_h = lt_orig_bbox[3] - lt_orig_bbox[1]
+                lt.x = lt_new_x
+                lt.y = lt_new_y
+                lt.bbox = (lt_new_x, lt_new_y, lt_new_x + lt_w, lt_new_y + lt_h)
+                lt.baseline = lt_new_y + getattr(lt, 'baseline_offset', lt.font_size * 0.9)
             
         elif isinstance(self.dragged_object, EditableShape):
             self.selected_shape = self.dragged_object
@@ -11562,7 +11684,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.undo_manager.add_command(command)
         else:
             print(_("dbg_creating_drag_command"))
-            command = EditObjectCommand(self, dragged_obj_ref, old_properties, new_properties)
+            cmd1 = EditObjectCommand(self, dragged_obj_ref, old_properties, new_properties)
+            lt = getattr(dragged_obj_ref, 'linked_text', None)
+            lt_old_props = getattr(self, 'linked_drag_begin_state', None)
+            if hasattr(self, 'linked_drag_begin_state'):
+                del self.linked_drag_begin_state
+            if hasattr(self, 'linked_drag_start_pos'):
+                del self.linked_drag_start_pos
+
+            if lt and lt_old_props and lt in getattr(self, 'editable_texts', []):
+                cmd2 = EditObjectCommand(self, lt, lt_old_props, copy.deepcopy(lt.__dict__))
+                command = CompositeCommand(self, [cmd1, cmd2])
+            else:
+                command = cmd1
             command.execute()
             self.undo_manager.add_command(command)
 
@@ -12388,7 +12522,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_image = clicked_image
             self.selected_text = None
             self.selected_shape = None
-            
+
+            if getattr(clicked_image, 'is_patch', False):
+                btn_type_patch = Gtk.Button(label=_("menu_type_over_patch"))
+                btn_type_patch.set_tooltip_text(_("patch_type_tooltip"))
+                btn_type_patch.connect("clicked", lambda b: (
+                    self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None,
+                    self.initiate_text_over_patch(clicked_image)
+                ))
+                popover_box.append(btn_type_patch)
+                popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
             btn_extract = Gtk.Button(label=_("menu_extract_image"))
             btn_extract.connect("clicked", lambda b: self._handle_context_action("extract_image", clicked_image, x, y))
             popover_box.append(btn_extract)
@@ -12997,7 +13141,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.pdf_view.queue_draw()
                 self.status_label.set_text(_("object_deleted"))
                 return
-            command = DeleteObjectCommand(self, obj)
+            if getattr(obj, 'linked_text', None) and obj.linked_text in getattr(self, 'editable_texts', []):
+                cmd1 = DeleteObjectCommand(self, obj)
+                cmd2 = DeleteObjectCommand(self, obj.linked_text)
+                command = CompositeCommand(self, [cmd1, cmd2])
+            elif getattr(obj, 'linked_patch', None) and obj.linked_patch in getattr(self, 'editable_images', []):
+                obj.linked_patch.linked_text = None
+                command = DeleteObjectCommand(self, obj)
+            else:
+                command = DeleteObjectCommand(self, obj)
             command.execute()
             self.undo_manager.add_command(command)
             self.selected_text = None
@@ -13151,6 +13303,96 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_ui_state()
         self.pdf_view.queue_draw()
         return True
+
+    def initiate_text_over_patch(self, patch_obj):
+        """Initiate immediate text correction layered over a texture patch object."""
+        if not patch_obj or not getattr(patch_obj, 'bbox', None) or not self.doc:
+            return None
+
+        target_page = getattr(patch_obj, 'page_number', self.current_page_index)
+        if target_page != self.current_page_index:
+            self._switch_active_page(target_page)
+
+        linked = getattr(patch_obj, 'linked_text', None)
+        if linked and linked in getattr(self, 'editable_texts', []):
+            self.selected_text = linked
+            self.selected_image = None
+            self.selected_shape = None
+            self.selected_stroke = None
+            self.selected_form_field = None
+            self.selected_measurement = None
+            self._update_text_format_controls(linked)
+            self._show_inline_editor(linked, target_rect=patch_obj.bbox)
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(_("status_patch_text_added"))
+            self.pdf_view.queue_draw()
+            self._update_ui_state()
+            return linked
+
+        x1, y1, x2, y2 = patch_obj.bbox
+        patch_h = abs(y2 - y1)
+        font_size = getattr(self, 'font_size', 12)
+        if hasattr(self, 'font_size_spin') and self.font_size_spin:
+            try:
+                toolbar_size = self.font_size_spin.get_value()
+                if toolbar_size > 0:
+                    font_size = toolbar_size
+            except Exception:
+                pass
+        elif 8.0 <= patch_h * 0.7 <= 48.0:
+            font_size = round(patch_h * 0.7, 1)
+
+        color = getattr(self, 'font_color', (0.0, 0.0, 0.0))
+        target_family_key = getattr(self, 'font_family', "Liberation Sans") or "Liberation Sans"
+        target_base14 = "Helvetica"
+        if hasattr(self, 'font_combo') and self.font_combo:
+            c_iter = self.font_combo.get_active_iter()
+            if c_iter and hasattr(self, 'font_store') and self.font_store:
+                import re
+                model_key = self.font_store[c_iter][1]
+                normalized_for_base14 = re.sub(r'[^a-zA-Z0-9]', '', model_key).lower()
+                for name_key, base14_val in BASE14_FALLBACK_MAP.items():
+                    if name_key in normalized_for_base14:
+                        target_base14 = base14_val
+                        break
+
+        unrot_x = x1 + 2.0
+        unrot_y = y1 + 1.0
+        baseline = y1 + font_size * 0.85
+
+        new_text_obj = EditableText(
+            x=unrot_x,
+            y=unrot_y,
+            text="",
+            font_size=font_size,
+            color=color,
+            is_new=True,
+            baseline=baseline,
+            page_number=target_page
+        )
+        new_text_obj.bbox = (unrot_x, unrot_y, x2, y2)
+        new_text_obj.original_bbox = (unrot_x, unrot_y, x2, y2)
+        new_text_obj.font_family_base = target_family_key
+        new_text_obj.font_family_original = _("font_user_added", target_family_key)
+        new_text_obj.pdf_fontname_base14 = target_base14
+        new_text_obj.linked_patch = patch_obj
+        patch_obj.linked_text = new_text_obj
+
+        self.editable_texts.append(new_text_obj)
+        self.selected_text = new_text_obj
+        self.selected_image = None
+        self.selected_shape = None
+        self.selected_stroke = None
+        self.selected_form_field = None
+        self.selected_measurement = None
+
+        self._update_text_format_controls(new_text_obj)
+        self._show_inline_editor(new_text_obj, target_rect=patch_obj.bbox)
+        if hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(_("status_patch_text_added"))
+        self._update_ui_state()
+        self.pdf_view.queue_draw()
+        return new_text_obj
 
     def reorder_selected_object(self, direction):
         """Move selected canvas object in z-index order."""

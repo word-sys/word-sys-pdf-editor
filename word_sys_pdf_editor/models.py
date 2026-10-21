@@ -263,6 +263,7 @@ class EditableText:
         self.drag_start_y = 0
         
         self.text_spans = []
+        self.linked_patch = None
         
     def set_rotation(self, angle):
         """Set rotation in degrees (0-360)."""
@@ -403,6 +404,8 @@ class EditableImage:
                  opacity=1.0, is_stamp=False, stamp_name=None, is_patch=False):
         self.bbox = bbox
         self.original_bbox = bbox
+        self.x = bbox[0] if bbox else 0.0
+        self.y = bbox[1] if bbox else 0.0
         self.page_number = page_number
         self.xref = xref
         self.image_bytes = image_bytes
@@ -422,7 +425,7 @@ class EditableImage:
 
 class PatchObject(EditableImage):
     """Specialized EditableImage representing a background texture clone patch."""
-    def __init__(self, bbox, page_number, image_bytes, is_new=True, rotation=0.0, opacity=1.0):
+    def __init__(self, bbox, page_number, image_bytes, is_new=True, rotation=0.0, opacity=1.0, purge_underlying_text=True):
         super().__init__(
             bbox=bbox,
             page_number=page_number,
@@ -434,6 +437,8 @@ class PatchObject(EditableImage):
             is_stamp=False,
             is_patch=True
         )
+        self.linked_text = None
+        self.purge_underlying_text = bool(purge_underlying_text)
 
 class EditableShape:
     """Data model representing vector shapes such as rectangle, ellipse, checkmark, cross."""

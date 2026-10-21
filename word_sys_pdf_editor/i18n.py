@@ -851,6 +851,10 @@ _STRINGS = {
         "guide_sc_layer_back": "Send to Back",
         "guide_sc_layer_forward": "Bring Forward",
         "guide_sc_layer_backward": "Send Backward",
+        "menu_type_over_patch": "Type Over Patch…",
+        "patch_type_tooltip": "Add replacement text directly over this patch",
+        "status_patch_text_added": "Replacement text added over patch. Type to edit.",
+        "guide_sc_type_over_patch": "Type Over Selected Patch",
     },
 
     "tr": {
@@ -1698,6 +1702,10 @@ _STRINGS = {
         "guide_sc_layer_back": "En Arkaya Gönder",
         "guide_sc_layer_forward": "Bir Öne Getir",
         "guide_sc_layer_backward": "Bir Arkaya Gönder",
+        "menu_type_over_patch": "Yamanın Üzerine Yaz…",
+        "patch_type_tooltip": "Bu yamanın üzerine doğrudan yeni metin ekle",
+        "status_patch_text_added": "Yama üzerine yeni metin eklendi. Düzenlemek için yazın.",
+        "guide_sc_type_over_patch": "Seçili Yamanın Üzerine Yaz",
     },
 }
 

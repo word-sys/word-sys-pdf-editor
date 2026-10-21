@@ -35,7 +35,9 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
     pdf_handler.restore_page_from_snapshot(doc, page_num)
 
     props = properties_to_clear or {}
-    orig_bbox = props.get('bbox', getattr(target_object, 'original_bbox', target_object.bbox))
+    orig_bbox = props.get('bbox', getattr(target_object, 'original_bbox', getattr(target_object, 'bbox', None)))
+    if not orig_bbox:
+        return
     rot = props.get('rotation', getattr(target_object, 'original_rotation', getattr(target_object, 'rotation', 0.0)))
 
     if isinstance(target_object, (EditableShape, EditableStroke)):
@@ -481,7 +483,13 @@ class EditObjectCommand(Command):
 
     def _update_live_object(self, properties_to_apply):
         """Update live object."""
+        orig_lt = getattr(self.target_object, 'linked_text', None)
+        orig_lp = getattr(self.target_object, 'linked_patch', None)
         self.target_object.__dict__.update(copy.deepcopy(properties_to_apply))
+        if orig_lt is not None:
+            self.target_object.linked_text = orig_lt
+        if orig_lp is not None:
+            self.target_object.linked_patch = orig_lp
         self.target_object.original_bbox = self.target_object.bbox
         self.target_object.modified = False
         sess = self._get_target_session()

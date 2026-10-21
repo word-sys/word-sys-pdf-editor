@@ -3664,6 +3664,10 @@ STRINGS_FR.update({
     'guide_sc_layer_back': 'Placer à l arrière-plan',
     'guide_sc_layer_forward': 'Avancer d un niveau',
     'guide_sc_layer_backward': 'Reculer d un niveau',
+    'menu_type_over_patch': 'Écrire sur la rustine…',
+    'patch_type_tooltip': 'Ajouter du texte de remplacement directement sur cette rustine',
+    'status_patch_text_added': 'Texte de remplacement ajouté sur la rustine. Saisissez votre texte.',
+    'guide_sc_type_over_patch': 'Écrire sur la rustine sélectionnée',
 })
 
 STRINGS_DE.update({
@@ -3840,6 +3844,10 @@ STRINGS_DE.update({
     'guide_sc_layer_back': 'Ganz nach hinten',
     'guide_sc_layer_forward': 'Eine Ebene nach vorne',
     'guide_sc_layer_backward': 'Eine Ebene nach hinten',
+    'menu_type_over_patch': 'Auf Flicken schreiben…',
+    'patch_type_tooltip': 'Ersatztext direkt auf diesem Flicken hinzufügen',
+    'status_patch_text_added': 'Ersatztext auf Flicken hinzugefügt. Zum Bearbeiten tippen.',
+    'guide_sc_type_over_patch': 'Auf ausgewähltem Flicken schreiben',
 })
 
 STRINGS_ES.update({
@@ -4016,6 +4024,10 @@ STRINGS_ES.update({
     'guide_sc_layer_back': 'Enviar al fondo',
     'guide_sc_layer_forward': 'Avanzar una capa',
     'guide_sc_layer_backward': 'Retroceder una capa',
+    'menu_type_over_patch': 'Escribir sobre el parche…',
+    'patch_type_tooltip': 'Añadir texto de sustitución directamente sobre este parche',
+    'status_patch_text_added': 'Texto de sustitución añadido sobre el parche. Escriba para editar.',
+    'guide_sc_type_over_patch': 'Escribir sobre el parche seleccionado',
 })
 
 STRINGS_IT.update({
@@ -4192,6 +4204,10 @@ STRINGS_IT.update({
     'guide_sc_layer_back': 'Porta in secondo piano',
     'guide_sc_layer_forward': 'Porta avanti',
     'guide_sc_layer_backward': 'Porta indietro',
+    'menu_type_over_patch': 'Scrivi sulla toppa…',
+    'patch_type_tooltip': 'Aggiungi testo di sostituzione direttamente su questa toppa',
+    'status_patch_text_added': 'Testo di sostituzione aggiunto sulla toppa. Digita per modificare.',
+    'guide_sc_type_over_patch': 'Scrivi sulla toppa selezionata',
 })
 
 STRINGS_RU.update({
@@ -4368,6 +4384,10 @@ STRINGS_RU.update({
     'guide_sc_layer_back': 'На задний план',
     'guide_sc_layer_forward': 'Переместить вперед',
     'guide_sc_layer_backward': 'Переместить назад',
+    'menu_type_over_patch': 'Печатать поверх заплатки…',
+    'patch_type_tooltip': 'Добавить замещающий текст прямо поверх этой заплатки',
+    'status_patch_text_added': 'Замещающий текст добавлен поверх заплатки. Введите текст для редактирования.',
+    'guide_sc_type_over_patch': 'Печатать поверх выбранной заплатки',
 })
 
 

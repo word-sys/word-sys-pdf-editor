@@ -2992,6 +2992,13 @@ def _apply_single_object_to_page(doc, page, obj):
             except Exception as e:
                 print(f"Warning: image opacity adjustment failed: {e}")
 
+        if getattr(obj, 'is_patch', False) and getattr(obj, 'purge_underlying_text', True):
+            try:
+                page.add_redact_annot(rect)
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
+            except Exception as e:
+                print(f"Warning: could not purge underlying text under patch: {e}")
+
         if rot == 0.0:
             page.insert_image(rect, stream=img_bytes, keep_proportion=False)
         elif rot % 90 == 0:
