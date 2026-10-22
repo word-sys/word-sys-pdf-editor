@@ -590,6 +590,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.search_next_btn = None
         self.search_match_label = None
         self.search_case_btn = None
+        self.search_whole_word_btn = None
+        self._search_debounce_source = None
         self.ocr_banner = None
         self.ocr_banner_label = None
         self.ocr_banner_progress = None
@@ -1777,7 +1779,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.search_entry = Gtk.SearchEntry(placeholder_text=_("search_placeholder"))
         self.search_entry.set_hexpand(True)
         self.search_entry.connect("search-changed", self._on_search_query_changed)
-        self.search_entry.connect("activate", lambda e: self._search_navigate_next())
+        self.search_entry.connect("activate", lambda e: self._on_search_entry_activate())
         self.search_bar.connect_entry(self.search_entry)
         search_box.append(self.search_entry)
 
@@ -1796,9 +1798,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         search_box.append(self.search_match_label)
 
         self.search_case_btn = Gtk.ToggleButton(label="aA")
-        self.search_case_btn.set_tooltip_text(_("search_case_sensitive"))
+        self.search_case_btn.set_tooltip_text(_("search_case_sensitive_tip"))
         self.search_case_btn.connect("toggled", self._on_search_case_toggled)
         search_box.append(self.search_case_btn)
+
+        self.search_whole_word_btn = Gtk.ToggleButton(label="[W]")
+        self.search_whole_word_btn.set_tooltip_text(_("search_whole_word_tip"))
+        self.search_whole_word_btn.connect("toggled", self._on_search_whole_word_toggled)
+        search_box.append(self.search_whole_word_btn)
 
         search_close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
         search_close_btn.add_css_class("flat")
@@ -9182,11 +9189,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if prefill and '\n' not in prefill and len(prefill) <= 120 and hasattr(self, 'search_entry') and self.search_entry:
                 self.search_entry.set_text(prefill)
                 self.search_entry.select_region(0, -1)
+                self._on_search_query_changed(self.search_entry, immediate=True)
             if hasattr(self, 'search_entry') and self.search_entry:
                 self.search_entry.grab_focus()
 
     def close_search_bar(self):
         """Close search bar and clear search highlights."""
+        if hasattr(self, '_search_debounce_source') and self._search_debounce_source:
+            GLib.source_remove(self._search_debounce_source)
+            self._search_debounce_source = None
         if hasattr(self, 'search_bar') and self.search_bar:
             self.search_bar.set_search_mode(False)
         if hasattr(self, 'search_button') and self.search_button and self.search_button.get_active():
@@ -9210,10 +9221,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             else:
                 self.close_search_bar()
 
-    def _on_search_query_changed(self, entry):
-        """Handle search query string modifications."""
+    def _on_search_query_changed(self, entry, immediate: bool = False):
+        """Handle search query string modifications with smooth 150ms debouncing."""
+        if hasattr(self, '_search_debounce_source') and self._search_debounce_source:
+            GLib.source_remove(self._search_debounce_source)
+            self._search_debounce_source = None
+
+        if immediate:
+            self._execute_search_query(entry)
+        else:
+            self._search_debounce_source = GLib.timeout_add(150, self._execute_search_query_from_timer, entry)
+
+    def _execute_search_query_from_timer(self, entry):
+        self._search_debounce_source = None
+        self._execute_search_query(entry)
+        return GLib.SOURCE_REMOVE
+
+    def _execute_search_query(self, entry):
         query = entry.get_text() if entry else ""
         case_sensitive = self.search_case_btn.get_active() if hasattr(self, 'search_case_btn') and self.search_case_btn else False
+        whole_word = self.search_whole_word_btn.get_active() if hasattr(self, 'search_whole_word_btn') and self.search_whole_word_btn else False
         if not self.doc or not query.strip():
             if hasattr(self, 'search_engine') and self.search_engine:
                 self.search_engine.clear()
@@ -9223,7 +9250,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.pdf_view.queue_draw()
             return
 
-        matches = self.search_engine.search(self.doc, query, case_sensitive=case_sensitive)
+        matches = self.search_engine.search(self.doc, query, case_sensitive=case_sensitive, whole_word=whole_word)
         if matches:
             self.search_engine.find_nearest_match(self.current_page_index)
             curr = self.search_engine.current_index
@@ -9236,9 +9263,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, 'pdf_view') and self.pdf_view:
             self.pdf_view.queue_draw()
 
+    def _on_search_entry_activate(self):
+        """Handle Enter key in search entry: run search query immediately if pending, then jump next."""
+        if hasattr(self, '_search_debounce_source') and self._search_debounce_source:
+            GLib.source_remove(self._search_debounce_source)
+            self._search_debounce_source = None
+            self._execute_search_query(self.search_entry)
+        else:
+            self._search_navigate_next()
+
     def _on_search_case_toggled(self, btn):
-        """Re-run search when case sensitivity toggle button changes."""
-        self._on_search_query_changed(self.search_entry)
+        """Re-run search immediately when case sensitivity toggle button changes."""
+        self._on_search_query_changed(self.search_entry, immediate=True)
+
+    def _on_search_whole_word_toggled(self, btn):
+        """Re-run search immediately when whole word toggle button changes."""
+        self._on_search_query_changed(self.search_entry, immediate=True)
 
     def _search_navigate_next(self):
         """Navigate to next search match."""
@@ -9247,8 +9287,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         m = self.search_engine.next_match()
         if m:
             curr = self.search_engine.current_index
+            wrap_hint = " ⟲" if getattr(self.search_engine, 'last_wrapped', False) else ""
             if hasattr(self, 'search_match_label') and self.search_match_label:
-                self.search_match_label.set_text(f"{curr + 1}/{len(self.search_engine.matches)}")
+                self.search_match_label.set_text(f"{curr + 1}/{len(self.search_engine.matches)}{wrap_hint}")
+            if getattr(self.search_engine, 'last_wrapped', False):
+                if hasattr(self, 'toast_overlay') and self.toast_overlay:
+                    toast = Adw.Toast(title=_("search_wrapped_start"))
+                    toast.set_timeout(1)
+                    self.toast_overlay.add_toast(toast)
             self._jump_to_current_search_match()
             if hasattr(self, 'pdf_view') and self.pdf_view:
                 self.pdf_view.queue_draw()
@@ -9260,8 +9306,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         m = self.search_engine.prev_match()
         if m:
             curr = self.search_engine.current_index
+            wrap_hint = " ⟲" if getattr(self.search_engine, 'last_wrapped', False) else ""
             if hasattr(self, 'search_match_label') and self.search_match_label:
-                self.search_match_label.set_text(f"{curr + 1}/{len(self.search_engine.matches)}")
+                self.search_match_label.set_text(f"{curr + 1}/{len(self.search_engine.matches)}{wrap_hint}")
+            if getattr(self.search_engine, 'last_wrapped', False):
+                if hasattr(self, 'toast_overlay') and self.toast_overlay:
+                    toast = Adw.Toast(title=_("search_wrapped_end"))
+                    toast.set_timeout(1)
+                    self.toast_overlay.add_toast(toast)
             self._jump_to_current_search_match()
             if hasattr(self, 'pdf_view') and self.pdf_view:
                 self.pdf_view.queue_draw()

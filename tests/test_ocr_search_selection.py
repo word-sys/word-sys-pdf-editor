@@ -304,3 +304,119 @@ def test_search_button_toggle_sync():
     assert win.search_bar.get_search_mode() is False
 
 
+def test_search_engine_whole_word():
+    """Test whole-word boundary matching vs substring matching."""
+    doc = fitz.open()
+    p = doc.new_page(width=500, height=300)
+    p.insert_text(fitz.Point(50, 50), "password pass passport bypass", fontsize=14)
+    p.insert_text(fitz.Point(50, 100), "The test was testing tested scripts.", fontsize=14)
+
+    engine = DocumentSearchEngine()
+
+    # Substring search matches 4 occurrences of "pass"
+    matches_sub = engine.search(doc, "pass", whole_word=False)
+    assert len(matches_sub) == 4
+
+    # Whole word search matches only 1 exact standalone occurrence of "pass"
+    matches_ww = engine.search(doc, "pass", whole_word=True)
+    assert len(matches_ww) == 1
+    assert matches_ww[0].text == "pass"
+
+    # Whole word for "test" matches "test", not "testing" or "tested"
+    matches_test_ww = engine.search(doc, "test", whole_word=True)
+    assert len(matches_test_ww) == 1
+    assert matches_test_ww[0].text == "test"
+
+    # Substring for "test" matches 3 occurrences
+    matches_test_sub = engine.search(doc, "test", whole_word=False)
+    assert len(matches_test_sub) == 3
+
+    doc.close()
+
+
+def test_search_engine_circular_wrapping():
+    """Test that circular wrap boundaries set last_wrapped attribute correctly."""
+    doc = _create_multi_page_pdf()
+    engine = DocumentSearchEngine()
+
+    # Search for "world" (3 matches across pages 0, 1, 2)
+    engine.search(doc, "world")
+    assert engine.current_index == 0
+    assert engine.last_wrapped is False
+
+    # Next -> index 1 (no wrap)
+    engine.next_match()
+    assert engine.current_index == 1
+    assert engine.last_wrapped is False
+
+    # Next -> index 2 (no wrap)
+    engine.next_match()
+    assert engine.current_index == 2
+    assert engine.last_wrapped is False
+
+    # Next -> index 0 (WRAPPED from end to start!)
+    engine.next_match()
+    assert engine.current_index == 0
+    assert engine.last_wrapped is True
+
+    # Next -> index 1 (wrap resets to False)
+    engine.next_match()
+    assert engine.current_index == 1
+    assert engine.last_wrapped is False
+
+    # Prev -> index 0 (no wrap)
+    engine.prev_match()
+    assert engine.current_index == 0
+    assert engine.last_wrapped is False
+
+    # Prev -> index 2 (WRAPPED from start to end!)
+    engine.prev_match()
+    assert engine.current_index == 2
+    assert engine.last_wrapped is True
+
+    # Prev -> index 1 (wrap resets to False)
+    engine.prev_match()
+    assert engine.current_index == 1
+    assert engine.last_wrapped is False
+
+    doc.close()
+
+
+def test_search_engine_accent_diacritics_normalization():
+    """Test searching with accent/diacritic insensitive matching."""
+    doc = fitz.open()
+    p = doc.new_page(width=500, height=300)
+    p.insert_text(fitz.Point(50, 60), "Please review my résumé at the café.", fontsize=14)
+    p.insert_text(fitz.Point(50, 120), "Istanbul ve Türkiye için çözüm üretin.", fontsize=14)
+
+    engine = DocumentSearchEngine()
+
+    # Searching plain ASCII "resume" finds "résumé"
+    matches_resume = engine.search(doc, "resume")
+    assert len(matches_resume) == 1
+    assert "résumé" in matches_resume[0].text or "resume" in matches_resume[0].text.lower()
+
+    # Searching plain ASCII "cafe" finds "café"
+    matches_cafe = engine.search(doc, "cafe")
+    assert len(matches_cafe) == 1
+
+    # Searching plain ASCII "turkiye" finds "Türkiye"
+    matches_turkiye = engine.search(doc, "turkiye", case_sensitive=False)
+    assert len(matches_turkiye) == 1
+
+    # Searching plain ASCII "cozum" finds "çözüm"
+    matches_cozum = engine.search(doc, "cozum", case_sensitive=False)
+    assert len(matches_cozum) == 1
+
+    # Searching "istanbul" finds "Istanbul"
+    matches_ist = engine.search(doc, "istanbul", case_sensitive=False)
+    assert len(matches_ist) == 1
+
+    # Exact accented search still works
+    matches_accented = engine.search(doc, "résumé")
+    assert len(matches_accented) == 1
+
+    doc.close()
+
+
+

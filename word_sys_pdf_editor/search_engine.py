@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 import pymupdf as fitz
+
+
+def _normalize_text_for_search(text: str) -> str:
+    """Normalize text by stripping diacritics and handling special cases like Turkish dotted I."""
+    text = text.replace('İ', 'I').replace('ı', 'i')
+    return ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
 
 
 @dataclass
@@ -24,8 +32,10 @@ class DocumentSearchEngine:
         self.doc: Optional[fitz.Document] = doc
         self.query: str = ""
         self.case_sensitive: bool = False
+        self.whole_word: bool = False
         self.matches: List[SearchMatch] = []
         self.current_match_index: int = -1
+        self.last_wrapped: bool = False
 
     def set_document(self, doc: Optional[fitz.Document]):
         """Bind search engine to a new or reloaded document session."""
@@ -38,6 +48,7 @@ class DocumentSearchEngine:
         self.query = ""
         self.matches.clear()
         self.current_match_index = -1
+        self.last_wrapped = False
 
     @property
     def match_count(self) -> int:
@@ -47,7 +58,13 @@ class DocumentSearchEngine:
     def current_index(self) -> int:
         return self.current_match_index
 
-    def search(self, doc_or_query: Any, query: Optional[str] = None, case_sensitive: bool = False) -> List[SearchMatch]:
+    def search(
+        self,
+        doc_or_query: Any,
+        query: Optional[str] = None,
+        case_sensitive: bool = False,
+        whole_word: bool = False,
+    ) -> List[SearchMatch]:
         """Search entire document across visible text and invisible OCR render mode 3 layers."""
         if query is not None or not isinstance(doc_or_query, str):
             self.doc = doc_or_query
@@ -57,8 +74,10 @@ class DocumentSearchEngine:
 
         self.query = actual_query.strip() if actual_query else ""
         self.case_sensitive = case_sensitive
+        self.whole_word = whole_word
         self.matches.clear()
         self.current_match_index = -1
+        self.last_wrapped = False
 
         if not self.doc or getattr(self.doc, "is_closed", False) or not self.query or len(self.doc) == 0:
             return self.matches
@@ -67,17 +86,46 @@ class DocumentSearchEngine:
             try:
                 page = self.doc[page_idx]
                 hits = page.search_for(self.query)
+                accent_fallback_used = False
+                if not hits and not self.case_sensitive:
+                    norm_query = _normalize_text_for_search(self.query).lower()
+                    words = page.get_text("words")
+                    for w in words:
+                        w_text = w[4]
+                        clean_w = w_text.strip(".,;:!?()[]{}\"'“”‘’—")
+                        norm_w = _normalize_text_for_search(clean_w).lower()
+                        if self.whole_word:
+                            matched = (norm_query == norm_w)
+                        else:
+                            matched = (norm_query in norm_w)
+                        if matched:
+                            hits.append(fitz.Rect(w[0], w[1], w[2], w[3]))
+                            accent_fallback_used = True
+
                 if not hits:
                     continue
 
                 for hit in hits:
-                    if self.case_sensitive:
-                        try:
-                            extracted = page.get_text("text", clip=hit).strip()
-                            if self.query not in extracted:
-                                continue
-                        except Exception:
-                            pass
+                    if not accent_fallback_used:
+                        if self.case_sensitive:
+                            try:
+                                extracted = page.get_text("text", clip=hit).strip()
+                                if self.query not in extracted:
+                                    continue
+                            except Exception:
+                                pass
+
+                        if self.whole_word:
+                            try:
+                                # Expand horizontal clip by 10 points to capture surrounding word boundaries
+                                clip_rect = fitz.Rect(max(0.0, hit.x0 - 10.0), hit.y0 - 2.0, hit.x1 + 10.0, hit.y1 + 2.0)
+                                extracted = page.get_text("text", clip=clip_rect).strip()
+                                flags = 0 if self.case_sensitive else re.IGNORECASE
+                                pattern = r'(?<!\w)' + re.escape(self.query) + r'(?!\w)'
+                                if not re.search(pattern, extracted, flags):
+                                    continue
+                            except Exception:
+                                pass
 
                     match = SearchMatch(
                         page_index=page_idx,
@@ -122,15 +170,21 @@ class DocumentSearchEngine:
     def next_match(self) -> Optional[SearchMatch]:
         """Advance to next match with circular wrap-around."""
         if not self.matches:
+            self.last_wrapped = False
             return None
+        prev_idx = self.current_match_index
         self.current_match_index = (self.current_match_index + 1) % len(self.matches)
+        self.last_wrapped = (self.current_match_index == 0 and prev_idx == len(self.matches) - 1 and len(self.matches) > 1)
         return self.matches[self.current_match_index]
 
     def prev_match(self) -> Optional[SearchMatch]:
         """Retreat to previous match with circular wrap-around."""
         if not self.matches:
+            self.last_wrapped = False
             return None
+        prev_idx = self.current_match_index
         self.current_match_index = (self.current_match_index - 1) % len(self.matches)
+        self.last_wrapped = (self.current_match_index == len(self.matches) - 1 and prev_idx == 0 and len(self.matches) > 1)
         return self.matches[self.current_match_index]
 
     def get_matches_for_page(self, page_index: int) -> List[SearchMatch]:
