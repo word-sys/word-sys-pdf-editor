@@ -458,6 +458,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.text_edit_popover = None
         self.text_edit_view = None
         self.is_saving = False
+        self._show_ocr_overlay_fallback = False
+        self._ocr_words_cache = {}
         self.dragged_object = None
         self.drag_start_pos = (0, 0)
         self.drag_object_start_pos = (0, 0)
@@ -908,6 +910,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if action:
                 action.set_state(GLib.Variant.new_boolean(self.continuous_scroll))
 
+            if hasattr(self, 'ocr_overlay_btn') and self.ocr_overlay_btn:
+                is_overlay = getattr(session, 'show_ocr_overlay', False)
+                if self.ocr_overlay_btn.get_active() != is_overlay:
+                    self.ocr_overlay_btn.set_active(is_overlay)
+            action_overlay = self.lookup_action("toggle_ocr_overlay")
+            if action_overlay:
+                action_overlay.set_state(GLib.Variant.new_boolean(getattr(session, 'show_ocr_overlay', False)))
+
             if hasattr(self, 'pdf_scroll') and self.pdf_scroll:
                 saved_sx = getattr(session, 'scroll_x', 0.0)
                 saved_sy = getattr(session, 'scroll_y', 0.0)
@@ -1271,6 +1281,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
 
     @property
+    def show_ocr_overlay(self) -> bool:
+        """Active document OCR text layer inspector overlay flag."""
+        sess = getattr(self, '_active_session', None)
+        return sess.show_ocr_overlay if sess else getattr(self, '_show_ocr_overlay_fallback', False)
+
+    @show_ocr_overlay.setter
+    def show_ocr_overlay(self, val: bool):
+        sess = getattr(self, '_active_session', None)
+        if sess:
+            sess.show_ocr_overlay = bool(val)
+        else:
+            self._show_ocr_overlay_fallback = bool(val)
+        if hasattr(self, 'pdf_view'):
+            self.pdf_view.queue_draw()
+
+    @property
     def _page_objects_cache(self) -> Dict[int, Any]:
         """Active document per-page objects cache."""
         sess = getattr(self, '_active_session', None)
@@ -1598,7 +1624,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         header.pack_end(self.print_button)
 
         self.search_button = Gtk.ToggleButton(icon_name="system-search-symbolic")
-        self.search_button.set_tooltip_text(f"{_('search_placeholder')} (Ctrl+F)")
+        self.search_button.set_tooltip_text(_("search_placeholder"))
         self.search_button.connect("toggled", self._on_search_button_toggled)
         header.pack_end(self.search_button)
 
@@ -1632,6 +1658,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         pref_section = Gio.Menu()
         pref_section.append(_("menu_toggle_continuous_scroll"), "win.toggle_continuous_scroll")
+        pref_section.append(_("menu_reveal_ocr_text"), "win.toggle_ocr_overlay")
         pref_section.append(_("menu_toggle_annotations"), "win.toggle_annotations")
         pref_section.append(_("menu_confirm_delete"), "win.confirm_delete")
 
@@ -1722,7 +1749,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.ocr_banner.set_margin_top(4)
         self.ocr_banner.set_margin_bottom(4)
         self.ocr_banner.add_css_class("card")
-        ocr_banner_icon = Gtk.Image.new_from_icon_name("system-search-symbolic")
+        ocr_banner_icon = Gtk.Image.new_from_icon_name("scanner-symbolic")
         self.ocr_banner_label = Gtk.Label(xalign=0.0, hexpand=True)
         self.ocr_banner_label.set_text(_("ocr_banner_processing"))
         self.ocr_banner_progress = Gtk.ProgressBar()
@@ -1996,6 +2023,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.continuous_scroll_btn.set_active(self.continuous_scroll)
         self.continuous_scroll_btn.connect("toggled", lambda b: self.set_continuous_scroll_mode(b.get_active()))
         self.toolbar_row1.append(self.continuous_scroll_btn)
+
+        self.ocr_overlay_btn = Gtk.ToggleButton()
+        self.ocr_overlay_btn.set_icon_name("view-reveal-symbolic")
+        self.ocr_overlay_btn.set_tooltip_text(_("tooltip_ocr_overlay"))
+        self.ocr_overlay_btn.set_active(self.show_ocr_overlay)
+        self.ocr_overlay_btn.connect("toggled", lambda b: self.set_ocr_overlay_mode(b.get_active()))
+        self.toolbar_row1.append(self.ocr_overlay_btn)
 
         self.toolbar_row1.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6))
 
@@ -2676,6 +2710,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_toggle_continuous.connect('activate', on_toggle_continuous_activate)
         self.add_action(action_toggle_continuous)
 
+        action_toggle_ocr_overlay = Gio.SimpleAction.new_stateful(
+            'toggle_ocr_overlay',
+            None,
+            GLib.Variant.new_boolean(self.show_ocr_overlay)
+        )
+        def on_toggle_ocr_overlay_activate(action, value):
+            new_val = not action.get_state().get_boolean()
+            self.set_ocr_overlay_mode(new_val)
+        action_toggle_ocr_overlay.connect('activate', on_toggle_ocr_overlay_activate)
+        self.add_action(action_toggle_ocr_overlay)
+
         action_go_to_page = Gio.SimpleAction.new('go_to_page', None)
         action_go_to_page.connect('activate', lambda a, p: self.show_go_to_page_dialog())
         self.add_action(action_go_to_page)
@@ -2701,6 +2746,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             app.set_accels_for_action("win.quick_guide", ["F1"])
             app.set_accels_for_action("win.toggle_annotations", ["F7"])
             app.set_accels_for_action("win.toggle_continuous_scroll", ["<Control><Shift>c"])
+            app.set_accels_for_action("win.toggle_ocr_overlay", ["<Control><Shift>u"])
             app.set_accels_for_action("win.go_to_page", ["<Control>g"])
             app.set_accels_for_action("win.rotate_page_cw", ["<Control><Shift>r"])
             app.set_accels_for_action("win.rotate_page_ccw", ["<Control><Shift>l"])
@@ -3912,6 +3958,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._switch_active_page(target_page)
         else:
             self._load_page(target_page)
+
+    def set_ocr_overlay_mode(self, enabled: bool):
+        """Toggle visualization overlay of OCR / invisible searchable text bounding boxes."""
+        self.show_ocr_overlay = bool(enabled)
+        if hasattr(self, 'ocr_overlay_btn') and self.ocr_overlay_btn:
+            if self.ocr_overlay_btn.get_active() != self.show_ocr_overlay:
+                self.ocr_overlay_btn.set_active(self.show_ocr_overlay)
+
+        action = self.lookup_action("toggle_ocr_overlay")
+        if action and action.get_state().get_boolean() != self.show_ocr_overlay:
+            action.set_state(GLib.Variant.new_boolean(self.show_ocr_overlay))
+
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
 
     def scroll_to_page(self, page_index: int, smooth: bool = True, duration_ms: int = 250):
         """Navigate to target page, using smooth animation in continuous mode if requested."""
@@ -5958,6 +6018,55 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.rectangle(sel_dx, sel_dy, sel_dw, sel_dh)
             cr.stroke()
             cr.restore()
+
+        # OCR / Searchable text layer inspection overlay
+        if self.show_ocr_overlay and self.doc and 0 <= page_index < len(self.doc):
+            PdfEditorWindow._draw_ocr_overlay(cr, self.doc[page_index], self.zoom_level, page_offset_x, page_offset_y)
+
+    @staticmethod
+    def _extract_ocr_word_boxes(page):
+        """Extract word bounding boxes from a PyMuPDF page.
+        
+        Returns a list of tuples: (x0, y0, x1, y1, word_text).
+        """
+        if page is None:
+            return []
+        try:
+            words = page.get_text("words")
+            return [(w[0], w[1], w[2], w[3], str(w[4])) for w in words]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _draw_ocr_overlay(cr, page, zoom: float, offset_x: float = 0.0, offset_y: float = 0.0):
+        """Draw transparent bounding boxes and subtle dashed borders over recognized OCR words."""
+        boxes = PdfEditorWindow._extract_ocr_word_boxes(page)
+        if not boxes:
+            return
+
+        cr.save()
+        for x0, y0, x1, y1, _text in boxes:
+            bx = offset_x + x0 * zoom
+            by = offset_y + y0 * zoom
+            bw = (x1 - x0) * zoom
+            bh = (y1 - y0) * zoom
+
+            if bw <= 0 or bh <= 0:
+                continue
+
+            # Subtle transparent teal tint for OCR recognition zone
+            cr.set_source_rgba(0.0, 0.75, 0.65, 0.20)
+            cr.rectangle(bx, by, bw, bh)
+            cr.fill_preserve()
+
+            # Crisp dashed border indicating searchable text bounding box
+            cr.set_source_rgba(0.0, 0.60, 0.50, 0.75)
+            cr.set_line_width(1.0)
+            cr.set_dash([3.0, 2.0])
+            cr.stroke()
+            cr.set_dash([])
+
+        cr.restore()
 
     def _visual_to_unrotated_page_coords(self, vis_x, vis_y, page_index=None):
         """Convert visual page coordinates to unrotated PDF cropbox coordinates."""

@@ -1274,6 +1274,7 @@ class DocumentSession:
     zoom_level: float = 1.0
     view_mode: bool = True
     continuous_scroll: bool = False
+    show_ocr_overlay: bool = False
     scroll_x: float = 0.0
     scroll_y: float = 0.0
 
