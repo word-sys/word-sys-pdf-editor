@@ -24,6 +24,11 @@ from .ocr_engine import (
 )
 
 
+def _safe_markup(text: str) -> str:
+    """Escapes string for safe Pango markup rendering in Adwaita ActionRows and PreferencesGroups."""
+    return GLib.markup_escape_text(text) if text else ""
+
+
 class OCRDialog(Adw.Window):
     """Modern Libadwaita dialog for executing OCR and managing language models."""
 
@@ -46,8 +51,8 @@ class OCRDialog(Adw.Window):
 
         self.set_transient_for(parent_window)
         self.set_modal(True)
-        self.set_title(_("ocr_dialog_title"))
-        self.set_default_size(560, 640)
+        self.set_title(_safe_markup(_("ocr_dialog_title")))
+        self.set_default_size(560, 660)
         self.set_resizable(False)
 
         # Analyze document for scanned pages
@@ -80,7 +85,6 @@ class OCRDialog(Adw.Window):
         header.set_title_widget(view_switcher_title)
         main_box.append(self.view_stack)
 
-
         run_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         run_scrolled = Gtk.ScrolledWindow()
         run_scrolled.set_vexpand(True)
@@ -95,7 +99,7 @@ class OCRDialog(Adw.Window):
 
         # Scan Analysis Card
         analysis_group = Adw.PreferencesGroup()
-        analysis_group.set_title(_("ocr_scan_analysis_title"))
+        analysis_group.set_title(_safe_markup(_("ocr_scan_analysis_title")))
         run_box.append(analysis_group)
 
         self.analysis_row = Adw.ActionRow()
@@ -105,12 +109,12 @@ class OCRDialog(Adw.Window):
                 str(p + 1) for p in self.scan_stats["scanned_pages"]
             )
             self.analysis_row.set_title(
-                _("ocr_scans_detected", scanned_count, scanned_pages_str)
+                _safe_markup(_("ocr_scans_detected", scanned_count, scanned_pages_str))
             )
             self.analysis_row.add_css_class("accent")
             icon_name = "scanner-symbolic"
         else:
-            self.analysis_row.set_title(_("ocr_no_scans_detected"))
+            self.analysis_row.set_title(_safe_markup(_("ocr_no_scans_detected")))
             icon_name = "document-properties-symbolic"
 
         self.analysis_icon = Gtk.Image.new_from_icon_name(icon_name)
@@ -121,17 +125,28 @@ class OCRDialog(Adw.Window):
 
         # OCR Settings Group
         settings_group = Adw.PreferencesGroup()
-        settings_group.set_title(_("ocr_dialog_title"))
+        settings_group.set_title(_safe_markup(_("ocr_dialog_title")))
         run_box.append(settings_group)
 
-        # Language Selector ComboRow
+        # Primary Language Selector ComboRow
         self.lang_model = Gtk.StringList()
         self.lang_row = Adw.ComboRow(
-            title=_("ocr_lang_label"),
+            title=_safe_markup(_("ocr_lang_primary_label")),
             model=self.lang_model,
         )
         self.installed_lang_codes: list[str] = []
         settings_group.add(self.lang_row)
+
+        # Secondary Language (Optional) ComboRow for Bilingual / Multilingual OCR
+        self.secondary_lang_model = Gtk.StringList()
+        self.secondary_lang_row = Adw.ComboRow(
+            title=_safe_markup(_("ocr_lang_secondary_label")),
+            subtitle=_safe_markup(_("ocr_lang_secondary_desc")),
+            model=self.secondary_lang_model,
+        )
+        self.lang_row.connect("notify::selected", self._on_language_selection_changed)
+        self.secondary_lang_row.connect("notify::selected", self._on_language_selection_changed)
+        settings_group.add(self.secondary_lang_row)
 
         # Scope / Page Range ComboRow
         self.scope_model = Gtk.StringList()
@@ -233,12 +248,12 @@ class OCRDialog(Adw.Window):
 
         # Storage & Transparency Info Group
         storage_group = Adw.PreferencesGroup()
-        storage_group.set_title(_("ocr_storage_info_title"))
+        storage_group.set_title(_safe_markup(_("ocr_storage_info_title")))
 
         storage_row = Adw.ActionRow()
         user_path_str = str(get_tessdata_user_dir())
-        storage_row.set_title(_("ocr_storage_path_label", user_path_str))
-        storage_row.set_subtitle(f"{_('ocr_no_restart_notice')}\n{_('ocr_universal_notice')}")
+        storage_row.set_title(_safe_markup(_("ocr_storage_path_label", user_path_str)))
+        storage_row.set_subtitle(_safe_markup(f"{_('ocr_no_restart_notice')}\n{_('ocr_universal_notice')}"))
 
         open_folder_btn = Gtk.Button.new_from_icon_name("folder-open-symbolic")
         open_folder_btn.set_tooltip_text(_("ocr_open_folder"))
@@ -250,7 +265,8 @@ class OCRDialog(Adw.Window):
 
         # Models List Group
         self.models_list_group = Adw.PreferencesGroup()
-        self.models_list_group.set_title(_("ocr_tab_models"))
+        self.models_list_group.set_title(_safe_markup(_("ocr_tab_models")))
+        self.models_list_group.set_description(_safe_markup(_("ocr_models_multilang_info")))
         models_box.append(self.models_list_group)
 
         p2 = self.view_stack.add_titled(
@@ -260,29 +276,75 @@ class OCRDialog(Adw.Window):
         )
         p2.set_icon_name("preferences-desktop-locale-symbolic")
 
+    def _on_language_selection_changed(self, *_args):
+        """Update subtitle dynamically when primary or secondary language is toggled."""
+        if not self.installed_lang_codes:
+            return
+
+        p_idx = self.lang_row.get_selected()
+        s_idx = self.secondary_lang_row.get_selected()
+
+        # If user picked the same language as secondary as the primary, reset secondary to None (index 0)
+        if s_idx > 0:
+            if s_idx - 1 == p_idx:
+                self.secondary_lang_row.set_selected(0)
+                return
+
+            if p_idx < len(self.installed_lang_codes) and (s_idx - 1) < len(self.installed_lang_codes):
+                p_code = self.installed_lang_codes[p_idx]
+                s_code = self.installed_lang_codes[s_idx - 1]
+                p_info = SUPPORTED_LANGUAGES.get(p_code, {})
+                s_info = SUPPORTED_LANGUAGES.get(s_code, {})
+                p_name = p_info.get("name", p_code.upper())
+                s_name = s_info.get("name", s_code.upper())
+                pair_name = f"{p_name} + {s_name}"
+                self.secondary_lang_row.set_subtitle(
+                    _safe_markup(_("ocr_mode_bilingual_active", pair_name))
+                )
+        else:
+            if len(self.installed_lang_codes) >= 2:
+                self.secondary_lang_row.set_subtitle(_safe_markup(_("ocr_lang_secondary_desc")))
+            else:
+                self.secondary_lang_row.set_subtitle(_safe_markup(_("ocr_lang_secondary_need_more")))
+
     def _refresh_languages(self):
         """Scan system and user profile for installed language models and update UI."""
         all_langs = get_available_languages()
 
-        # Update Recognize Tab dropdown
+        # Update Recognize Tab dropdowns
         self.installed_lang_codes.clear()
-        # Clear existing items in StringList
+        # Clear existing items in StringLists
         while self.lang_model.get_n_items() > 0:
             self.lang_model.remove(0)
+        while self.secondary_lang_model.get_n_items() > 0:
+            self.secondary_lang_model.remove(0)
+
+        # Secondary language has "None" as option 0
+        self.secondary_lang_model.append(_("ocr_lang_none"))
 
         for code, info in all_langs.items():
             if info["is_installed"]:
                 self.installed_lang_codes.append(code)
                 display_name = f"{info['name']} ({info['native']})"
                 self.lang_model.append(display_name)
+                self.secondary_lang_model.append(display_name)
 
         if not self.installed_lang_codes:
             self.start_btn.set_sensitive(False)
-            self.lang_row.set_subtitle(_("ocr_err_no_model"))
+            self.lang_row.set_subtitle(_safe_markup(_("ocr_err_no_model")))
+            self.secondary_lang_row.set_sensitive(False)
         else:
             self.start_btn.set_sensitive(True)
             self.lang_row.set_subtitle("")
             self.lang_row.set_selected(0)
+            self.secondary_lang_row.set_selected(0)
+
+            if len(self.installed_lang_codes) >= 2:
+                self.secondary_lang_row.set_sensitive(True)
+                self.secondary_lang_row.set_subtitle(_safe_markup(_("ocr_lang_secondary_desc")))
+            else:
+                self.secondary_lang_row.set_sensitive(False)
+                self.secondary_lang_row.set_subtitle(_safe_markup(_("ocr_lang_secondary_need_more")))
 
         # Clear old rows from models_list_group
         if not hasattr(self, "_model_rows"):
@@ -425,7 +487,17 @@ class OCRDialog(Adw.Window):
         selected_idx = self.lang_row.get_selected()
         if selected_idx < 0 or selected_idx >= len(self.installed_lang_codes):
             return
-        lang_code = self.installed_lang_codes[selected_idx]
+        primary_code = self.installed_lang_codes[selected_idx]
+
+        sec_idx = self.secondary_lang_row.get_selected()
+        if sec_idx > 0 and (sec_idx - 1) < len(self.installed_lang_codes):
+            sec_code = self.installed_lang_codes[sec_idx - 1]
+            if sec_code != primary_code:
+                lang_code = f"{primary_code}+{sec_code}"
+            else:
+                lang_code = primary_code
+        else:
+            lang_code = primary_code
 
         scope_idx = self.scope_row.get_selected()
         scope_type = self.scope_options[scope_idx]
@@ -451,6 +523,7 @@ class OCRDialog(Adw.Window):
         self.start_btn.set_sensitive(False)
         self.cancel_btn.set_sensitive(True)
         self.lang_row.set_sensitive(False)
+        self.secondary_lang_row.set_sensitive(False)
         self.scope_row.set_sensitive(False)
         self.dpi_row.set_sensitive(False)
         self.deskew_row.set_sensitive(False)
@@ -519,15 +592,16 @@ class OCRDialog(Adw.Window):
             except Exception as e:
                 print(f"OCR execution setup error: {e}")
             finally:
-                GLib.idle_add(self._on_ocr_finished, target_pages, results)
+                GLib.idle_add(self._on_ocr_finished, target_pages, results, lang_code)
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _on_ocr_finished(self, target_pages: list[int], results: dict):
+    def _on_ocr_finished(self, target_pages: list[int], results: dict, lang_code: str = "eng"):
         self._is_ocr_running = False
         self.start_btn.set_sensitive(True)
         self.cancel_btn.set_sensitive(True)
         self.lang_row.set_sensitive(True)
+        self.secondary_lang_row.set_sensitive(len(self.installed_lang_codes) >= 2)
         self.scope_row.set_sensitive(True)
         self.dpi_row.set_sensitive(True)
         self.deskew_row.set_sensitive(True)
@@ -552,7 +626,12 @@ class OCRDialog(Adw.Window):
 
         if self.on_completed_callback:
             try:
-                self.on_completed_callback(target_pages, results)
+                import inspect
+                sig = inspect.signature(self.on_completed_callback)
+                if len(sig.parameters) >= 3:
+                    self.on_completed_callback(target_pages, results, lang_code)
+                else:
+                    self.on_completed_callback(target_pages, results)
             except Exception as e:
                 print(f"Error in OCR completion callback: {e}")
 

@@ -167,26 +167,119 @@ def get_available_languages() -> dict[str, dict]:
 
 
 def get_best_tessdata_dir_for_lang(lang_code: str) -> str:
-    """Find and return the directory containing the requested language model.
+    """Find and return the directory containing the requested language model(s).
 
-    Raises FileNotFoundError if the language model is not installed.
+    Supports single languages (e.g. "eng") and compound bilingual/multilingual
+    languages (e.g. "eng+tur", "deu+fra+eng").
+    If models reside in different search paths, unifies them seamlessly into a
+    composite directory so PyMuPDF's C-engine can load all models simultaneously.
+
+    Raises FileNotFoundError if any requested language model is not installed.
     """
-    # Multi-language strings (e.g. "eng+tur") check primary language first
-    primary = lang_code.split("+")[0].strip()
-    filename = f"{primary}.traineddata"
+    clean = lang_code.strip().lower()
+    codes = [c.strip() for c in clean.split("+") if c.strip()]
+    if not codes:
+        codes = ["eng"]
 
-    for s_dir in get_tessdata_search_dirs():
-        try:
-            candidate = s_dir / filename
-            if candidate.is_file() and candidate.stat().st_size > 0:
-                return str(s_dir)
-        except Exception:
-            continue
+    all_langs = get_available_languages()
+    missing = [c for c in codes if not all_langs.get(c, {}).get("is_installed")]
+    if missing:
+        missing_str = ", ".join(f"'{m}.traineddata'" for m in missing)
+        raise FileNotFoundError(
+            f"Language model(s) {missing_str} not found in any search path. "
+            f"Please download via the OCR Language Manager."
+        )
 
-    raise FileNotFoundError(
-        f"Language model '{primary}.traineddata' not found in any search path. "
-        f"Please download it via the OCR Language Manager."
-    )
+    # Collect directory for each code
+    dirs: list[Path] = []
+    for c in codes:
+        p = all_langs[c]["path"]
+        dirs.append(Path(p).parent)
+
+    # If all models live in the exact same directory, return it directly
+    if all(d.resolve() == dirs[0].resolve() for d in dirs):
+        return str(dirs[0])
+
+    # Models are distributed across different search paths (e.g. system + user profile).
+    # Create a composite directory linking all requested models so Tesseract C-engine
+    # finds all models in a single location.
+    user_tess = get_tessdata_user_dir()
+    user_tess.mkdir(parents=True, exist_ok=True)
+    composite_dir = user_tess / "_composite"
+    composite_dir.mkdir(parents=True, exist_ok=True)
+
+    for c in codes:
+        src = Path(all_langs[c]["path"])
+        dst = composite_dir / f"{c}.traineddata"
+        if not dst.exists() or dst.resolve() != src.resolve():
+            try:
+                if dst.is_symlink() or dst.exists():
+                    dst.unlink()
+                dst.symlink_to(src)
+            except Exception:
+                shutil.copy2(src, dst)
+
+    return str(composite_dir)
+
+
+def resolve_compound_language_model_dirs(lang_code: str) -> list[Path]:
+    """Return a deduplicated list of directory Paths containing the models for the specified language code(s)."""
+    clean = lang_code.strip().lower()
+    codes = [c.strip() for c in clean.split("+") if c.strip()]
+    if not codes:
+        codes = ["eng"]
+
+    all_langs = get_available_languages()
+    dirs: list[Path] = []
+    seen: set[Path] = set()
+    for c in codes:
+        info = all_langs.get(c, {})
+        p = info.get("path")
+        if p:
+            parent = Path(p).parent.resolve()
+            if parent not in seen:
+                seen.add(parent)
+                dirs.append(Path(p).parent)
+    return dirs
+
+
+
+def validate_language_code(lang_code: str) -> tuple[bool, str, list[str]]:
+    """Validate a single or compound language code against installed models.
+
+    Returns:
+        (is_valid, normalized_code, missing_languages)
+    """
+    clean = lang_code.strip().lower()
+    codes = [c.strip() for c in clean.split("+") if c.strip()]
+    if not codes:
+        codes = ["eng"]
+
+    all_langs = get_available_languages()
+    missing = [c for c in codes if not all_langs.get(c, {}).get("is_installed")]
+    normalized = "+".join(codes)
+    return (len(missing) == 0, normalized, missing)
+
+
+def get_language_display_name(lang_code: str) -> str:
+    """Return a human-friendly display name for a single or compound language string."""
+    clean = lang_code.strip().lower()
+    codes = [c.strip() for c in clean.split("+") if c.strip()]
+    if not codes:
+        return "English"
+
+    all_langs = get_available_languages()
+    names = []
+    for c in codes:
+        meta = all_langs.get(c)
+        if meta:
+            names.append(meta.get("name") or c.upper())
+        else:
+            names.append(c.upper())
+
+    if len(names) == 1:
+        return names[0]
+    return " + ".join(names)
 
 
 def download_language_model(
@@ -340,6 +433,10 @@ def perform_ocr_on_pixmap(
 
     Uses PyMuPDF's statically built-in C-engine.
     """
+    # PDFOCR cannot accept pixmaps with an alpha channel; safely drop alpha if present
+    if getattr(pix, "alpha", 0):
+        pix = fitz.Pixmap(pix, 0)
+
     if tessdata_dir is None:
         tessdata_dir = get_best_tessdata_dir_for_lang(language)
 

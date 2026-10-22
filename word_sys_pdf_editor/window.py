@@ -9238,7 +9238,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._ocr_dialog = None
         return False
 
-    def _on_ocr_completed(self, target_pages: list[int], results: dict):
+    def _on_ocr_completed(self, target_pages: list[int], results: dict, language: str = "eng"):
         """Handle completion of OCR recognition by embedding transparent searchable text layers."""
         if not self.doc:
             return
@@ -9250,6 +9250,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self,
                 page_indices=pages,
                 ocr_results=results,
+                language=language,
             )
             cmd.execute()
             if hasattr(self, "undo_manager") and self.undo_manager:
