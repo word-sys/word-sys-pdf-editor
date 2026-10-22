@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import subprocess
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Callable, Optional
 
 import fitz
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 SUPPORTED_LANGUAGES = {
     "eng": {"name": "English", "native": "English", "size_mb": 4.1},
@@ -423,24 +424,127 @@ def analyze_document_scans(doc: fitz.Document) -> dict:
     }
 
 
+def estimate_word_confidence(text: str) -> float:
+    """Estimate OCR word recognition confidence based on lexical and typographic characteristics.
+    
+    Used when reading preexisting PDF text layers or as a fast sandbox fallback.
+    Returns a score between 0.0 and 1.0.
+    """
+    t = str(text).strip()
+    if not t:
+        return 0.0
+    bad_chars = set("~|`^_{}[]<>\\#%*")
+    num_bad = sum(1 for c in t if c in bad_chars)
+    if num_bad > 0:
+        return max(0.10, 0.45 - 0.12 * num_bad)
+
+    if not any(c.isalnum() for c in t):
+        return 0.30
+
+    letters = sum(1 for c in t if c.isalpha())
+    digits = sum(1 for c in t if c.isdigit())
+    if letters > 0 and digits > 0 and len(t) <= 4:
+        return 0.55
+    if t.isdigit() or t.replace(".", "").replace(",", "").isdigit():
+        return 0.90
+    if len(t) == 1:
+        return 0.65
+    if t.isupper() or t.istitle() or t.islower():
+        return 0.92
+    return 0.78
+
+
+def preprocess_image_for_ocr(
+    img: Image.Image,
+    auto_invert: bool = True,
+    enhance_contrast: bool = True,
+    block_size: int = 64,
+) -> Image.Image:
+    """Preprocess PIL Image for maximum OCR recognition accuracy.
+    
+    1. Adaptive Dark-Background Inversion:
+       Detects dark regions or inverted colors (e.g. white text on black background in
+       flowcharts, diagrams, code blocks, night-mode documents) and adaptively inverts
+       dark blocks to light background so Tesseract can recognize characters cleanly.
+    2. Dynamic Contrast Enhancement:
+       Sharpens character edges and widens dynamic range for fine diagram stems and text.
+    """
+    try:
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        arr = np.array(img)
+        h, w = arr.shape[:2]
+        is_rgb = (len(arr.shape) == 3)
+
+        if auto_invert:
+            gray = np.array(img.convert("L"))
+            bs = max(32, min(block_size, min(h, w)))
+            for y in range(0, h, bs):
+                for x in range(0, w, bs):
+                    by1 = min(y + bs, h)
+                    bx1 = min(x + bs, w)
+                    block_gray = gray[y:by1, x:bx1]
+                    if np.mean(block_gray) < 120:
+                        if is_rgb:
+                            arr[y:by1, x:bx1] = 255 - arr[y:by1, x:bx1]
+                        else:
+                            arr[y:by1, x:bx1] = 255 - block_gray
+
+        res_img = Image.fromarray(arr)
+        if enhance_contrast:
+            enhancer = ImageEnhance.Contrast(res_img)
+            res_img = enhancer.enhance(1.35)
+        return res_img
+    except Exception as e:
+        print(f"Warning: preprocess_image_for_ocr failed: {e}")
+        return img
+
+
+def preprocess_pixmap_for_ocr(
+    pix: fitz.Pixmap,
+    auto_invert: bool = True,
+    enhance_contrast: bool = True,
+) -> fitz.Pixmap:
+    """Preprocess a PyMuPDF pixmap for optimal OCR text recognition."""
+    if not auto_invert and not enhance_contrast:
+        return pix
+    try:
+        if getattr(pix, "alpha", 0):
+            pix = fitz.Pixmap(pix, 0)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        preprocessed = preprocess_image_for_ocr(img, auto_invert=auto_invert, enhance_contrast=enhance_contrast)
+        return fitz.Pixmap(fitz.csRGB, preprocessed.width, preprocessed.height, preprocessed.tobytes(), False)
+    except Exception as e:
+        print(f"Warning: preprocess_pixmap_for_ocr failed: {e}")
+        return pix
+
+
+def auto_invert_dark_background(pix: fitz.Pixmap, threshold: int = 120) -> fitz.Pixmap:
+    """Invert dark backgrounds or inverted scans for optimal OCR text recognition."""
+    return preprocess_pixmap_for_ocr(pix, auto_invert=True, enhance_contrast=False)
+
+
 def perform_ocr_on_pixmap(
     pix: fitz.Pixmap,
     language: str = "eng",
     compress: bool = True,
     tessdata_dir: Optional[str] = None,
+    auto_invert: bool = True,
+    enhance_contrast: bool = True,
 ) -> bytes:
     """Execute in-process Tesseract OCR on a pixmap and return a 1-page searchable PDF in bytes.
 
     Uses PyMuPDF's statically built-in C-engine.
     """
-    # PDFOCR cannot accept pixmaps with an alpha channel; safely drop alpha if present
     if getattr(pix, "alpha", 0):
         pix = fitz.Pixmap(pix, 0)
+
+    if auto_invert or enhance_contrast:
+        pix = preprocess_pixmap_for_ocr(pix, auto_invert=auto_invert, enhance_contrast=enhance_contrast)
 
     if tessdata_dir is None:
         tessdata_dir = get_best_tessdata_dir_for_lang(language)
 
-    # pix.pdfocr_tobytes runs the C-engine directly
     ocr_bytes = pix.pdfocr_tobytes(
         language=language,
         compress=compress,
@@ -453,8 +557,10 @@ def perform_ocr_on_page(
     doc: fitz.Document,
     page_num: int,
     language: str = "eng",
-    dpi: int = 150,
+    dpi: int = 200,
     tessdata_dir: Optional[str] = None,
+    auto_invert: bool = True,
+    enhance_contrast: bool = True,
 ) -> fitz.Document:
     """Execute OCR on a specific page of a document and return a 1-page fitz.Document containing recognized text layer."""
     if page_num < 0 or page_num >= len(doc):
@@ -467,8 +573,96 @@ def perform_ocr_on_page(
         language=language,
         compress=True,
         tessdata_dir=tessdata_dir,
+        auto_invert=auto_invert,
+        enhance_contrast=enhance_contrast,
     )
     return fitz.open(stream=ocr_bytes)
+
+
+def extract_ocr_words_with_confidence(
+    pix: fitz.Pixmap,
+    page_rect: Optional[fitz.Rect] = None,
+    language: str = "eng",
+    tessdata_dir: Optional[str] = None,
+    auto_invert: bool = True,
+    enhance_contrast: bool = True,
+) -> list[dict]:
+    """Extract recognized words with precise bounding boxes and confidence scores (0.0 - 1.0).
+    
+    If system tesseract binary is available, runs TSV extraction for 100% exact per-word confidence.
+    Otherwise, performs in-process OCR via PyMuPDF and computes heuristic confidence.
+    """
+    if getattr(pix, "alpha", 0):
+        pix = fitz.Pixmap(pix, 0)
+
+    if auto_invert or enhance_contrast:
+        pix = preprocess_pixmap_for_ocr(pix, auto_invert=auto_invert, enhance_contrast=enhance_contrast)
+
+    if tessdata_dir is None:
+        tessdata_dir = get_best_tessdata_dir_for_lang(language)
+
+    pw = float(page_rect.width) if page_rect else float(pix.width)
+    ph = float(page_rect.height) if page_rect else float(pix.height)
+    sx = pw / max(float(pix.width), 1.0)
+    sy = ph / max(float(pix.height), 1.0)
+
+    tess_path = shutil.which("tesseract")
+    if tess_path:
+        try:
+            img_bytes = pix.tobytes("png")
+            cmd = [tess_path, "stdin", "stdout", "-l", language, "tsv"]
+            if tessdata_dir:
+                cmd.extend(["--tessdata-dir", tessdata_dir])
+            proc = subprocess.run(cmd, input=img_bytes, capture_output=True, timeout=25)
+            if proc.returncode == 0 and proc.stdout:
+                tsv_lines = proc.stdout.decode("utf-8", errors="ignore").splitlines()
+                words_list: list[dict] = []
+                for line in tsv_lines[1:]:
+                    parts = line.split("\t")
+                    if len(parts) >= 12 and parts[0] == "5":
+                        raw_text = parts[11].strip()
+                        if not raw_text:
+                            continue
+                        lx = float(parts[6]) * sx
+                        ty = float(parts[7]) * sy
+                        bw = float(parts[8]) * sx
+                        bh = float(parts[9]) * sy
+                        conf_val = max(0.0, min(1.0, float(parts[10]) / 100.0))
+                        words_list.append({
+                            "bbox": (lx, ty, lx + bw, ty + bh),
+                            "text": raw_text,
+                            "confidence": conf_val,
+                        })
+                if words_list:
+                    return words_list
+        except Exception as e:
+            print(f"Notice: TSV extraction fallback to in-process OCR: {e}")
+
+    ocr_bytes = pix.pdfocr_tobytes(
+        language=language,
+        compress=True,
+        tessdata=tessdata_dir,
+    )
+    words_list = []
+    try:
+        temp_doc = fitz.open(stream=ocr_bytes)
+        for w in temp_doc[0].get_text("words"):
+            if len(w) >= 5 and str(w[4]).strip():
+                text_str = str(w[4]).strip()
+                wx0 = float(w[0]) * (pw / max(temp_doc[0].rect.width, 1.0))
+                wy0 = float(w[1]) * (ph / max(temp_doc[0].rect.height, 1.0))
+                wx1 = float(w[2]) * (pw / max(temp_doc[0].rect.width, 1.0))
+                wy1 = float(w[3]) * (ph / max(temp_doc[0].rect.height, 1.0))
+                words_list.append({
+                    "bbox": (min(wx0, wx1), min(wy0, wy1), max(wx0, wx1), max(wy0, wy1)),
+                    "text": text_str,
+                    "confidence": estimate_word_confidence(text_str),
+                })
+        temp_doc.close()
+    except Exception as e:
+        print(f"Error extracting in-process OCR words: {e}")
+
+    return words_list
 
 
 def extract_ocr_text_from_page(

@@ -1761,9 +1761,11 @@ class EmbedOCRTextCommand(Command):
         ocr_results: Optional[Dict[int, Any]] = None,
         ocr_words_by_page: Optional[Dict[int, List[Dict[str, Any]]]] = None,
         language: str = "eng",
-        dpi: int = 150,
+        dpi: int = 200,
         auto_deskew: bool = True,
         auto_rotate: bool = True,
+        auto_invert: bool = True,
+        enhance_contrast: bool = True,
     ):
         super().__init__(window)
         self.page_indices = list(page_indices)
@@ -1771,6 +1773,8 @@ class EmbedOCRTextCommand(Command):
         self.dpi = dpi
         self.auto_deskew = auto_deskew
         self.auto_rotate = auto_rotate
+        self.auto_invert = auto_invert
+        self.enhance_contrast = enhance_contrast
         self.last_result: Dict[str, Any] = {}
 
         doc = self._get_doc()
@@ -1830,6 +1834,8 @@ class EmbedOCRTextCommand(Command):
             replace_existing=True,
             auto_deskew=self.auto_deskew,
             auto_rotate=self.auto_rotate,
+            auto_invert=self.auto_invert,
+            enhance_contrast=self.enhance_contrast,
         )
 
         # Cache any newly computed OCR words so redo does not re-run OCR

@@ -6023,29 +6023,64 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.show_ocr_overlay and self.doc and 0 <= page_index < len(self.doc):
             PdfEditorWindow._draw_ocr_overlay(cr, self.doc[page_index], self.zoom_level, page_offset_x, page_offset_y)
 
+    class OcrWordBox(tuple):
+        """Word box tuple (x0, y0, x1, y1, word) preserving 5-element unpacking with confidence attribute."""
+        confidence: float = 0.90
+
+        def __new__(cls, x0, y0, x1, y1, word, confidence: float = 0.90):
+            obj = super().__new__(cls, (float(x0), float(y0), float(x1), float(y1), str(word)))
+            obj.confidence = float(confidence)
+            return obj
+
     @staticmethod
     def _extract_ocr_word_boxes(page):
-        """Extract word bounding boxes from a PyMuPDF page.
+        """Extract word bounding boxes and confidence ratings from a PyMuPDF page.
         
-        Returns a list of tuples: (x0, y0, x1, y1, word_text).
+        Returns a list of OcrWordBox tuples: (x0, y0, x1, y1, word_text).
         """
         if page is None:
             return []
+        
+        # 1. Check if cached from recent OCR run on document
+        doc = getattr(page, "parent", None)
+        p_num = getattr(page, "number", 0)
+        if doc and hasattr(doc, "_ocr_words_cache") and p_num in doc._ocr_words_cache:
+            cached_words = doc._ocr_words_cache[p_num]
+            res = []
+            for item in cached_words:
+                bbox = item.get("bbox")
+                if bbox and len(bbox) >= 4:
+                    text = str(item.get("text", "")).strip()
+                    conf = float(item.get("confidence", 0.90))
+                    res.append(PdfEditorWindow.OcrWordBox(bbox[0], bbox[1], bbox[2], bbox[3], text, conf))
+            if res:
+                return res
+
+        # 2. Extract words directly from page text layer with heuristic confidence
         try:
+            from .ocr_engine import estimate_word_confidence
             words = page.get_text("words")
-            return [(w[0], w[1], w[2], w[3], str(w[4])) for w in words]
+            res = []
+            for w in words:
+                text = str(w[4])
+                conf = estimate_word_confidence(text)
+                res.append(PdfEditorWindow.OcrWordBox(w[0], w[1], w[2], w[3], text, conf))
+            return res
         except Exception:
             return []
 
     @staticmethod
     def _draw_ocr_overlay(cr, page, zoom: float, offset_x: float = 0.0, offset_y: float = 0.0):
-        """Draw transparent bounding boxes and subtle dashed borders over recognized OCR words."""
+        """Draw transparent bounding boxes and confidence heatmaps over recognized OCR words."""
         boxes = PdfEditorWindow._extract_ocr_word_boxes(page)
         if not boxes:
             return
 
         cr.save()
-        for x0, y0, x1, y1, _text in boxes:
+        for item in boxes:
+            x0, y0, x1, y1, _text = item[:5]
+            conf = getattr(item, "confidence", item[5] if len(item) >= 6 else 0.90)
+
             bx = offset_x + x0 * zoom
             by = offset_y + y0 * zoom
             bw = (x1 - x0) * zoom
@@ -6054,15 +6089,31 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if bw <= 0 or bh <= 0:
                 continue
 
-            # Subtle transparent teal tint for OCR recognition zone
-            cr.set_source_rgba(0.0, 0.75, 0.65, 0.20)
+            # Confidence Heatmap Color Coding:
+            # 🟢 High Confidence (>= 80%): Crisp Green
+            # 🟡 Medium Confidence (50% - 79%): Amber / Yellow
+            # 🔴 Low Confidence (< 50%): Vivid Red Alert
+            if conf >= 0.80:
+                fill_rgba = (0.15, 0.68, 0.38, 0.22)
+                border_rgba = (0.15, 0.68, 0.38, 0.80)
+                dash = [3.0, 2.0]
+            elif conf >= 0.50:
+                fill_rgba = (0.92, 0.65, 0.05, 0.28)
+                border_rgba = (0.92, 0.65, 0.05, 0.85)
+                dash = [2.0, 2.0]
+            else:
+                fill_rgba = (0.88, 0.15, 0.15, 0.38)
+                border_rgba = (0.88, 0.15, 0.15, 0.95)
+                dash = []
+
+            cr.set_source_rgba(*fill_rgba)
             cr.rectangle(bx, by, bw, bh)
             cr.fill_preserve()
 
-            # Crisp dashed border indicating searchable text bounding box
-            cr.set_source_rgba(0.0, 0.60, 0.50, 0.75)
-            cr.set_line_width(1.0)
-            cr.set_dash([3.0, 2.0])
+            cr.set_source_rgba(*border_rgba)
+            cr.set_line_width(1.2 if conf < 0.50 else 1.0)
+            if dash:
+                cr.set_dash(dash)
             cr.stroke()
             cr.set_dash([])
 

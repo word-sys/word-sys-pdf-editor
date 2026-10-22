@@ -932,6 +932,8 @@ _STRINGS = {
         "ocr_auto_deskew_desc": "Straighten tilted scanned pages before text recognition",
         "ocr_auto_rotate": "Auto-rotate orientation",
         "ocr_auto_rotate_desc": "Correct upside-down or sideways pages (90°, 180°, 270°)",
+        "ocr_auto_invert": "Auto-invert dark backgrounds",
+        "ocr_auto_invert_desc": "Invert light text on dark banners and inverted scans for higher accuracy",
         "ocr_pages_label": "Page Scope",
         "ocr_pages_current": "Current Page (Page {0})",
         "ocr_pages_scanned_only": "Scanned Pages Only ({0} pages)",
@@ -1899,6 +1901,8 @@ _STRINGS = {
         "ocr_auto_deskew_desc": "Metin tanımadan önce eğik taranmış sayfaları düzeltir",
         "ocr_auto_rotate": "Yönü otomatik döndür",
         "ocr_auto_rotate_desc": "Ters veya yan duran sayfaları düzeltir (90°, 180°, 270°)",
+        "ocr_auto_invert": "Koyu arka planları otomatik tersine çevir",
+        "ocr_auto_invert_desc": "Koyu alanlardaki açık renkli metinleri algılayıp tersine çevirerek tanımayı güçlendirir",
         "ocr_pages_label": "Sayfa Kapsamı",
         "ocr_pages_current": "Geçerli Sayfa (Sayfa {0})",
         "ocr_pages_scanned_only": "Yalnızca Taranmış Sayfalar ({0} sayfa)",
@@ -2034,6 +2038,8 @@ def set_setting(key: str, value):
 
 def get_language() -> str:
     return _active_lang
+
+get_current_locale = get_language
 
 def set_language(lang: str, restart: bool = True):
     global _active_lang

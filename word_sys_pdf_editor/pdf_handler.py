@@ -4467,6 +4467,7 @@ def extract_ocr_words_for_page(target_page, ocr_doc) -> List[Dict[str, Any]]:
     if target_page is None or ocr_doc is None:
         return []
     try:
+        from .ocr_engine import estimate_word_confidence
         ocr_page = ocr_doc[0] if hasattr(ocr_doc, "__getitem__") else ocr_doc
         ocr_rect = ocr_page.rect
         target_rect = target_page.rect
@@ -4492,6 +4493,7 @@ def extract_ocr_words_for_page(target_page, ocr_doc) -> List[Dict[str, Any]]:
             extracted.append({
                 "bbox": (x0, y0, x1, y1),
                 "text": text,
+                "confidence": estimate_word_confidence(text),
                 "block_no": int(item[5]) if len(item) > 5 else 0,
                 "line_no": int(item[6]) if len(item) > 6 else 0,
                 "word_no": int(item[7]) if len(item) > 7 else 0,
@@ -4539,11 +4541,13 @@ def embed_ocr_text_layer_on_page(
     ocr_doc=None,
     ocr_words: Optional[List[Dict[str, Any]]] = None,
     language: str = "eng",
-    dpi: int = 150,
+    dpi: int = 200,
     tessdata_dir: Optional[str] = None,
     replace_existing: bool = True,
     auto_deskew: bool = True,
     auto_rotate: bool = True,
+    auto_invert: bool = True,
+    enhance_contrast: bool = True,
 ) -> Dict[str, Any]:
     """Embed a transparent searchable text layer (PDF render_mode=3) onto a single page."""
     if not doc or page_num < 0 or page_num >= len(doc):
@@ -4586,16 +4590,34 @@ def embed_ocr_text_layer_on_page(
 
         if ocr_words is None:
             if ocr_doc is None:
-                from .ocr_engine import perform_ocr_on_page
-                ocr_doc = perform_ocr_on_page(
-                    doc,
-                    page_num=page_num,
+                from .ocr_engine import extract_ocr_words_with_confidence, perform_ocr_on_page
+                pix = page.get_pixmap(dpi=dpi)
+                ocr_words = extract_ocr_words_with_confidence(
+                    pix,
+                    page_rect=page.rect,
                     language=language,
-                    dpi=dpi,
                     tessdata_dir=tessdata_dir,
+                    auto_invert=auto_invert,
+                    enhance_contrast=enhance_contrast,
                 )
-                own_ocr_doc = True
-            ocr_words = extract_ocr_words_for_page(page, ocr_doc)
+                if not ocr_words:
+                    ocr_doc = perform_ocr_on_page(
+                        doc,
+                        page_num=page_num,
+                        language=language,
+                        dpi=dpi,
+                        tessdata_dir=tessdata_dir,
+                        auto_invert=auto_invert,
+                        enhance_contrast=enhance_contrast,
+                    )
+                    own_ocr_doc = True
+                    ocr_words = extract_ocr_words_for_page(page, ocr_doc)
+            else:
+                ocr_words = extract_ocr_words_for_page(page, ocr_doc)
+
+        if not hasattr(doc, "_ocr_words_cache"):
+            doc._ocr_words_cache = {}
+        doc._ocr_words_cache[page_num] = ocr_words
 
         existing_words = []
         try:
@@ -4707,11 +4729,13 @@ def embed_ocr_text_layer(
     ocr_results: Optional[Dict[int, Any]] = None,
     ocr_words_by_page: Optional[Dict[int, List[Dict[str, Any]]]] = None,
     language: str = "eng",
-    dpi: int = 150,
+    dpi: int = 200,
     tessdata_dir: Optional[str] = None,
     replace_existing: bool = True,
     auto_deskew: bool = True,
     auto_rotate: bool = True,
+    auto_invert: bool = True,
+    enhance_contrast: bool = True,
 ) -> Dict[str, Any]:
     """Embed transparent searchable OCR text layers across one or more pages of a document."""
     if not doc:
@@ -4745,6 +4769,8 @@ def embed_ocr_text_layer(
             replace_existing=replace_existing,
             auto_deskew=auto_deskew,
             auto_rotate=auto_rotate,
+            auto_invert=auto_invert,
+            enhance_contrast=enhance_contrast,
         )
         per_page[p_num] = res
         if res.get("success"):

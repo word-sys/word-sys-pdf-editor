@@ -177,17 +177,27 @@ class OCRDialog(Adw.Window):
 
         # Quality / DPI ComboRow
         self.dpi_model = Gtk.StringList()
-        self.dpi_model.append(_("ocr_dpi_fast"))
         self.dpi_model.append(_("ocr_dpi_medium"))
         self.dpi_model.append(_("ocr_dpi_high"))
-        self.dpi_values = [150, 200, 300]
+        self.dpi_model.append(_("ocr_dpi_fast"))
+        self.dpi_values = [200, 300, 150]
 
         self.dpi_row = Adw.ComboRow(
             title=_("ocr_dpi_label"),
             model=self.dpi_model,
         )
-        self.dpi_row.set_selected(0)  # 150 DPI recommended default
+        self.dpi_row.set_selected(0)  # 200 DPI balanced default
         settings_group.add(self.dpi_row)
+
+        # Auto-invert dark backgrounds switch row
+        self.invert_row = Adw.ActionRow(
+            title=_("ocr_auto_invert"),
+            subtitle=_("ocr_auto_invert_desc"),
+        )
+        self.invert_switch = Gtk.Switch(valign=Gtk.Align.CENTER, active=True)
+        self.invert_row.add_suffix(self.invert_switch)
+        self.invert_row.set_activatable_widget(self.invert_switch)
+        settings_group.add(self.invert_row)
 
         # Auto-deskew switch row
         self.deskew_row = Adw.ActionRow(
@@ -336,12 +346,27 @@ class OCRDialog(Adw.Window):
         else:
             self.start_btn.set_sensitive(True)
             self.lang_row.set_subtitle("")
-            self.lang_row.set_selected(0)
-            self.secondary_lang_row.set_selected(0)
+
+            # Smart initial pairing: if Turkish is installed and current locale is TR, pair Turkish + English
+            from .i18n import get_current_locale
+            curr_loc = str(get_current_locale() or "").lower()
+            p_idx = 0
+            s_idx = 0
+            if "tur" in self.installed_lang_codes and (curr_loc.startswith("tr") or self.installed_lang_codes[0] == "tur"):
+                p_idx = self.installed_lang_codes.index("tur")
+                if "eng" in self.installed_lang_codes:
+                    s_idx = self.installed_lang_codes.index("eng") + 1
+            elif "eng" in self.installed_lang_codes:
+                p_idx = self.installed_lang_codes.index("eng")
+                if "tur" in self.installed_lang_codes and curr_loc.startswith("tr"):
+                    s_idx = self.installed_lang_codes.index("tur") + 1
+
+            self.lang_row.set_selected(p_idx)
+            self.secondary_lang_row.set_selected(s_idx)
 
             if len(self.installed_lang_codes) >= 2:
                 self.secondary_lang_row.set_sensitive(True)
-                self.secondary_lang_row.set_subtitle(_safe_markup(_("ocr_lang_secondary_desc")))
+                self._on_language_selection_changed()
             else:
                 self.secondary_lang_row.set_sensitive(False)
                 self.secondary_lang_row.set_subtitle(_safe_markup(_("ocr_lang_secondary_need_more")))
@@ -526,6 +551,8 @@ class OCRDialog(Adw.Window):
         self.secondary_lang_row.set_sensitive(False)
         self.scope_row.set_sensitive(False)
         self.dpi_row.set_sensitive(False)
+        self.invert_row.set_sensitive(False)
+        self.invert_switch.set_sensitive(False)
         self.deskew_row.set_sensitive(False)
         self.rotate_row.set_sensitive(False)
         self.deskew_switch.set_sensitive(False)
@@ -534,6 +561,7 @@ class OCRDialog(Adw.Window):
 
         auto_deskew = self.deskew_switch.get_active()
         auto_rotate = self.rotate_switch.get_active()
+        auto_invert = self.invert_switch.get_active()
 
         total_pages = len(target_pages)
         if hasattr(self.parent_window, "show_ocr_banner"):
@@ -585,6 +613,8 @@ class OCRDialog(Adw.Window):
                             language=lang_code,
                             dpi=dpi,
                             tessdata_dir=tessdata_dir,
+                            auto_invert=auto_invert,
+                            enhance_contrast=True,
                         )
                         results[p_num] = ocr_doc
                     except Exception as err:
@@ -604,6 +634,8 @@ class OCRDialog(Adw.Window):
         self.secondary_lang_row.set_sensitive(len(self.installed_lang_codes) >= 2)
         self.scope_row.set_sensitive(True)
         self.dpi_row.set_sensitive(True)
+        self.invert_row.set_sensitive(True)
+        self.invert_switch.set_sensitive(True)
         self.deskew_row.set_sensitive(True)
         self.rotate_row.set_sensitive(True)
         self.deskew_switch.set_sensitive(True)
