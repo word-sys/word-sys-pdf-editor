@@ -110,6 +110,21 @@ def show_error_dialog(parent_window, message, title="Error"):
     dialog.connect("response", lambda d, response_id: d.destroy())
     dialog.present()
 
+
+def show_info_dialog(parent_window, message, title="Information"):
+    """Show an information modal dialog."""
+    dialog = Gtk.MessageDialog(
+        transient_for=parent_window,
+        modal=True,
+        message_type=Gtk.MessageType.INFO,
+        buttons=Gtk.ButtonsType.OK,
+        text=title,
+        secondary_text=message
+    )
+
+    dialog.connect("response", lambda d, response_id: d.destroy())
+    dialog.present()
+
 def show_confirm_dialog(parent_window, message, title="Confirm", destructive=True, checkbox_label=None):
     """Show a confirmation dialog with Accept and Cancel options, and optional checkbox."""
     message_type = Gtk.MessageType.QUESTION

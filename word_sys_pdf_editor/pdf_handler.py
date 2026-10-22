@@ -29,7 +29,7 @@ WSPDF_SALT_LEN = 16
 WSPDF_NONCE_LEN = 12
 WSPDF_TAG_LEN = 16
 WSPDF_PBKDF2_ROUNDS = 100_000
-from typing import Optional, List, Dict, Any, Tuple, Union
+from typing import Optional, List, Dict, Any, Tuple, Union, Set
 try:
     import anyconvert
     from anyconvert import ConversionMode
@@ -4205,11 +4205,228 @@ def apply_redaction_marks(doc, redaction_marks_dict, images=None, graphics=None,
                     align=fitz.TEXT_ALIGN_CENTER,
                 )
             page.apply_redactions(images=img_flag, graphics=gfx_flag, text=txt_flag)
+            invalidate_page_cache(doc, page_num)
             applied = True
         return applied
     except Exception as e:
         print(f"Error applying redaction marks: {e}")
         return False
+
+
+def sanitize_document(
+    doc,
+    strip_metadata: bool = True,
+    purge_xmp: bool = True,
+    purge_attachments: bool = True,
+    purge_comments: bool = True,
+    purge_hidden_layers: bool = True,
+    purge_orphaned_toc: bool = True,
+    redacted_pages: Optional[Set[int]] = None,
+    strip_bookmarks: bool = False,
+    preserve_links: bool = True,
+    preserve_forms: bool = True,
+) -> dict:
+    """Document-wide sanitization routine to purge sensitive metadata, XMP packets,
+    attachments, hidden layers, comments, and orphaned/redacted bookmark references.
+    """
+    if not doc:
+        return {"success": False, "error": "No document provided"}
+
+    results = {
+        "success": True,
+        "metadata_stripped": False,
+        "xmp_purged": False,
+        "attachments_purged": 0,
+        "comments_purged": 0,
+        "hidden_layers_purged": 0,
+        "toc_items_purged": 0,
+    }
+
+    try:
+        # 1. Strip sensitive metadata
+        if strip_metadata:
+            doc.set_metadata({})
+            try:
+                trailer_info = doc.xref_get_key(-1, "Info")
+                if trailer_info[0] == "xref":
+                    doc.xref_set_key(-1, "Info", "null")
+            except Exception:
+                pass
+            results["metadata_stripped"] = True
+
+        # 2. Purge XML Metadata (XMP)
+        if purge_xmp:
+            try:
+                doc.del_xml_metadata()
+            except Exception:
+                pass
+            try:
+                cat = doc.pdf_catalog()
+                if "Metadata" in doc.xref_get_keys(cat):
+                    doc.xref_set_key(cat, "Metadata", "null")
+            except Exception:
+                pass
+            results["xmp_purged"] = True
+
+        # 3. Purge embedded files and attachments
+        if purge_attachments:
+            # Document-level attachments
+            try:
+                for name in list(doc.embfile_names()):
+                    doc.embfile_del(name)
+                    results["attachments_purged"] += 1
+            except Exception as e:
+                print(f"Warning: error deleting embfiles: {e}")
+
+            # Page-level FileAttachment annotations
+            try:
+                for p_idx in range(len(doc)):
+                    p = doc[p_idx]
+                    for annot in list(p.annots()):
+                        if getattr(annot, 'type', [None, None])[1] == "FileAttachment":
+                            p.delete_annot(annot)
+                            results["attachments_purged"] += 1
+            except Exception as e:
+                print(f"Warning: error deleting file attachment annots: {e}")
+
+            # Catalog Names / EmbeddedFiles cleanup
+            try:
+                cat = doc.pdf_catalog()
+                names_key = doc.xref_get_key(cat, "Names")
+                if names_key[0] == "xref":
+                    names_xref = int(names_key[1].split()[0])
+                    if "EmbeddedFiles" in doc.xref_get_keys(names_xref):
+                        doc.xref_set_key(names_xref, "EmbeddedFiles", "null")
+            except Exception:
+                pass
+
+        # 4. Purge comments, notes, and markup annotations
+        if purge_comments:
+            comment_types = {
+                "Text", "Highlight", "Underline", "StrikeOut", "Squiggly",
+                "FreeText", "Stamp", "Ink", "Popup", "Line", "Square",
+                "Circle", "Polygon", "PolyLine", "Caret", "FileAttachment"
+            }
+            try:
+                for p_idx in range(len(doc)):
+                    p = doc[p_idx]
+                    for annot in list(p.annots()):
+                        atype = getattr(annot, 'type', [None, None])[1]
+                        if atype in comment_types:
+                            p.delete_annot(annot)
+                            results["comments_purged"] += 1
+                    if not preserve_forms:
+                        try:
+                            for w in list(p.widgets()):
+                                p.delete_widget(w)
+                                results["comments_purged"] += 1
+                        except Exception:
+                            pass
+                    if not preserve_links:
+                        try:
+                            for l in list(p.get_links()):
+                                p.delete_link(l)
+                        except Exception:
+                            pass
+            except Exception as e:
+                print(f"Warning: error purging comments: {e}")
+
+        # 5. Purge hidden layers (Optional Content Groups)
+        if purge_hidden_layers:
+            try:
+                ocgs = doc.get_ocgs()
+                if ocgs:
+                    results["hidden_layers_purged"] = len(ocgs)
+                    cat = doc.pdf_catalog()
+                    if "OCProperties" in doc.xref_get_keys(cat):
+                        doc.xref_set_key(cat, "OCProperties", "null")
+            except Exception as e:
+                print(f"Warning: error purging hidden layers: {e}")
+
+        # 6. Purge TOC / Bookmarks
+        if strip_bookmarks:
+            try:
+                results["toc_items_purged"] = len(doc.get_toc())
+                doc.set_toc([])
+            except Exception as e:
+                print(f"Warning: error stripping bookmarks: {e}")
+        elif purge_orphaned_toc:
+            try:
+                toc = doc.get_toc()
+                cleaned_toc = []
+                purged_count = 0
+                for item in toc:
+                    pno = item[2]
+                    is_orphaned = pno < 1 or pno > len(doc)
+                    is_redacted = bool(redacted_pages and (pno - 1) in redacted_pages)
+                    if is_orphaned or is_redacted:
+                        purged_count += 1
+                    else:
+                        cleaned_toc.append(item)
+                if purged_count > 0:
+                    doc.set_toc(cleaned_toc)
+                    results["toc_items_purged"] = purged_count
+            except Exception as e:
+                print(f"Warning: error cleaning TOC: {e}")
+
+        # Invalidate Cairo and document cache
+        invalidate_page_cache(doc)
+
+    except Exception as e:
+        print(f"Error during document sanitization: {e}")
+        results["success"] = False
+        results["error"] = str(e)
+
+    return results
+
+
+def verify_document_sanitization(doc) -> dict:
+    """Verify document hygiene by checking for presence of sensitive metadata,
+    XMP packets, attachments, hidden layers, and comments.
+    """
+    if not doc:
+        return {"is_clean": False, "details": "No document"}
+
+    details = {}
+    is_clean = True
+
+    # Check metadata
+    meta = doc.metadata or {}
+    sensitive_fields = ["author", "title", "subject", "keywords", "creator", "producer"]
+    dirty_fields = {k: v for k, v in meta.items() if k in sensitive_fields and v}
+    if dirty_fields:
+        is_clean = False
+        details["sensitive_metadata"] = dirty_fields
+
+    # Check XMP
+    xmp = doc.get_xml_metadata()
+    if xmp and xmp.strip():
+        is_clean = False
+        details["has_xmp"] = True
+
+    # Check attachments
+    if doc.embfile_count() > 0:
+        is_clean = False
+        details["attachments_count"] = doc.embfile_count()
+
+    # Check hidden layers / OCGs
+    ocgs = doc.get_ocgs()
+    if ocgs:
+        is_clean = False
+        details["ocgs_count"] = len(ocgs)
+
+    # Check comments / non-form annots
+    comment_count = 0
+    for p in doc:
+        for a in p.annots():
+            atype = getattr(a, 'type', [None, None])[1]
+            if atype not in ("Widget", "Link"):
+                comment_count += 1
+    if comment_count > 0:
+        is_clean = False
+        details["comments_count"] = comment_count
+
+    return {"is_clean": is_clean, "details": details}
 
 
 def verify_redaction_purge(doc, page_num, bbox, search_term=None, allowed_overlay=None):

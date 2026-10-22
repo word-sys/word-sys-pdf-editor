@@ -36,7 +36,7 @@ from .models import (
     StickyNoteObject, PatchObject, RedactionMark
 )
 from .ui_components import (
-    PageThumbnailFactory, show_error_dialog, show_confirm_dialog,
+    PageThumbnailFactory, show_error_dialog, show_info_dialog, show_confirm_dialog,
     show_save_changes_dialog, show_open_file_dialog, show_save_file_dialog,
     SymbolsPopover, render_emoji_to_png_bytes, show_new_document_dialog
 )
@@ -1579,6 +1579,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu.append(_("menu_merge_documents"), "win.merge_documents")
         menu.append(_("menu_flatten"), "win.flatten_annotations")
         menu.append(_("menu_manage_stamps"), "win.manage_stamps")
+        menu.append(_("menu_sanitize_document"), "win.sanitize_document")
 
         export_menu = Gio.Menu()
         export_menu.append(_("menu_export_as"), "win.export_as")
@@ -2332,6 +2333,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.redaction_apply_button.set_sensitive(False)
         self.redaction_toolbar_box.append(self.redaction_apply_button)
 
+        sep_r3 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=4, margin_end=4)
+        self.redaction_toolbar_box.append(sep_r3)
+
+        self.btn_sanitize_doc = Gtk.Button(label=_("menu_sanitize_document"))
+        self.btn_sanitize_doc.set_tooltip_text(_("sanitize_dialog_title"))
+        self.btn_sanitize_doc.connect("clicked", lambda b: self.on_sanitize_document())
+        self.redaction_toolbar_box.append(self.btn_sanitize_doc)
+
         self.toolbar_row2.append(self.redaction_toolbar_box)
         self.redaction_toolbar_box.set_visible(False)
 
@@ -2457,6 +2466,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_flatten = Gio.SimpleAction.new('flatten_annotations', None)
         action_flatten.connect('activate', self.on_flatten_annotations)
         self.add_action(action_flatten)
+
+        action_sanitize = Gio.SimpleAction.new('sanitize_document', None)
+        action_sanitize.connect('activate', self.on_sanitize_document)
+        self.add_action(action_sanitize)
 
         action_manage_stamps = Gio.SimpleAction.new('manage_stamps', None)
         action_manage_stamps.connect('activate', self.on_manage_stamps)
@@ -2629,6 +2642,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             "digitally_sign_document",
             "inspect_digital_signatures",
             "flatten_annotations",
+            "sanitize_document",
             "toggle_annotations",
             "close_tab",
         )
@@ -3151,6 +3165,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             "digitally_sign_document",
             "inspect_digital_signatures",
             "flatten_annotations",
+            "sanitize_document",
             "toggle_annotations",
             "close_tab",
             "print",
@@ -4063,6 +4078,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._clear_form_field_overlays()
 
         if reload_objects:
+            pdf_handler.invalidate_page_cache(self.doc, page_index)
             texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
             if error:
                 show_error_dialog(self, _("text_extract_error", page_index + 1, error))
@@ -8852,6 +8868,77 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.undo_manager:
             self.undo_manager.record(cmd)
 
+    def on_sanitize_document(self, _action=None, _param=None):
+        """Show the Document Sanitization dialog."""
+        if not self.doc:
+            return
+        from .sanitize_dialog import SanitizeDialog
+        if getattr(self, "_sanitize_dialog", None) is not None:
+            self._sanitize_dialog.present()
+            return
+        self._sanitize_dialog = SanitizeDialog(
+            parent_window=self,
+            on_confirm_callback=self._execute_sanitize_from_dialog,
+        )
+        self._sanitize_dialog.connect("close-request", self._on_sanitize_dialog_closed)
+        self._sanitize_dialog.present()
+
+    def _on_sanitize_dialog_closed(self, dialog):
+        self._sanitize_dialog = None
+        return False
+
+    def _execute_sanitize_from_dialog(self, options: dict):
+        """Execute document-wide sanitization triggered from SanitizeDialog."""
+        if not self.doc:
+            return
+        self.sanitize_active_document(options)
+
+    def sanitize_active_document(self, options: dict) -> dict:
+        """Purge metadata, hidden layers, comments, attachments and bookmarks based on options."""
+        if not self.doc:
+            return {"success": False, "error": "No document"}
+
+        res = pdf_handler.sanitize_document(self.doc, **options)
+        if res.get("success"):
+            # If comments were purged, clear in-memory sticky notes as well
+            if options.get("purge_comments"):
+                if hasattr(self, "_active_session") and self._active_session:
+                    if hasattr(self._active_session, "sticky_note_objects"):
+                        self._active_session.sticky_note_objects.clear()
+                if hasattr(self, "sticky_notes"):
+                    self.sticky_notes.clear()
+
+            self.document_modified = True
+
+            # Invalidate caches across all pages
+            pdf_handler.invalidate_page_cache(self.doc)
+            for pno in range(self.doc.page_count):
+                pdf_handler.save_page_snapshot(self.doc, pno, force=True)
+                if hasattr(self, '_page_objects_cache') and pno in self._page_objects_cache:
+                    del self._page_objects_cache[pno]
+                self._refresh_thumbnail(pno)
+
+            # Reload active page
+            self._load_page(self.current_page_index, reload_objects=True)
+
+            if hasattr(self, 'annotations_sidebar'):
+                self.annotations_sidebar.refresh()
+
+            self._update_ui_state()
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(_("status_document_sanitized"))
+
+            msg = _(
+                "sanitize_summary_msg",
+                res.get("attachments_purged", 0),
+                res.get("comments_purged", 0),
+                res.get("hidden_layers_purged", 0),
+                res.get("toc_items_purged", 0),
+            )
+            show_info_dialog(self, msg, _("sanitize_summary_title"))
+
+        return res
+
     def on_manage_stamps(self, _action=None, _param=None):
         """Open modern Libadwaita StampManagerDialog."""
         if not hasattr(self, 'stamp_library') or not self.stamp_library:
@@ -12966,13 +13053,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_redaction_mark = None
             self.document_modified = True
 
-            # Invalidate page snapshots & cached editable objects for affected pages
+            # Invalidate page snapshots, Cairo cache & cached editable objects for affected pages
             for pno in affected_pages:
                 if 0 <= pno < self.doc.page_count:
+                    pdf_handler.invalidate_page_cache(self.doc, pno)
                     pdf_handler.save_page_snapshot(self.doc, pno, force=True)
                     if hasattr(self, '_page_objects_cache') and pno in self._page_objects_cache:
                         del self._page_objects_cache[pno]
                     self._refresh_thumbnail(pno)
+
+            # Clean any TOC bookmark pointing to redacted pages
+            try:
+                pdf_handler.sanitize_document(
+                    self.doc,
+                    strip_metadata=False,
+                    purge_xmp=False,
+                    purge_attachments=False,
+                    purge_comments=False,
+                    purge_hidden_layers=False,
+                    purge_orphaned_toc=True,
+                    redacted_pages=set(affected_pages)
+                )
+            except Exception:
+                pass
 
             # Reload active page objects if active page was affected or to ensure clean canvas
             if self.current_page_index in affected_pages:
