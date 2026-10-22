@@ -48,6 +48,7 @@ from .stamp_manager import (
     StampLibrary, CustomStamp, StampManagerDialog, StampPopover,
     StampPasswordDialog, StampVerificationDialog
 )
+from .search_engine import DocumentSearchEngine, SearchMatch
 from .protect_dialog import ProtectDocumentDialog, DocumentUnlockDialog
 from .signature_dialog import DigitalSignatureDialog, SignatureDetailsDialog
 
@@ -579,6 +580,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.inline_editor_widget = None
         self.inline_editor_text_obj = None
 
+        self.search_engine = DocumentSearchEngine()
+        self.search_bar = None
+        self.search_button = None
+        self.search_entry = None
+        self.search_prev_btn = None
+        self.search_next_btn = None
+        self.search_match_label = None
+        self.search_case_btn = None
+        self.ocr_banner = None
+        self.ocr_banner_label = None
+        self.ocr_banner_progress = None
+        self.ocr_banner_cancel_btn = None
+        self._ocr_cancel_requested = False
+
         self._build_ui()
         self._setup_controllers()
         self._connect_actions()
@@ -910,7 +925,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         return GLib.SOURCE_REMOVE
                     GLib.idle_add(_restore_tab_scroll)
             self._update_signature_banner(getattr(session, "digital_signatures", None))
+            if hasattr(self, 'search_bar') and self.search_bar and self.search_bar.get_search_mode():
+                self._on_search_query_changed(self.search_entry)
+            elif hasattr(self, 'search_engine'):
+                self.search_engine.clear()
         else:
+            if hasattr(self, 'search_engine'):
+                self.search_engine.clear()
             self._update_signature_banner(None)
             self.set_title(constants.APP_NAME)
             if hasattr(self, 'stack') and self.stack:
@@ -1576,6 +1597,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.print_button.connect("clicked", lambda w: self.on_print_activated(None, None))
         header.pack_end(self.print_button)
 
+        self.search_button = Gtk.ToggleButton(icon_name="system-search-symbolic")
+        self.search_button.set_tooltip_text(f"{_('search_placeholder')} (Ctrl+F)")
+        self.search_button.connect("toggled", self._on_search_button_toggled)
+        header.pack_end(self.search_button)
+
         self.mode_toggle_button = Gtk.Button(label=_("mode_edit"))
         self.mode_toggle_button.set_tooltip_text(_("mode_toggle_tip"))
         self.mode_toggle_button.get_style_context().add_class("suggested-action")
@@ -1688,6 +1714,76 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.signature_banner.append(close_banner_btn)
         self.signature_banner.set_visible(False)
         content_box.append(self.signature_banner)
+
+        # OCR Progress / Status Banner
+        self.ocr_banner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.ocr_banner.set_margin_start(12)
+        self.ocr_banner.set_margin_end(12)
+        self.ocr_banner.set_margin_top(4)
+        self.ocr_banner.set_margin_bottom(4)
+        self.ocr_banner.add_css_class("card")
+        ocr_banner_icon = Gtk.Image.new_from_icon_name("system-search-symbolic")
+        self.ocr_banner_label = Gtk.Label(xalign=0.0, hexpand=True)
+        self.ocr_banner_label.set_text(_("ocr_banner_processing"))
+        self.ocr_banner_progress = Gtk.ProgressBar()
+        self.ocr_banner_progress.set_hexpand(True)
+        self.ocr_banner_progress.set_valign(Gtk.Align.CENTER)
+        self.ocr_banner_progress.set_show_text(True)
+        self.ocr_banner_cancel_btn = Gtk.Button(label=_("btn_cancel"))
+        self.ocr_banner_cancel_btn.connect("clicked", self._on_ocr_banner_cancel_clicked)
+        self.ocr_banner.append(ocr_banner_icon)
+        self.ocr_banner.append(self.ocr_banner_label)
+        self.ocr_banner.append(self.ocr_banner_progress)
+        self.ocr_banner.append(self.ocr_banner_cancel_btn)
+        self.ocr_banner.set_visible(False)
+        content_box.append(self.ocr_banner)
+
+        # Search Bar
+        self.search_bar = Gtk.SearchBar()
+        self.search_bar.set_key_capture_widget(self)
+        search_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        search_box.set_margin_start(8)
+        search_box.set_margin_end(8)
+        search_box.set_margin_top(4)
+        search_box.set_margin_bottom(4)
+
+        self.search_entry = Gtk.SearchEntry(placeholder_text=_("search_placeholder"))
+        self.search_entry.set_hexpand(True)
+        self.search_entry.connect("search-changed", self._on_search_query_changed)
+        self.search_entry.connect("activate", lambda e: self._search_navigate_next())
+        self.search_bar.connect_entry(self.search_entry)
+        search_box.append(self.search_entry)
+
+        self.search_prev_btn = Gtk.Button.new_from_icon_name("go-up-symbolic")
+        self.search_prev_btn.set_tooltip_text(f"{_('search_prev')} (Shift+F3)")
+        self.search_prev_btn.connect("clicked", lambda b: self._search_navigate_prev())
+        search_box.append(self.search_prev_btn)
+
+        self.search_next_btn = Gtk.Button.new_from_icon_name("go-down-symbolic")
+        self.search_next_btn.set_tooltip_text(f"{_('search_next')} (F3 / Enter)")
+        self.search_next_btn.connect("clicked", lambda b: self._search_navigate_next())
+        search_box.append(self.search_next_btn)
+
+        self.search_match_label = Gtk.Label(label=_("search_no_results"))
+        self.search_match_label.add_css_class("dim-label")
+        search_box.append(self.search_match_label)
+
+        self.search_case_btn = Gtk.ToggleButton(label="aA")
+        self.search_case_btn.set_tooltip_text(_("search_case_sensitive"))
+        self.search_case_btn.connect("toggled", self._on_search_case_toggled)
+        search_box.append(self.search_case_btn)
+
+        search_close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
+        search_close_btn.add_css_class("flat")
+        search_close_btn.set_tooltip_text(_("search_close"))
+        search_close_btn.connect("clicked", lambda b: self.close_search_bar())
+        search_box.append(search_close_btn)
+
+        self.search_bar.set_child(search_box)
+        self.search_bar.connect("notify::search-mode-enabled", lambda sb, ps: (
+            self.search_button.set_active(sb.get_search_mode()) if hasattr(self, 'search_button') and self.search_button and self.search_button.get_active() != sb.get_search_mode() else None
+        ))
+        content_box.append(self.search_bar)
         
         self.pdf_scroll = Gtk.ScrolledWindow(hexpand=True, vexpand=True,
                                             hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
@@ -2584,8 +2680,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_go_to_page.connect('activate', lambda a, p: self.show_go_to_page_dialog())
         self.add_action(action_go_to_page)
 
+        action_find = Gio.SimpleAction.new('find', None)
+        action_find.connect('activate', lambda a, p: self.toggle_search_bar())
+        self.add_action(action_find)
+
         app = self.get_application()
         if app:
+            app.set_accels_for_action("win.find", ["<Control>f"])
             app.set_accels_for_action("win.new", ["<Control>n"])
             app.set_accels_for_action("win.open", ["<Control>o"])
             app.set_accels_for_action("win.close_tab", ["<Control>w"])
@@ -2689,6 +2790,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.lookup_action("redo").set_enabled(can_redo)
 
         self.print_button.set_sensitive(has_doc)
+        if hasattr(self, 'search_button') and self.search_button:
+            self.search_button.set_sensitive(has_doc)
         self.prev_button.set_sensitive(can_go_prev)
         self.next_button.set_sensitive(can_go_next)
         if hasattr(self, 'page_label') and self.page_label:
@@ -3195,6 +3298,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.toggle_annotations_button.set_sensitive(False)
         if hasattr(self, 'print_button') and self.print_button:
             self.print_button.set_sensitive(False)
+        if hasattr(self, 'search_button') and self.search_button:
+            self.search_button.set_sensitive(False)
         if hasattr(self, 'mode_toggle_button') and self.mode_toggle_button:
             self.mode_toggle_button.set_sensitive(False)
         if hasattr(self, 'undo_button') and self.undo_button:
@@ -5798,6 +5903,42 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.set_line_width(2.0)
                 cr.set_dash([4.0, 3.0])
                 cr.stroke()
+                cr.restore()
+
+        # Search match highlights
+        if getattr(self, 'search_engine', None) and self.search_engine.matches:
+            matches_for_page = self.search_engine.get_matches_for_page(page_index)
+            curr_match = self.search_engine.get_current_match()
+            for m in matches_for_page:
+                is_active = (curr_match is not None and m == curr_match)
+                bx1, by1, bx2, by2 = m.rect
+                v_x1, v_y1 = self._unrotated_to_visual_page_coords(bx1, by1, page_index=page_index)
+                v_x2, v_y2 = self._unrotated_to_visual_page_coords(bx2, by2, page_index=page_index)
+                min_vx = min(v_x1, v_x2)
+                max_vx = max(v_x1, v_x2)
+                min_vy = min(v_y1, v_y2)
+                max_vy = max(v_y1, v_y2)
+
+                m_dx = page_offset_x + min_vx * self.zoom_level
+                m_dy = page_offset_y + min_vy * self.zoom_level
+                m_dw = (max_vx - min_vx) * self.zoom_level
+                m_dh = (max_vy - min_vy) * self.zoom_level
+
+                cr.save()
+                if is_active:
+                    cr.set_source_rgba(1.0, 0.55, 0.0, 0.45)
+                    cr.rectangle(m_dx, m_dy, m_dw, m_dh)
+                    cr.fill_preserve()
+                    cr.set_source_rgba(0.9, 0.35, 0.0, 0.95)
+                    cr.set_line_width(2.0)
+                    cr.stroke()
+                else:
+                    cr.set_source_rgba(1.0, 0.92, 0.23, 0.35)
+                    cr.rectangle(m_dx, m_dy, m_dw, m_dh)
+                    cr.fill_preserve()
+                    cr.set_source_rgba(0.85, 0.70, 0.0, 0.8)
+                    cr.set_line_width(1.0)
+                    cr.stroke()
                 cr.restore()
 
         if self.view_mode and self.view_sel_rect and getattr(self, 'drag_start_page_index', self.current_page_index) == page_index:
@@ -8827,6 +8968,167 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.signature_banner.set_visible(True)
 
+    def show_ocr_banner(self, total_pages=1):
+        """Display background OCR progress banner."""
+        if hasattr(self, 'ocr_banner') and self.ocr_banner:
+            self._ocr_cancel_requested = False
+            if hasattr(self, 'ocr_banner_cancel_btn') and self.ocr_banner_cancel_btn:
+                self.ocr_banner_cancel_btn.set_sensitive(True)
+            if hasattr(self, 'ocr_banner_progress') and self.ocr_banner_progress:
+                self.ocr_banner_progress.set_fraction(0.0)
+            if hasattr(self, 'ocr_banner_label') and self.ocr_banner_label:
+                self.ocr_banner_label.set_text(_("ocr_banner_processing"))
+            self.ocr_banner.set_visible(True)
+
+    def update_ocr_banner(self, current_page, total_pages, fraction=None):
+        """Update progress on background OCR banner."""
+        if hasattr(self, 'ocr_banner') and self.ocr_banner:
+            frac = fraction if fraction is not None else (current_page / max(total_pages, 1))
+            if hasattr(self, 'ocr_banner_progress') and self.ocr_banner_progress:
+                self.ocr_banner_progress.set_fraction(frac)
+            if hasattr(self, 'ocr_banner_label') and self.ocr_banner_label:
+                self.ocr_banner_label.set_text(f"{_('ocr_banner_processing')} ({current_page}/{total_pages})")
+
+    def hide_ocr_banner(self, cancelled=False, completed_count=0):
+        """Hide background OCR banner and update status."""
+        if hasattr(self, 'ocr_banner') and self.ocr_banner:
+            self.ocr_banner.set_visible(False)
+            if cancelled:
+                self.status_label.set_text(_("ocr_cancelling"))
+            elif completed_count > 0:
+                self.status_label.set_text(_("ocr_msg_completed", completed_count))
+
+    def _on_ocr_banner_cancel_clicked(self, btn):
+        """Handle user clicking Cancel on the background OCR banner."""
+        self._ocr_cancel_requested = True
+        if hasattr(self, 'ocr_banner_label') and self.ocr_banner_label:
+            self.ocr_banner_label.set_text(_("ocr_cancelling"))
+        if hasattr(self, 'ocr_banner_cancel_btn') and self.ocr_banner_cancel_btn:
+            self.ocr_banner_cancel_btn.set_sensitive(False)
+
+    def toggle_search_bar(self):
+        """Toggle search bar visibility and focus."""
+        if not hasattr(self, 'search_bar') or not self.search_bar:
+            return
+        if self.search_bar.get_search_mode():
+            self.close_search_bar()
+        else:
+            self.search_bar.set_search_mode(True)
+            if hasattr(self, 'search_button') and self.search_button and not self.search_button.get_active():
+                self.search_button.set_active(True)
+            prefill = self.view_selected_text or getattr(self, 'selected_word', '')
+            if prefill and hasattr(self, 'search_entry') and self.search_entry:
+                self.search_entry.set_text(prefill)
+                self.search_entry.select_region(0, -1)
+            if hasattr(self, 'search_entry') and self.search_entry:
+                self.search_entry.grab_focus()
+
+    def close_search_bar(self):
+        """Close search bar and clear search highlights."""
+        if hasattr(self, 'search_bar') and self.search_bar:
+            self.search_bar.set_search_mode(False)
+        if hasattr(self, 'search_button') and self.search_button and self.search_button.get_active():
+            self.search_button.set_active(False)
+        if hasattr(self, 'search_engine') and self.search_engine:
+            self.search_engine.clear()
+        if hasattr(self, 'search_match_label') and self.search_match_label:
+            self.search_match_label.set_text(_("search_no_results"))
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+            self.pdf_view.grab_focus()
+
+    def _on_search_button_toggled(self, button):
+        """Handle header bar search toggle button clicks."""
+        if not hasattr(self, 'search_bar') or not self.search_bar:
+            return
+        is_active = button.get_active()
+        if is_active != self.search_bar.get_search_mode():
+            if is_active:
+                self.toggle_search_bar()
+            else:
+                self.close_search_bar()
+
+    def _on_search_query_changed(self, entry):
+        """Handle search query string modifications."""
+        query = entry.get_text() if entry else ""
+        case_sensitive = self.search_case_btn.get_active() if hasattr(self, 'search_case_btn') and self.search_case_btn else False
+        if not self.doc or not query.strip():
+            if hasattr(self, 'search_engine') and self.search_engine:
+                self.search_engine.clear()
+            if hasattr(self, 'search_match_label') and self.search_match_label:
+                self.search_match_label.set_text(_("search_no_results"))
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
+            return
+
+        matches = self.search_engine.search(self.doc, query, case_sensitive=case_sensitive)
+        if matches:
+            self.search_engine.find_nearest_match(self.current_page_index)
+            curr = self.search_engine.current_index
+            if hasattr(self, 'search_match_label') and self.search_match_label:
+                self.search_match_label.set_text(f"{curr + 1}/{len(matches)}")
+            self._jump_to_current_search_match()
+        else:
+            if hasattr(self, 'search_match_label') and self.search_match_label:
+                self.search_match_label.set_text(_("search_no_results"))
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+
+    def _on_search_case_toggled(self, btn):
+        """Re-run search when case sensitivity toggle button changes."""
+        self._on_search_query_changed(self.search_entry)
+
+    def _search_navigate_next(self):
+        """Navigate to next search match."""
+        if not hasattr(self, 'search_engine') or not self.search_engine or not self.search_engine.matches:
+            return
+        m = self.search_engine.next_match()
+        if m:
+            curr = self.search_engine.current_index
+            if hasattr(self, 'search_match_label') and self.search_match_label:
+                self.search_match_label.set_text(f"{curr + 1}/{len(self.search_engine.matches)}")
+            self._jump_to_current_search_match()
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
+
+    def _search_navigate_prev(self):
+        """Navigate to previous search match."""
+        if not hasattr(self, 'search_engine') or not self.search_engine or not self.search_engine.matches:
+            return
+        m = self.search_engine.prev_match()
+        if m:
+            curr = self.search_engine.current_index
+            if hasattr(self, 'search_match_label') and self.search_match_label:
+                self.search_match_label.set_text(f"{curr + 1}/{len(self.search_engine.matches)}")
+            self._jump_to_current_search_match()
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
+
+    def _jump_to_current_search_match(self):
+        """Scroll canvas to make current search match visible."""
+        if not hasattr(self, 'search_engine') or not self.search_engine:
+            return
+        m = self.search_engine.get_current_match()
+        if not m or not self.doc:
+            return
+        v_adj = self.pdf_scroll.get_vadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+        if self.continuous_scroll:
+            if hasattr(self, 'continuous_page_offsets') and 0 <= m.page_index < len(self.continuous_page_offsets):
+                _, py, _, _ = self.continuous_page_offsets[m.page_index]
+                v_x1, v_y1 = self._unrotated_to_visual_page_coords(m.rect[0], m.rect[1], page_index=m.page_index)
+                target_y = py + v_y1 * self.zoom_level
+                if v_adj:
+                    v_adj.set_value(max(0.0, target_y - 120.0))
+                if m.page_index != self.current_page_index:
+                    self._switch_active_page(m.page_index)
+        else:
+            if self.current_page_index != m.page_index:
+                self._load_page(m.page_index)
+            v_x1, v_y1 = self._unrotated_to_visual_page_coords(m.rect[0], m.rect[1], page_index=m.page_index)
+            if v_adj:
+                target_y = v_y1 * self.zoom_level
+                v_adj.set_value(max(0.0, target_y - 120.0))
+
     def on_merge_documents(self, _action=None, _param=None):
         from .merge_dialog import MergeDialog
         if getattr(self, "_merge_dialog", None) is not None:
@@ -9757,15 +10059,27 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.selected_form_field = None
                     self.view_sel_rect = clicked_block['bbox']
                     self.view_selected_text = clicked_block['text']
+                    self.selected_word = None
                     self.word_selection_mode = False
                 else:
                     self.selected_form_field = None
                     self.view_sel_start = None
                     self.view_sel_rect = None
                     self.view_selected_text = ""
+                    self.selected_word = None
                     self.word_selection_mode = False
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
+            elif n_press >= 2:
+                clicked_word = pdf_handler.get_word_at_pos(self.doc, self.current_page_index, (page_x_unzoomed, page_y_unzoomed))
+                if clicked_word:
+                    self.selected_form_field = None
+                    self.selected_word = clicked_word['text']
+                    self.view_selected_text = clicked_word['text']
+                    self.view_sel_rect = clicked_word['bbox']
+                    self.word_selection_mode = True
+                    self.pdf_view.queue_draw()
+                    self._update_ui_state()
             return
 
         if self.font_scan_in_progress:
@@ -10431,6 +10745,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def on_key_pressed(self, controller, keyval, keycode, state):
         """Handle global keyboard shortcuts (undo/redo, delete, zoom, navigation, escape)."""
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+        shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+
+        if ctrl and keyval in (Gdk.KEY_f, Gdk.KEY_F):
+            self.toggle_search_bar()
+            return True
+
+        if keyval == Gdk.KEY_F3:
+            if shift:
+                self._search_navigate_prev()
+            else:
+                self._search_navigate_next()
+            return True
+
+        if keyval == Gdk.KEY_Escape:
+            if hasattr(self, 'search_bar') and self.search_bar and self.search_bar.get_search_mode():
+                self.close_search_bar()
+                return True
 
         if keyval == Gdk.KEY_F7:
             self.toggle_annotations_sidebar()
@@ -10441,13 +10772,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.view_sel_rect = None
                 self.view_sel_start = None
                 self.view_selected_text = ""
+                self.selected_word = None
+                self.word_selection_mode = False
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
                 return True
             if ctrl and keyval in (Gdk.KEY_c, Gdk.KEY_C):
-                if self.view_selected_text:
+                copy_text = self.view_selected_text or getattr(self, 'selected_word', '')
+                if copy_text:
                     clipboard = self.get_clipboard()
-                    clipboard.set(self.view_selected_text)
+                    clipboard.set(copy_text)
                 return True
             if ctrl and keyval in (Gdk.KEY_n, Gdk.KEY_N):
                 self.on_new_clicked(None)
@@ -10555,7 +10889,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if ctrl and not is_input_focused:
             shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
-            if keyval in (Gdk.KEY_v, Gdk.KEY_V):
+            if keyval in (Gdk.KEY_c, Gdk.KEY_C):
+                if getattr(self, 'word_selection_mode', False) and getattr(self, 'selected_word', None):
+                    self.get_clipboard().set(self.selected_word)
+                    return True
+                elif getattr(self, 'selected_text', None) and getattr(self.selected_text, 'text', None):
+                    self.get_clipboard().set(self.selected_text.text)
+                    return True
+            elif keyval in (Gdk.KEY_v, Gdk.KEY_V):
                 if getattr(self, 'last_captured_patch', None):
                     if self.paste_clone_patch():
                         return True
@@ -13308,6 +13649,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 btn_copy.connect("clicked", lambda b: self._handle_context_action("copy_view", None, x, y))
                 popover_box.append(btn_copy)
 
+                btn_edit = Gtk.Button(label=_("menu_edit_text"))
+                btn_edit.connect("clicked", lambda b: self._handle_context_action("edit_view_text", None, x, y))
+                popover_box.append(btn_edit)
+
                 btn_hl = Gtk.Button(label=_("menu_highlight"))
                 btn_hl.connect("clicked", lambda b: self._handle_context_action("highlight_view", None, x, y))
                 popover_box.append(btn_hl)
@@ -13618,6 +13963,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif action == "copy_view":
             if self.view_selected_text:
                 self.get_clipboard().set(self.view_selected_text)
+        elif action == "edit_view_text":
+            if hasattr(self, 'context_popover') and self.context_popover:
+                self.context_popover.popdown()
+            saved_rect = self.view_sel_rect
+            saved_text = self.view_selected_text or getattr(self, 'selected_word', '')
+            if self.view_mode:
+                self._toggle_view_edit_mode()
+            if saved_rect and saved_text:
+                x1, y1, x2, y2 = saved_rect
+                new_obj = EditableText(x1, y1, saved_text, is_new=False)
+                new_obj.bbox = (x1, y1, x2, y2)
+                new_obj.page_number = self.current_page_index
+                command = AddObjectCommand(self, new_obj)
+                command.execute()
+                self.undo_manager.add_command(command)
+                self.selected_text = new_obj
+                self._show_inline_editor(new_obj, click_x=x, click_y=y, target_rect=new_obj.bbox)
+            elif self.selected_text:
+                self._show_inline_editor(self.selected_text, click_x=x, click_y=y, target_rect=self.selected_text.bbox)
         elif action == "highlight_view":
             self.on_highlight_clicked(None)
         elif action == "highlight_edit":

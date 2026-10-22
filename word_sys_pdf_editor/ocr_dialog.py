@@ -425,12 +425,18 @@ class OCRDialog(Adw.Window):
         # Update UI state for processing
         self._is_ocr_running = True
         self._cancel_ocr_flag = False
+        if hasattr(self.parent_window, "_ocr_cancel_requested"):
+            self.parent_window._ocr_cancel_requested = False
         self.start_btn.set_sensitive(False)
         self.cancel_btn.set_sensitive(True)
         self.lang_row.set_sensitive(False)
         self.scope_row.set_sensitive(False)
         self.dpi_row.set_sensitive(False)
         self.progress_group.set_visible(True)
+
+        total_pages = len(target_pages)
+        if hasattr(self.parent_window, "show_ocr_banner"):
+            self.parent_window.show_ocr_banner(total_pages)
 
         def _worker():
             results = {}
@@ -439,13 +445,15 @@ class OCRDialog(Adw.Window):
                 tessdata_dir = get_best_tessdata_dir_for_lang(lang_code)
 
                 for idx, p_num in enumerate(target_pages):
-                    if self._cancel_ocr_flag:
+                    if self._cancel_ocr_flag or getattr(self.parent_window, "_ocr_cancel_requested", False):
                         break
 
                     curr_msg = _("ocr_msg_processing", idx + 1, total)
                     fraction = idx / max(total, 1)
                     GLib.idle_add(self.progress_bar.set_fraction, fraction)
                     GLib.idle_add(self.progress_status_label.set_text, curr_msg)
+                    if hasattr(self.parent_window, "update_ocr_banner"):
+                        GLib.idle_add(self.parent_window.update_ocr_banner, idx + 1, total, fraction)
 
                     try:
                         ocr_doc = perform_ocr_on_page(
@@ -473,7 +481,11 @@ class OCRDialog(Adw.Window):
         self.scope_row.set_sensitive(True)
         self.dpi_row.set_sensitive(True)
 
-        if self._cancel_ocr_flag:
+        is_cancelled = self._cancel_ocr_flag or getattr(self.parent_window, "_ocr_cancel_requested", False)
+
+        if is_cancelled:
+            if hasattr(self.parent_window, "hide_ocr_banner"):
+                self.parent_window.hide_ocr_banner(cancelled=True)
             self.close()
             return
 
@@ -481,6 +493,8 @@ class OCRDialog(Adw.Window):
         self.progress_status_label.set_text(
             _("ocr_msg_completed", len(results))
         )
+        if hasattr(self.parent_window, "hide_ocr_banner"):
+            self.parent_window.hide_ocr_banner(cancelled=False, completed_count=len(results))
 
         if self.on_completed_callback:
             try:

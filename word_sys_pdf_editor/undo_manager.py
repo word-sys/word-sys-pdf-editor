@@ -1778,7 +1778,7 @@ class EmbedOCRTextCommand(Command):
         if doc is not None:
             for p in self.page_indices:
                 if 0 <= p < len(doc):
-                    pdf_handler.save_page_snapshot(doc, p)
+                    pdf_handler.save_page_snapshot(doc, p, force=True)
                     snap = pdf_handler._page_snapshots.get((id(doc), p))
                     if snap is not None:
                         self.pre_snapshots[p] = snap
