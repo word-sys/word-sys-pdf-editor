@@ -1202,6 +1202,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._active_session.current_page_index = val
 
     @property
+    def current_page(self) -> int:
+        """Active document current page index (0-based, respecting continuous scroll dominant page)."""
+        if getattr(self, "continuous_scroll", False):
+            return self.get_dominant_visible_page_index()
+        return self._active_session.current_page_index if self._active_session else 0
+
+    @current_page.setter
+    def current_page(self, val: int):
+        self.current_page_index = val
+
+    @property
     def zoom_level(self):
         """Active document zoom level."""
         return self._active_session.zoom_level if self._active_session else 1.0
@@ -1580,6 +1591,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu.append(_("menu_flatten"), "win.flatten_annotations")
         menu.append(_("menu_manage_stamps"), "win.manage_stamps")
         menu.append(_("menu_sanitize_document"), "win.sanitize_document")
+        menu.append(_("menu_ocr_document"), "win.ocr_document")
 
         export_menu = Gio.Menu()
         export_menu.append(_("menu_export_as"), "win.export_as")
@@ -2471,6 +2483,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_sanitize.connect('activate', self.on_sanitize_document)
         self.add_action(action_sanitize)
 
+        action_ocr = Gio.SimpleAction.new('ocr_document', None)
+        action_ocr.connect('activate', self.on_ocr_document)
+        self.add_action(action_ocr)
+
         action_manage_stamps = Gio.SimpleAction.new('manage_stamps', None)
         action_manage_stamps.connect('activate', self.on_manage_stamps)
         self.add_action(action_manage_stamps)
@@ -2643,6 +2659,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             "inspect_digital_signatures",
             "flatten_annotations",
             "sanitize_document",
+            "ocr_document",
             "toggle_annotations",
             "close_tab",
         )
@@ -3166,6 +3183,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             "inspect_digital_signatures",
             "flatten_annotations",
             "sanitize_document",
+            "ocr_document",
             "toggle_annotations",
             "close_tab",
             "print",
@@ -8886,6 +8904,40 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def _on_sanitize_dialog_closed(self, dialog):
         self._sanitize_dialog = None
         return False
+
+    def on_ocr_document(self, _action=None, _param=None):
+        """Show the Optical Character Recognition (OCR) dialog."""
+        if not self.doc:
+            return
+        from .ocr_dialog import OCRDialog
+        if getattr(self, "_ocr_dialog", None) is not None:
+            try:
+                if self._ocr_dialog.get_visible():
+                    self._ocr_dialog.present()
+                    return
+            except Exception:
+                pass
+            self._ocr_dialog = None
+
+        active_page = self.current_page
+        self._ocr_dialog = OCRDialog(
+            parent_window=self,
+            doc=self.doc,
+            current_page_num=active_page,
+            on_completed_callback=self._on_ocr_completed,
+        )
+        self._ocr_dialog.connect("close-request", self._on_ocr_dialog_closed)
+        self._ocr_dialog.connect("destroy", self._on_ocr_dialog_closed)
+        self._ocr_dialog.present()
+
+    def _on_ocr_dialog_closed(self, dialog=None):
+        self._ocr_dialog = None
+        return False
+
+    def _on_ocr_completed(self, target_pages: list[int], results: dict):
+        """Handle completion of OCR recognition."""
+        if hasattr(self, "status_label") and self.status_label:
+            self.status_label.set_text(_("ocr_msg_completed", len(results)))
 
     def _execute_sanitize_from_dialog(self, options: dict):
         """Execute document-wide sanitization triggered from SanitizeDialog."""
