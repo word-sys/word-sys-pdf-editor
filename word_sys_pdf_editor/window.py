@@ -2761,6 +2761,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             "flatten_annotations",
             "sanitize_document",
             "ocr_document",
+            "find",
             "toggle_annotations",
             "close_tab",
         )
@@ -3287,6 +3288,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             "flatten_annotations",
             "sanitize_document",
             "ocr_document",
+            "find",
             "toggle_annotations",
             "close_tab",
             "print",
@@ -9016,8 +9018,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.search_bar.set_search_mode(True)
             if hasattr(self, 'search_button') and self.search_button and not self.search_button.get_active():
                 self.search_button.set_active(True)
-            prefill = self.view_selected_text or getattr(self, 'selected_word', '')
-            if prefill and hasattr(self, 'search_entry') and self.search_entry:
+            prefill = (self.view_selected_text or getattr(self, 'selected_word', '') or "").strip()
+            if prefill and '\n' not in prefill and len(prefill) <= 120 and hasattr(self, 'search_entry') and self.search_entry:
                 self.search_entry.set_text(prefill)
                 self.search_entry.select_region(0, -1)
             if hasattr(self, 'search_entry') and self.search_entry:

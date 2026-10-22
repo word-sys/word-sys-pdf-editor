@@ -218,6 +218,7 @@ class OCRDialog(Adw.Window):
         storage_row = Adw.ActionRow()
         user_path_str = str(get_tessdata_user_dir())
         storage_row.set_title(_("ocr_storage_path_label", user_path_str))
+        storage_row.set_subtitle(f"{_('ocr_no_restart_notice')}\n{_('ocr_universal_notice')}")
 
         open_folder_btn = Gtk.Button.new_from_icon_name("folder-open-symbolic")
         open_folder_btn.set_tooltip_text(_("ocr_open_folder"))

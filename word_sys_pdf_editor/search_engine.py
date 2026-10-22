@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 import pymupdf as fitz
 
 
@@ -60,7 +60,7 @@ class DocumentSearchEngine:
         self.matches.clear()
         self.current_match_index = -1
 
-        if not self.doc or not self.query or len(self.doc) == 0:
+        if not self.doc or getattr(self.doc, "is_closed", False) or not self.query or len(self.doc) == 0:
             return self.matches
 
         for page_idx in range(len(self.doc)):
