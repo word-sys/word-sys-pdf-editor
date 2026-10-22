@@ -1,8 +1,13 @@
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw
+from gi.repository import Gtk, Adw, GLib
 from .i18n import _
+
+
+def _safe_markup(text: str) -> str:
+    """Escapes string for safe Pango markup rendering in Adwaita ActionRows and PreferencesGroups."""
+    return GLib.markup_escape_text(text) if text else ""
 
 
 class SanitizeDialog(Adw.Window):
@@ -15,7 +20,7 @@ class SanitizeDialog(Adw.Window):
 
         self.set_transient_for(parent_window)
         self.set_modal(True)
-        self.set_title(_("sanitize_dialog_title"))
+        self.set_title(_safe_markup(_("sanitize_dialog_title")))
         self.set_default_size(520, 560)
         self.set_resizable(False)
 
@@ -53,8 +58,8 @@ class SanitizeDialog(Adw.Window):
         # Informational Description Card
         info_group = Adw.PreferencesGroup()
         info_row = Adw.ActionRow()
-        info_row.set_title(_("sanitize_dialog_title"))
-        info_row.set_subtitle(_("sanitize_intro"))
+        info_row.set_title(_safe_markup(_("sanitize_dialog_title")))
+        info_row.set_subtitle(_safe_markup(_("sanitize_intro")))
         info_row.set_subtitle_lines(0)
         info_icon = Gtk.Image.new_from_icon_name("security-high-symbolic")
         info_row.add_prefix(info_icon)
@@ -63,7 +68,7 @@ class SanitizeDialog(Adw.Window):
 
         # Sanitization Options Group
         options_group = Adw.PreferencesGroup()
-        options_group.set_title(_("sanitize_options_title"))
+        options_group.set_title(_safe_markup(_("sanitize_options_title")))
         content_box.append(options_group)
 
         # 1. Metadata switch
@@ -71,8 +76,8 @@ class SanitizeDialog(Adw.Window):
         self.metadata_switch.set_valign(Gtk.Align.CENTER)
         self.metadata_switch.set_active(True)
         self.metadata_row = Adw.ActionRow(
-            title=_("sanitize_opt_metadata"),
-            subtitle=_("sanitize_opt_metadata_desc"),
+            title=_safe_markup(_("sanitize_opt_metadata")),
+            subtitle=_safe_markup(_("sanitize_opt_metadata_desc")),
         )
         self.metadata_row.add_suffix(self.metadata_switch)
         self.metadata_row.set_activatable_widget(self.metadata_switch)
@@ -83,8 +88,8 @@ class SanitizeDialog(Adw.Window):
         self.xmp_switch.set_valign(Gtk.Align.CENTER)
         self.xmp_switch.set_active(True)
         self.xmp_row = Adw.ActionRow(
-            title=_("sanitize_opt_xmp"),
-            subtitle=_("sanitize_opt_xmp_desc"),
+            title=_safe_markup(_("sanitize_opt_xmp")),
+            subtitle=_safe_markup(_("sanitize_opt_xmp_desc")),
         )
         self.xmp_row.add_suffix(self.xmp_switch)
         self.xmp_row.set_activatable_widget(self.xmp_switch)
@@ -95,8 +100,8 @@ class SanitizeDialog(Adw.Window):
         self.attachments_switch.set_valign(Gtk.Align.CENTER)
         self.attachments_switch.set_active(True)
         self.attachments_row = Adw.ActionRow(
-            title=_("sanitize_opt_attachments"),
-            subtitle=_("sanitize_opt_attachments_desc"),
+            title=_safe_markup(_("sanitize_opt_attachments")),
+            subtitle=_safe_markup(_("sanitize_opt_attachments_desc")),
         )
         self.attachments_row.add_suffix(self.attachments_switch)
         self.attachments_row.set_activatable_widget(self.attachments_switch)
@@ -107,8 +112,8 @@ class SanitizeDialog(Adw.Window):
         self.hidden_layers_switch.set_valign(Gtk.Align.CENTER)
         self.hidden_layers_switch.set_active(True)
         self.hidden_layers_row = Adw.ActionRow(
-            title=_("sanitize_opt_hidden_layers"),
-            subtitle=_("sanitize_opt_hidden_layers_desc"),
+            title=_safe_markup(_("sanitize_opt_hidden_layers")),
+            subtitle=_safe_markup(_("sanitize_opt_hidden_layers_desc")),
         )
         self.hidden_layers_row.add_suffix(self.hidden_layers_switch)
         self.hidden_layers_row.set_activatable_widget(self.hidden_layers_switch)
@@ -119,8 +124,8 @@ class SanitizeDialog(Adw.Window):
         self.comments_switch.set_valign(Gtk.Align.CENTER)
         self.comments_switch.set_active(True)
         self.comments_row = Adw.ActionRow(
-            title=_("sanitize_opt_comments"),
-            subtitle=_("sanitize_opt_comments_desc"),
+            title=_safe_markup(_("sanitize_opt_comments")),
+            subtitle=_safe_markup(_("sanitize_opt_comments_desc")),
         )
         self.comments_row.add_suffix(self.comments_switch)
         self.comments_row.set_activatable_widget(self.comments_switch)
@@ -131,8 +136,8 @@ class SanitizeDialog(Adw.Window):
         self.orphaned_toc_switch.set_valign(Gtk.Align.CENTER)
         self.orphaned_toc_switch.set_active(True)
         self.orphaned_toc_row = Adw.ActionRow(
-            title=_("sanitize_opt_orphaned_toc"),
-            subtitle=_("sanitize_opt_orphaned_toc_desc"),
+            title=_safe_markup(_("sanitize_opt_orphaned_toc")),
+            subtitle=_safe_markup(_("sanitize_opt_orphaned_toc_desc")),
         )
         self.orphaned_toc_row.add_suffix(self.orphaned_toc_switch)
         self.orphaned_toc_row.set_activatable_widget(self.orphaned_toc_switch)
@@ -143,8 +148,8 @@ class SanitizeDialog(Adw.Window):
         self.strip_bookmarks_switch.set_valign(Gtk.Align.CENTER)
         self.strip_bookmarks_switch.set_active(False)
         self.strip_bookmarks_row = Adw.ActionRow(
-            title=_("sanitize_opt_strip_bookmarks"),
-            subtitle=_("sanitize_opt_strip_bookmarks_desc"),
+            title=_safe_markup(_("sanitize_opt_strip_bookmarks")),
+            subtitle=_safe_markup(_("sanitize_opt_strip_bookmarks_desc")),
         )
         self.strip_bookmarks_row.add_suffix(self.strip_bookmarks_switch)
         self.strip_bookmarks_row.set_activatable_widget(self.strip_bookmarks_switch)

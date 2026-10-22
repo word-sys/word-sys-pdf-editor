@@ -315,3 +315,29 @@ def test_sanitize_dialog_ui_and_window_integration():
     assert len(win.sticky_notes) == 0
     win.status_label.set_text.assert_called()
     mock_info.assert_called_once()
+
+
+def test_sanitize_dialog_rows_and_markup():
+    """Verify SanitizeDialog ActionRows have valid titles and subtitles rendered without Pango markup errors."""
+    import gi
+    gi.require_version('Gtk', '4.0')
+    gi.require_version('Adw', '1')
+    from gi.repository import Adw
+    Adw.init()
+
+    dlg = SanitizeDialog(None)
+    rows = [
+        dlg.metadata_row,
+        dlg.xmp_row,
+        dlg.attachments_row,
+        dlg.hidden_layers_row,
+        dlg.comments_row,
+        dlg.orphaned_toc_row,
+        dlg.strip_bookmarks_row,
+    ]
+    for row in rows:
+        title = row.get_title()
+        subtitle = row.get_subtitle()
+        assert title and len(title) > 0, f"Row title is empty for row {row}!"
+        assert subtitle and len(subtitle) > 0, f"Row subtitle is empty for row {row}!"
+

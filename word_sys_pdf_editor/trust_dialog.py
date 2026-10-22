@@ -19,6 +19,11 @@ from .trust_manager import (
 )
 
 
+def _safe_markup(text: str) -> str:
+    """Escapes string for safe Pango markup rendering in Adwaita ActionRows and PreferencesGroups."""
+    return GLib.markup_escape_text(text) if text else ""
+
+
 class TrustStoreDialog(Adw.Window):
     """Libadwaita dialog for managing custom enterprise and national root certificates."""
 
@@ -70,10 +75,10 @@ class TrustStoreDialog(Adw.Window):
 
         # 1. Global Trust Anchors Group
         global_group = Adw.PreferencesGroup()
-        global_group.set_title(_("trust_group_global_title") if "_" in dir() else "Global Trust Anchors")
+        global_group.set_title(_safe_markup(_("trust_group_global_title") if "_" in dir() else "Global Trust Anchors"))
         global_group.set_description(
-            _("trust_group_global_desc") if "_" in dir() else
-            "Anchored to Mozilla / certifi bundle and OS system trust store (AATL & EUTL compatible)."
+            _safe_markup(_("trust_group_global_desc") if "_" in dir() else
+            "Anchored to Mozilla / certifi bundle and OS system trust store (AATL & EUTL compatible).")
         )
         self.content_box.append(global_group)
 
@@ -85,22 +90,22 @@ class TrustStoreDialog(Adw.Window):
         custom_roots = list_custom_trusted_roots() if is_trust_manager_available() else []
         global_count = max(0, len(all_roots) - len(custom_roots))
         global_row.set_title(
-            _("trust_global_status_title", global_count) if "_" in dir() else
-            f"{global_count} Pre-installed Global Root Certificates Active"
+            _safe_markup(_("trust_global_status_title", global_count) if "_" in dir() else
+            f"{global_count} Pre-installed Global Root Certificates Active")
         )
         global_row.set_subtitle(
-            _("trust_global_status_subtitle") if "_" in dir() else
-            "Commercial and qualified e-signatures (DigiCert, GlobalSign, Sectigo, etc.) validate automatically."
+            _safe_markup(_("trust_global_status_subtitle") if "_" in dir() else
+            "Commercial and qualified e-signatures (DigiCert, GlobalSign, Sectigo, etc.) validate automatically.")
         )
         global_row.set_subtitle_lines(0)
         global_group.add(global_row)
 
         # 2. Custom Enterprise / National Roots Group
         custom_group = Adw.PreferencesGroup()
-        custom_group.set_title(_("trust_group_custom_title") if "_" in dir() else "Custom Enterprise & National Roots")
+        custom_group.set_title(_safe_markup(_("trust_group_custom_title") if "_" in dir() else "Custom Enterprise & National Roots"))
         custom_group.set_description(
-            _("trust_group_custom_desc") if "_" in dir() else
-            "User-installed root CAs (TÜBİTAK Kamu SM, government PKIs, internal company authorities)."
+            _safe_markup(_("trust_group_custom_desc") if "_" in dir() else
+            "User-installed root CAs (TÜBİTAK Kamu SM, government PKIs, internal company authorities).")
         )
         self.content_box.append(custom_group)
 
@@ -108,10 +113,10 @@ class TrustStoreDialog(Adw.Window):
             empty_row = Adw.ActionRow()
             empty_icon = Gtk.Image.new_from_icon_name("dialog-information-symbolic")
             empty_row.add_prefix(empty_icon)
-            empty_row.set_title(_("trust_custom_empty_title") if "_" in dir() else "No Custom Roots Installed")
+            empty_row.set_title(_safe_markup(_("trust_custom_empty_title") if "_" in dir() else "No Custom Roots Installed"))
             empty_row.set_subtitle(
-                _("trust_custom_empty_desc") if "_" in dir() else
-                "Click 'Import Certificate' to add .crt, .cer, or .pem trust anchors."
+                _safe_markup(_("trust_custom_empty_desc") if "_" in dir() else
+                "Click 'Import Certificate' to add .crt, .cer, or .pem trust anchors.")
             )
             empty_row.set_subtitle_lines(0)
             custom_group.add(empty_row)
@@ -125,13 +130,13 @@ class TrustStoreDialog(Adw.Window):
             cn = item.get("subject_cn") or item.get("filename") or "Certificate"
             org = item.get("subject_org")
             title_text = f"{cn} ({org})" if org else cn
-            row.set_title(title_text)
+            row.set_title(_safe_markup(title_text))
 
             issuer = item.get("issuer_cn") or "Self-signed"
             fp = item.get("sha256_fingerprint", "")
             short_fp = f"{fp[:16]}..." if len(fp) >= 16 else fp
             sub_text = f"Issuer: {issuer} | SHA-256: {short_fp}"
-            row.set_subtitle(sub_text)
+            row.set_subtitle(_safe_markup(sub_text))
             row.set_subtitle_lines(0)
 
             del_btn = Gtk.Button()
