@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import urllib.request
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import fitz
+import numpy as np
+from PIL import Image
 
 SUPPORTED_LANGUAGES = {
     "eng": {"name": "English", "native": "English", "size_mb": 4.1},
@@ -405,3 +408,137 @@ def check_ocr_support() -> tuple[bool, str]:
         return True, "OCR engine ready, but no language models are installed."
 
     return True, f"OCR engine ready. Installed languages: {', '.join(installed_langs)}"
+
+
+def detect_page_skew_angle(page: fitz.Page, dpi: int = 100, max_angle: float = 12.0) -> float:
+    """Detect skew angle of text on a scanned page using horizontal projection profile variance.
+
+    Returns the angle in degrees needed to straighten the page (positive or negative).
+    If the detected skew is negligible (< 0.35 deg) or page lacks prominent text lines,
+    returns 0.0 (indicating already straight).
+    """
+    try:
+        pix = page.get_pixmap(dpi=dpi, alpha=False)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("L")
+        w, h = img.size
+        scale = min(1.0, 600.0 / max(w, h))
+        if scale < 1.0:
+            img = img.resize((int(w * scale), int(h * scale)), resample=Image.Resampling.BILINEAR)
+
+        arr = np.array(img)
+        binary = (arr < 190).astype(np.float32)
+        if np.sum(binary) < 50:
+            return 0.0
+
+        best_angle = 0.0
+        max_score = -1.0
+
+        # Coarse sweep: -max_angle to +max_angle in 1.0 deg steps
+        for angle in np.arange(-max_angle, max_angle + 0.5, 1.0):
+            rot = Image.fromarray((binary * 255).astype(np.uint8)).rotate(
+                angle, resample=Image.Resampling.NEAREST, fillcolor=0
+            )
+            proj = np.sum(np.array(rot) > 0, axis=1)
+            score = float(np.sum(np.diff(proj) ** 2))
+            if score > max_score:
+                max_score = score
+                best_angle = angle
+
+        # Fine sweep: +-1.0 deg around best_angle in 0.1 deg steps
+        coarse_best = best_angle
+        for angle in np.arange(coarse_best - 1.0, coarse_best + 1.05, 0.1):
+            rot = Image.fromarray((binary * 255).astype(np.uint8)).rotate(
+                angle, resample=Image.Resampling.NEAREST, fillcolor=0
+            )
+            proj = np.sum(np.array(rot) > 0, axis=1)
+            score = float(np.sum(np.diff(proj) ** 2))
+            if score > max_score:
+                max_score = score
+                best_angle = angle
+
+        res = round(float(best_angle), 2)
+        return res if abs(res) >= 0.35 else 0.0
+    except Exception as e:
+        print(f"Warning: skew detection failed: {e}")
+        return 0.0
+
+
+def deskew_scanned_page(doc: fitz.Document, page_num: int, angle: float, dpi: int = 150) -> bool:
+    """Straighten a tilted scanned page by rotating the raster image by `angle` degrees."""
+    if not doc or page_num < 0 or page_num >= len(doc):
+        return False
+    if abs(angle) < 0.2:
+        return True
+    try:
+        page = doc[page_num]
+        pix = page.get_pixmap(dpi=dpi, alpha=False)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        deskewed = img.rotate(angle, resample=Image.Resampling.BICUBIC, fillcolor=(255, 255, 255), expand=False)
+        out_buf = io.BytesIO()
+        deskewed.save(out_buf, format="PNG")
+
+        rect = page.rect
+        page.clean_contents()
+        page.add_redact_annot(rect)
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=1, text=1)
+        page.insert_image(rect, stream=out_buf.getvalue(), keep_proportion=False)
+        return True
+    except Exception as e:
+        print(f"Warning: deskew_scanned_page failed on page {page_num}: {e}")
+        return False
+
+
+def detect_page_orientation(page: fitz.Page, dpi: int = 100, language: str = "eng", tessdata_dir: Optional[str] = None) -> int:
+    """Detect coarse orientation (0, 90, 180, 270) needed to make page text upright."""
+    try:
+        pix = page.get_pixmap(dpi=dpi, alpha=False)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("L")
+        img_std = img.resize((400, 400))
+        arr = (np.array(img_std) < 180).astype(np.float32)
+        if np.sum(arr) < 50:
+            return 0
+
+        h_var = float(np.var(np.diff(np.sum(arr, axis=1))))
+        v_var = float(np.var(np.diff(np.sum(arr, axis=0))))
+
+        is_vertical_lines = (v_var > h_var * 1.35)
+        orientations = [90, 270] if is_vertical_lines else [0, 180]
+
+        best_score = -9999
+        best_orient = 0
+        symbols = set("}{][|~\\/^_\"`")
+
+        orig_img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+        for rot in orientations:
+            rot_img = orig_img.rotate(rot, expand=True) if rot != 0 else orig_img
+            px = fitz.Pixmap(fitz.csRGB, rot_img.width, rot_img.height, rot_img.tobytes(), False)
+            try:
+                ocr_bytes = perform_ocr_on_pixmap(px, language=language, compress=True, tessdata_dir=tessdata_dir)
+                test_doc = fitz.open("pdf", ocr_bytes)
+                words = [w[4] for w in test_doc[0].get_text("words")]
+                test_doc.close()
+
+                score = 0
+                for w in words:
+                    text = str(w).strip()
+                    if not text:
+                        continue
+                    if any(c in symbols for c in text):
+                        score -= 3
+                        continue
+                    if text.istitle() or text.islower() or text.isupper():
+                        score += 2
+                    else:
+                        score -= 1
+
+                if score > best_score:
+                    best_score = score
+                    best_orient = rot
+            except Exception:
+                pass
+
+        return best_orient
+    except Exception as e:
+        print(f"Warning: detect_page_orientation failed: {e}")
+        return 0

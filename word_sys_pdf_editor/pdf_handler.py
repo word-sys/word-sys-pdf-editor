@@ -4542,6 +4542,8 @@ def embed_ocr_text_layer_on_page(
     dpi: int = 150,
     tessdata_dir: Optional[str] = None,
     replace_existing: bool = True,
+    auto_deskew: bool = True,
+    auto_rotate: bool = True,
 ) -> Dict[str, Any]:
     """Embed a transparent searchable text layer (PDF render_mode=3) onto a single page."""
     if not doc or page_num < 0 or page_num >= len(doc):
@@ -4558,6 +4560,29 @@ def embed_ocr_text_layer_on_page(
             restore_page_from_snapshot(doc, page_num)
 
         page = doc.load_page(page_num)
+
+        if ocr_words is None and ocr_doc is None:
+            # Auto-rotate coarse orientation if needed (90, 180, 270)
+            if auto_rotate:
+                try:
+                    from .ocr_engine import detect_page_orientation
+                    orient_rot = detect_page_orientation(page, dpi=100, language=language, tessdata_dir=tessdata_dir)
+                    if orient_rot in (90, 180, 270):
+                        page.set_rotation((page.rotation + orient_rot) % 360)
+                except Exception as e:
+                    print(f"Warning: orientation detection failed on page {page_num}: {e}")
+
+            # Auto-deskew crooked scans
+            if auto_deskew:
+                try:
+                    from .ocr_engine import is_scanned_page, detect_page_skew_angle, deskew_scanned_page
+                    if is_scanned_page(page).is_scanned:
+                        skew_angle = detect_page_skew_angle(page, dpi=100)
+                        if abs(skew_angle) >= 0.35:
+                            deskew_scanned_page(doc, page_num, skew_angle, dpi=dpi)
+                            page = doc.load_page(page_num)
+                except Exception as e:
+                    print(f"Warning: deskew failed on page {page_num}: {e}")
 
         if ocr_words is None:
             if ocr_doc is None:
@@ -4685,6 +4710,8 @@ def embed_ocr_text_layer(
     dpi: int = 150,
     tessdata_dir: Optional[str] = None,
     replace_existing: bool = True,
+    auto_deskew: bool = True,
+    auto_rotate: bool = True,
 ) -> Dict[str, Any]:
     """Embed transparent searchable OCR text layers across one or more pages of a document."""
     if not doc:
@@ -4716,6 +4743,8 @@ def embed_ocr_text_layer(
             dpi=dpi,
             tessdata_dir=tessdata_dir,
             replace_existing=replace_existing,
+            auto_deskew=auto_deskew,
+            auto_rotate=auto_rotate,
         )
         per_page[p_num] = res
         if res.get("success"):

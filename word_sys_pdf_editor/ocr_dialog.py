@@ -174,6 +174,26 @@ class OCRDialog(Adw.Window):
         self.dpi_row.set_selected(0)  # 150 DPI recommended default
         settings_group.add(self.dpi_row)
 
+        # Auto-deskew switch row
+        self.deskew_row = Adw.ActionRow(
+            title=_("ocr_auto_deskew"),
+            subtitle=_("ocr_auto_deskew_desc"),
+        )
+        self.deskew_switch = Gtk.Switch(valign=Gtk.Align.CENTER, active=True)
+        self.deskew_row.add_suffix(self.deskew_switch)
+        self.deskew_row.set_activatable_widget(self.deskew_switch)
+        settings_group.add(self.deskew_row)
+
+        # Auto-rotate switch row
+        self.rotate_row = Adw.ActionRow(
+            title=_("ocr_auto_rotate"),
+            subtitle=_("ocr_auto_rotate_desc"),
+        )
+        self.rotate_switch = Gtk.Switch(valign=Gtk.Align.CENTER, active=True)
+        self.rotate_row.add_suffix(self.rotate_switch)
+        self.rotate_row.set_activatable_widget(self.rotate_switch)
+        settings_group.add(self.rotate_row)
+
         # Progress Section
         self.progress_group = Adw.PreferencesGroup()
         self.progress_bar = Gtk.ProgressBar()
@@ -433,7 +453,14 @@ class OCRDialog(Adw.Window):
         self.lang_row.set_sensitive(False)
         self.scope_row.set_sensitive(False)
         self.dpi_row.set_sensitive(False)
+        self.deskew_row.set_sensitive(False)
+        self.rotate_row.set_sensitive(False)
+        self.deskew_switch.set_sensitive(False)
+        self.rotate_switch.set_sensitive(False)
         self.progress_group.set_visible(True)
+
+        auto_deskew = self.deskew_switch.get_active()
+        auto_rotate = self.rotate_switch.get_active()
 
         total_pages = len(target_pages)
         if hasattr(self.parent_window, "show_ocr_banner"):
@@ -457,6 +484,28 @@ class OCRDialog(Adw.Window):
                         GLib.idle_add(self.parent_window.update_ocr_banner, idx + 1, total, fraction)
 
                     try:
+                        p_obj = self.doc[p_num]
+                        # 1. Orientation detection and rotation
+                        if auto_rotate:
+                            try:
+                                from .ocr_engine import detect_page_orientation
+                                rot_angle = detect_page_orientation(p_obj, dpi=100, language=lang_code, tessdata_dir=tessdata_dir)
+                                if rot_angle in (90, 180, 270):
+                                    p_obj.set_rotation((p_obj.rotation + rot_angle) % 360)
+                            except Exception as ro_err:
+                                print(f"Warning: auto-rotate failed on page {p_num}: {ro_err}")
+
+                        # 2. Skew detection and deskewing
+                        if auto_deskew:
+                            try:
+                                from .ocr_engine import is_scanned_page, detect_page_skew_angle, deskew_scanned_page
+                                if is_scanned_page(p_obj).is_scanned:
+                                    skew = detect_page_skew_angle(p_obj, dpi=100)
+                                    if abs(skew) >= 0.35:
+                                        deskew_scanned_page(self.doc, p_num, skew, dpi=dpi)
+                            except Exception as sk_err:
+                                print(f"Warning: auto-deskew failed on page {p_num}: {sk_err}")
+
                         ocr_doc = perform_ocr_on_page(
                             self.doc,
                             page_num=p_num,
@@ -481,6 +530,10 @@ class OCRDialog(Adw.Window):
         self.lang_row.set_sensitive(True)
         self.scope_row.set_sensitive(True)
         self.dpi_row.set_sensitive(True)
+        self.deskew_row.set_sensitive(True)
+        self.rotate_row.set_sensitive(True)
+        self.deskew_switch.set_sensitive(True)
+        self.rotate_switch.set_sensitive(True)
 
         is_cancelled = self._cancel_ocr_flag or getattr(self.parent_window, "_ocr_cancel_requested", False)
 
