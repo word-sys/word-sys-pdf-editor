@@ -363,6 +363,17 @@ class RedactionInspectorPopover(Gtk.Popover):
         self.preset_dropdown.connect("notify::selected", on_preset_selected)
         main_box.append(self.preset_dropdown)
 
+        main_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        apply_btn = Gtk.Button(label=_("redaction_btn_apply"))
+        apply_btn.add_css_class("destructive-action")
+        def on_apply_clicked(b):
+            self.is_committing = True
+            self.popdown()
+            if self.editor_window:
+                self.editor_window.apply_all_redactions(prompt_warning=True)
+        apply_btn.connect("clicked", on_apply_clicked)
+        main_box.append(apply_btn)
+
         self.set_child(main_box)
 
     def _on_delete_clicked(self, btn):
@@ -534,6 +545,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.current_pdf_page_width = 0
         self.current_pdf_page_height = 0
         self.thumbnails_scroll = None
+        self.redaction_toolbar_box = None
+        self.redaction_apply_button = None
+        self.redact_default_fill = (0.0, 0.0, 0.0)
+        self.redact_default_text_color = (1.0, 1.0, 1.0)
+        self.redact_default_overlay = "[REDACTED]"
         self.bold_button = None
         self.italic_button = None
         self.font_scan_in_progress = True
@@ -2257,6 +2273,68 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.toolbar_row2.append(self.stamp_toolbar_box)
         self.stamp_toolbar_box.set_visible(False)
 
+        # Redaction secondary toolbar
+        self.redaction_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        lbl_redact = Gtk.Label(label=_("redaction_toolbar_label"))
+        lbl_redact.add_css_class("heading")
+        self.redaction_toolbar_box.append(lbl_redact)
+
+        btn_fill_black = Gtk.Button(label=_("color_black"))
+        btn_fill_black.add_css_class("flat")
+        btn_fill_black.add_css_class("suggested-action")
+        btn_fill_white = Gtk.Button(label=_("color_white"))
+        btn_fill_white.add_css_class("flat")
+
+        def _on_default_fill_black(b):
+            self.redact_default_fill = (0.0, 0.0, 0.0)
+            self.redact_default_text_color = (1.0, 1.0, 1.0)
+            btn_fill_black.add_css_class("suggested-action")
+            btn_fill_white.remove_css_class("suggested-action")
+
+        def _on_default_fill_white(b):
+            self.redact_default_fill = (1.0, 1.0, 1.0)
+            self.redact_default_text_color = (0.0, 0.0, 0.0)
+            btn_fill_white.add_css_class("suggested-action")
+            btn_fill_black.remove_css_class("suggested-action")
+
+        btn_fill_black.connect("clicked", _on_default_fill_black)
+        btn_fill_white.connect("clicked", _on_default_fill_white)
+        self.redaction_toolbar_box.append(btn_fill_black)
+        self.redaction_toolbar_box.append(btn_fill_white)
+
+        sep_r1 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=4, margin_end=4)
+        self.redaction_toolbar_box.append(sep_r1)
+
+        preset_strings_tb = [
+            _("redaction_mark") + " ([REDACTED])",
+            "CONFIDENTIAL",
+            "FOIA Exemption (b)(4)",
+            "FOIA Exemption (b)(6)",
+            "FOIA Exemption (b)(7)(C)",
+            "PRIVILEGED & CONFIDENTIAL",
+            "[None] (Solid)",
+        ]
+        dd_preset = Gtk.DropDown.new_from_strings(preset_strings_tb)
+        def _on_toolbar_preset(dd, param):
+            idx = dd.get_selected()
+            if 0 <= idx < len(RedactionInspectorPopover.PRESET_CODES):
+                self.redact_default_overlay = RedactionInspectorPopover.PRESET_CODES[idx]
+        dd_preset.connect("notify::selected", _on_toolbar_preset)
+        self.redaction_toolbar_box.append(dd_preset)
+
+        sep_r2 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=4, margin_end=4)
+        self.redaction_toolbar_box.append(sep_r2)
+
+        self.redaction_apply_button = Gtk.Button(label=_("redaction_btn_apply"))
+        self.redaction_apply_button.add_css_class("destructive-action")
+        self.redaction_apply_button.set_tooltip_text(_("redaction_warning_title"))
+        self.redaction_apply_button.connect("clicked", lambda b: self.apply_all_redactions(prompt_warning=True))
+        self.redaction_apply_button.set_sensitive(False)
+        self.redaction_toolbar_box.append(self.redaction_apply_button)
+
+        self.toolbar_row2.append(self.redaction_toolbar_box)
+        self.redaction_toolbar_box.set_visible(False)
+
         self.view_toolbar_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=6, margin_end=6)
         self.toolbar_row1.append(self.view_toolbar_sep)
         self.view_toolbar_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -2679,8 +2757,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if stamp_active:
                 self._update_stamp_controls()
 
+        redact_active = (getattr(self, 'tool_mode', None) == "redact")
+        if hasattr(self, 'redaction_toolbar_box') and self.redaction_toolbar_box:
+            self.redaction_toolbar_box.set_visible(redact_active)
+            if redact_active:
+                self._update_redaction_controls()
+
         if hasattr(self, 'text_format_box'):
-            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active and not form_builder_active and not calibrate_active and not measure_active and not stamp_active and self.selected_image is None)
+            self.text_format_box.set_visible(in_edit and not shape_controls_active and not stroke_controls_active and not form_builder_active and not calibrate_active and not measure_active and not stamp_active and not redact_active and self.selected_image is None)
             self.text_format_sep.set_visible(False)
 
         self.font_combo.set_sensitive(format_enabled_base and not self.font_scan_in_progress)
@@ -4198,8 +4282,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 pdf_handler.embed_measurements(self.doc, all_meas_dicts)
             pdf_handler.sync_sticky_notes(self.doc, getattr(self._active_session, 'sticky_notes', {}))
             if getattr(self._active_session, 'redaction_marks', None):
-                pdf_handler.apply_redaction_marks(self.doc, self._active_session.redaction_marks)
-                self._active_session.redaction_marks.clear()
+                self.apply_all_redactions(prompt_warning=False)
             if hasattr(self._active_session, 'pdf_password'):
                 self.doc._pdf_password = self._active_session.pdf_password
             if hasattr(self._active_session, 'pdf_owner_password'):
@@ -8315,6 +8398,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Save active document to current path or prompt Save As if untitled."""
         if not self.doc:
             return
+
+        redacts = getattr(self._active_session, 'redaction_marks', {}) if self._active_session else {}
+        total_marks = sum(len(marks) for marks in redacts.values())
+        if total_marks > 0:
+            confirmed = show_confirm_dialog(
+                self,
+                _("redaction_save_prompt_msg", total_marks),
+                _("redaction_save_prompt_title"),
+                destructive=True
+            )
+            if not confirmed:
+                return
+            self.apply_all_redactions(prompt_warning=False)
+
         if self.current_file_path:
             self.commit_pending_format_change()
             self.save_document(self.current_file_path, incremental=False)
@@ -8325,6 +8422,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Prompt save file dialog to write PDF to a new destination."""
         self.commit_pending_format_change()
         if not self.doc: return
+
+        redacts = getattr(self._active_session, 'redaction_marks', {}) if self._active_session else {}
+        total_marks = sum(len(marks) for marks in redacts.values())
+        if total_marks > 0:
+            confirmed = show_confirm_dialog(
+                self,
+                _("redaction_save_prompt_msg", total_marks),
+                _("redaction_save_prompt_title"),
+                destructive=True
+            )
+            if not confirmed:
+                return
+            self.apply_all_redactions(prompt_warning=False)
 
         is_vault = bool(getattr(self._active_session, 'is_vault', False) or getattr(self.doc, '_is_vault', False))
         if is_vault:
@@ -11973,12 +12083,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 max_y = max(y1, y2)
                 if w >= 4.0 and h >= 4.0 and self.doc:
                     target_page = getattr(self, 'drag_start_page_index', self.current_page_index)
+                    fill_c = getattr(self, 'redact_default_fill', (0.0, 0.0, 0.0))
+                    text_c = getattr(self, 'redact_default_text_color', (1.0, 1.0, 1.0))
+                    overlay_t = getattr(self, 'redact_default_overlay', "[REDACTED]")
                     mark = RedactionMark(
                         page_number=target_page,
                         bbox=(min_x, min_y, max_x, max_y),
-                        fill_color=(0.0, 0.0, 0.0),
-                        overlay_text="[REDACTED]",
-                        text_color=(1.0, 1.0, 1.0),
+                        fill_color=fill_c,
+                        overlay_text=overlay_t,
+                        text_color=text_c,
                     )
                     from .undo_manager import AddRedactionCommand
                     cmd = AddRedactionCommand(self, mark)
@@ -12771,12 +12884,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if getattr(self, 'selected_text', None) and getattr(self.selected_text, 'bbox', None):
             t = self.selected_text
             p = getattr(t, 'page_number', self.current_page_index)
+            fill_c = getattr(self, 'redact_default_fill', (0.0, 0.0, 0.0))
+            text_c = getattr(self, 'redact_default_text_color', (1.0, 1.0, 1.0))
+            overlay_t = getattr(self, 'redact_default_overlay', "[REDACTED]")
             mark = RedactionMark(
                 page_number=p,
                 bbox=tuple(t.bbox),
-                fill_color=(0.0, 0.0, 0.0),
-                overlay_text="[REDACTED]",
-                text_color=(1.0, 1.0, 1.0),
+                fill_color=fill_c,
+                overlay_text=overlay_t,
+                text_color=text_c,
             )
             from .undo_manager import AddRedactionCommand
             cmd = AddRedactionCommand(self, mark)
@@ -12791,12 +12907,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             vx0, vy0, vx1, vy1 = self.view_sel_rect
             if abs(vx1 - vx0) >= 2.0 and abs(vy1 - vy0) >= 2.0:
                 p = self.current_page_index
+                fill_c = getattr(self, 'redact_default_fill', (0.0, 0.0, 0.0))
+                text_c = getattr(self, 'redact_default_text_color', (1.0, 1.0, 1.0))
+                overlay_t = getattr(self, 'redact_default_overlay', "[REDACTED]")
                 mark = RedactionMark(
                     page_number=p,
                     bbox=(min(vx0, vx1), min(vy0, vy1), max(vx0, vx1), max(vy0, vy1)),
-                    fill_color=(0.0, 0.0, 0.0),
-                    overlay_text="[REDACTED]",
-                    text_color=(1.0, 1.0, 1.0),
+                    fill_color=fill_c,
+                    overlay_text=overlay_t,
+                    text_color=text_c,
                 )
                 from .undo_manager import AddRedactionCommand
                 cmd = AddRedactionCommand(self, mark)
@@ -12808,7 +12927,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._open_redaction_popover(mark)
                 return
 
-    def apply_all_redactions(self):
+    def _update_redaction_controls(self):
+        """Update live count badge and sensitivity for redaction controls."""
+        if not hasattr(self, 'redaction_apply_button') or not self.redaction_apply_button:
+            return
+        redacts = getattr(self._active_session, 'redaction_marks', {}) if self._active_session else {}
+        total = sum(len(marks) for marks in redacts.values())
+        if total > 0:
+            self.redaction_apply_button.set_label(_("redaction_btn_apply_count", total))
+            self.redaction_apply_button.set_sensitive(True)
+        else:
+            self.redaction_apply_button.set_label(_("redaction_btn_apply"))
+            self.redaction_apply_button.set_sensitive(False)
+
+    def apply_all_redactions(self, prompt_warning: bool = True):
         """Burn all staged visual redaction marks permanently into the active PDF document."""
         if not self.doc or not self._active_session:
             return False
@@ -12816,14 +12948,38 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         total_marks = sum(len(marks) for marks in redacts.values())
         if total_marks == 0:
             return False
+
+        if prompt_warning:
+            confirmed = show_confirm_dialog(
+                self,
+                _("redaction_warning_msg", total_marks),
+                _("redaction_warning_title"),
+                destructive=True
+            )
+            if not confirmed:
+                return False
+
+        affected_pages = list(redacts.keys())
         applied = pdf_handler.apply_redaction_marks(self.doc, redacts)
         if applied:
             redacts.clear()
             self.selected_redaction_mark = None
             self.document_modified = True
-            for pno in range(self.doc.page_count):
-                self._refresh_thumbnail(pno)
-            self.pdf_view.queue_draw()
+
+            # Invalidate page snapshots & cached editable objects for affected pages
+            for pno in affected_pages:
+                if 0 <= pno < self.doc.page_count:
+                    pdf_handler.save_page_snapshot(self.doc, pno, force=True)
+                    if hasattr(self, '_page_objects_cache') and pno in self._page_objects_cache:
+                        del self._page_objects_cache[pno]
+                    self._refresh_thumbnail(pno)
+
+            # Reload active page objects if active page was affected or to ensure clean canvas
+            if self.current_page_index in affected_pages:
+                self._load_page(self.current_page_index, reload_objects=True)
+            else:
+                self.pdf_view.queue_draw()
+
             if hasattr(self, 'annotations_sidebar'):
                 self.annotations_sidebar.refresh()
             self._update_ui_state()

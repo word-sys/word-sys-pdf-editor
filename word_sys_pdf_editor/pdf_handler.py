@@ -1249,6 +1249,7 @@ def save_document(doc, save_path, incremental=False):
             save_kwargs = {
                 "garbage": 4,
                 "deflate": True,
+                "clean": True,
                 "incremental": False,
                 "encryption": fitz.PDF_ENCRYPT_AES_256,
                 "user_pw": pdf_pw or "",
@@ -1262,6 +1263,7 @@ def save_document(doc, save_path, incremental=False):
                 temp_path,
                 garbage=4,
                 deflate=True,
+                clean=True,
                 incremental=False,  
                 encryption=fitz.PDF_ENCRYPT_NONE
             )
@@ -4178,12 +4180,15 @@ def extract_page_region_patch(
         print(f"Error extracting page patch: {e}")
         return None
 
-
-def apply_redaction_marks(doc, redaction_marks_dict):
-    """Permanently burn staged redaction marks into the PyMuPDF document."""
+def apply_redaction_marks(doc, redaction_marks_dict, images=None, graphics=None, text=None):
+    """Permanently burn staged redaction marks into the PyMuPDF document with true stream purging."""
     if not doc or not redaction_marks_dict:
         return False
     applied = False
+    img_flag = fitz.PDF_REDACT_IMAGE_PIXELS if images is None else images
+    gfx_flag = fitz.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED if graphics is None else graphics
+    txt_flag = fitz.PDF_REDACT_TEXT_REMOVE if text is None else text
+
     try:
         for page_num, marks in list(redaction_marks_dict.items()):
             if page_num < 0 or page_num >= len(doc) or not marks:
@@ -4194,14 +4199,43 @@ def apply_redaction_marks(doc, redaction_marks_dict):
                 page.add_redact_annot(
                     rect,
                     text=getattr(mark, 'overlay_text', None) or "",
-                    fill=getattr(mark, 'fill_color', (0, 0, 0)),
-                    text_color=getattr(mark, 'text_color', (1, 1, 1)),
+                    fill=getattr(mark, 'fill_color', (0.0, 0.0, 0.0)),
+                    text_color=getattr(mark, 'text_color', (1.0, 1.0, 1.0)),
                     fontsize=getattr(mark, 'font_size', 11.0),
                     align=fitz.TEXT_ALIGN_CENTER,
                 )
-            page.apply_redactions()
+            page.apply_redactions(images=img_flag, graphics=gfx_flag, text=txt_flag)
             applied = True
         return applied
     except Exception as e:
         print(f"Error applying redaction marks: {e}")
+        return False
+
+
+def verify_redaction_purge(doc, page_num, bbox, search_term=None, allowed_overlay=None):
+    """Verify that underlying sensitive text within bbox on page_num has been completely eradicated."""
+    if not doc or page_num < 0 or page_num >= len(doc):
+        return False
+    try:
+        page = doc[page_num]
+        rect = fitz.Rect(bbox)
+        if search_term:
+            hits = page.search_for(search_term, clip=rect)
+            if hits:
+                return False
+            words = page.get_text("words", clip=rect)
+            for w in words:
+                if search_term.lower() in w[4].lower():
+                    return False
+        elif allowed_overlay is not None:
+            words = page.get_text("words", clip=rect)
+            for w in words:
+                if w[4] != allowed_overlay and w[4] not in allowed_overlay:
+                    return False
+        else:
+            words = page.get_text("words", clip=rect)
+            if words:
+                return False
+        return True
+    except Exception:
         return False
