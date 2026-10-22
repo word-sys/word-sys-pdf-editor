@@ -1749,3 +1749,147 @@ class FlattenCommand(Command):
                 self.window.status_label.set_text(_("reverted"))
             if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
                 self.window.pdf_view.queue_draw()
+
+
+class EmbedOCRTextCommand(Command):
+    """Command to embed a transparent searchable OCR text layer (render_mode=3) with undo/redo support."""
+
+    def __init__(
+        self,
+        window,
+        page_indices: List[int],
+        ocr_results: Optional[Dict[int, Any]] = None,
+        ocr_words_by_page: Optional[Dict[int, List[Dict[str, Any]]]] = None,
+        language: str = "eng",
+        dpi: int = 150,
+    ):
+        super().__init__(window)
+        self.page_indices = list(page_indices)
+        self.language = language
+        self.dpi = dpi
+        self.last_result: Dict[str, Any] = {}
+
+        doc = self._get_doc()
+        self.pre_snapshots: Dict[int, bytes] = {}
+        self.ocr_words_by_page: Dict[int, List[Dict[str, Any]]] = (
+            copy.deepcopy(ocr_words_by_page) if ocr_words_by_page is not None else {}
+        )
+
+        if doc is not None:
+            for p in self.page_indices:
+                if 0 <= p < len(doc):
+                    pdf_handler.save_page_snapshot(doc, p)
+                    snap = pdf_handler._page_snapshots.get((id(doc), p))
+                    if snap is not None:
+                        self.pre_snapshots[p] = snap
+                    if p not in self.ocr_words_by_page and ocr_results and p in ocr_results:
+                        ocr_doc = ocr_results[p]
+                        try:
+                            self.ocr_words_by_page[p] = pdf_handler.extract_ocr_words_for_page(doc[p], ocr_doc)
+                        finally:
+                            try:
+                                ocr_doc.close()
+                            except Exception:
+                                pass
+
+        self.pre_editable_texts = copy.deepcopy(self._get_collection('editable_texts'))
+        sess = self._get_target_session()
+        self.pre_document_modified = getattr(
+            sess, 'is_modified', getattr(self.window, 'document_modified', False)
+        )
+
+    def _invalidate_objects_cache(self, pages: List[int]):
+        sess = self._get_target_session()
+        for target in ([sess, self.window] if sess else [self.window]):
+            cache = getattr(target, '_page_objects_cache', None)
+            if isinstance(cache, dict):
+                for p in pages:
+                    cache.pop(p, None)
+            cache2 = getattr(target, 'page_objects_cache', None)
+            if isinstance(cache2, dict):
+                for p in pages:
+                    cache2.pop(p, None)
+
+    def execute(self):
+        doc = self._get_doc()
+        if not doc:
+            return
+        for p, snap in self.pre_snapshots.items():
+            pdf_handler._page_pre_ocr_snapshots[(id(doc), p)] = snap
+
+        self.last_result = pdf_handler.embed_ocr_text_layer(
+            doc,
+            page_numbers=self.page_indices,
+            ocr_words_by_page=self.ocr_words_by_page if self.ocr_words_by_page else None,
+            language=self.language,
+            dpi=self.dpi,
+            replace_existing=True,
+        )
+
+        # Cache any newly computed OCR words so redo does not re-run OCR
+        for p in self.page_indices:
+            if p not in self.ocr_words_by_page and 0 <= p < len(doc):
+                self.ocr_words_by_page[p] = pdf_handler.extract_ocr_words_for_page(doc[p], doc[p])
+
+        self._invalidate_objects_cache(self.page_indices)
+
+        sess = self._get_target_session()
+        curr_page = getattr(
+            sess, 'current_page_index', getattr(self.window, 'current_page_index', 0)
+        )
+        if curr_page in self.page_indices and 0 <= curr_page < len(doc):
+            extracted_texts, _ = pdf_handler.extract_editable_text(doc, curr_page)
+            new_user_texts = [
+                t for t in self.pre_editable_texts
+                if getattr(t, 'page_number', None) == curr_page and getattr(t, 'is_new', False)
+            ]
+            combined = list(extracted_texts or []) + copy.deepcopy(new_user_texts)
+            for target in ([sess, self.window] if sess else [self.window]):
+                if hasattr(target, 'editable_texts'):
+                    target.editable_texts = copy.deepcopy(combined)
+
+        if sess is not None:
+            sess.is_modified = True
+            if hasattr(sess, 'document_modified'):
+                sess.document_modified = True
+        if hasattr(self.window, 'document_modified'):
+            self.window.document_modified = True
+
+        if self._is_session_active():
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+            if hasattr(self.window, 'status_label') and self.window.status_label:
+                self.window.status_label.set_text(
+                    _("ocr_msg_completed", self.last_result.get("pages_processed", len(self.page_indices)))
+                )
+            if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()
+
+    def undo(self):
+        doc = self._get_doc()
+        if doc is not None:
+            for p in self.page_indices:
+                if not pdf_handler.restore_pre_ocr_page(doc, p):
+                    snap = self.pre_snapshots.get(p)
+                    if snap is not None:
+                        pdf_handler._page_snapshots[(id(doc), p)] = snap
+                        pdf_handler.restore_page_from_snapshot(doc, p)
+
+        self._invalidate_objects_cache(self.page_indices)
+
+        sess = self._get_target_session()
+        for target in ([sess, self.window] if sess else [self.window]):
+            if hasattr(target, 'editable_texts'):
+                target.editable_texts = copy.deepcopy(self.pre_editable_texts)
+            if hasattr(target, 'is_modified'):
+                target.is_modified = self.pre_document_modified
+            if hasattr(target, 'document_modified'):
+                target.document_modified = self.pre_document_modified
+
+        if self._is_session_active():
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+            if hasattr(self.window, 'status_label') and self.window.status_label:
+                self.window.status_label.set_text(_("reverted"))
+            if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()

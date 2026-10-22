@@ -2718,6 +2718,7 @@ def update_form_widget_choices(
 
 _page_snapshots: dict = {}
 _page_original_links: dict = {}
+_page_pre_ocr_snapshots: dict = {}
 # Maps md5(snapshot content) -> {xobject resource name: xref}. Keyed by content digest
 # so it survives page re-keying of _page_snapshots.
 _snapshot_xobject_names: dict = {}
@@ -2828,6 +2829,9 @@ def release_page_snapshots(doc):
         del _page_snapshots[k]
         if k in _page_original_links:
             del _page_original_links[k]
+    ocr_keys = [k for k in _page_pre_ocr_snapshots if k[0] == doc_id]
+    for k in ocr_keys:
+        del _page_pre_ocr_snapshots[k]
 
 def _apply_single_object_to_page(doc, page, obj):
     """Render a single object (text, image, shape, stroke) onto a PDF page with transforms."""
@@ -4456,3 +4460,271 @@ def verify_redaction_purge(doc, page_num, bbox, search_term=None, allowed_overla
         return True
     except Exception:
         return False
+
+
+def extract_ocr_words_for_page(target_page, ocr_doc) -> List[Dict[str, Any]]:
+    """Extract recognized words from a 1-page OCR document and scale their bounding boxes to target_page."""
+    if target_page is None or ocr_doc is None:
+        return []
+    try:
+        ocr_page = ocr_doc[0] if hasattr(ocr_doc, "__getitem__") else ocr_doc
+        ocr_rect = ocr_page.rect
+        target_rect = target_page.rect
+        scale_x = target_rect.width / max(ocr_rect.width, 1.0)
+        scale_y = target_rect.height / max(ocr_rect.height, 1.0)
+
+        raw_words = ocr_page.get_text("words")
+        extracted: List[Dict[str, Any]] = []
+        for item in raw_words:
+            if len(item) < 5:
+                continue
+            text = str(item[4]).strip()
+            if not text:
+                continue
+            wx0 = float(item[0]) * scale_x
+            wy0 = float(item[1]) * scale_y
+            wx1 = float(item[2]) * scale_x
+            wy1 = float(item[3]) * scale_y
+            x0, x1 = min(wx0, wx1), max(wx0, wx1)
+            y0, y1 = min(wy0, wy1), max(wy0, wy1)
+            if (x1 - x0) <= 0.1 or (y1 - y0) <= 0.1:
+                continue
+            extracted.append({
+                "bbox": (x0, y0, x1, y1),
+                "text": text,
+                "block_no": int(item[5]) if len(item) > 5 else 0,
+                "line_no": int(item[6]) if len(item) > 6 else 0,
+                "word_no": int(item[7]) if len(item) > 7 else 0,
+            })
+        return extracted
+    except Exception as e:
+        print(f"Error extracting OCR words for page: {e}")
+        return []
+
+
+def _word_already_exists_on_page(existing_words, bbox: Tuple[float, float, float, float], text: str) -> bool:
+    norm_target = text.strip().lower()
+    if not norm_target or not existing_words:
+        return False
+    target_rect = fitz.Rect(bbox)
+    target_area = max(target_rect.width * target_rect.height, 0.1)
+    for ew in existing_words:
+        if len(ew) < 5:
+            continue
+        if str(ew[4]).strip().lower() != norm_target:
+            continue
+        erect = fitz.Rect(ew[0], ew[1], ew[2], ew[3])
+        inter = target_rect & erect
+        if not inter.is_empty:
+            min_area = max(min(target_area, erect.width * erect.height), 0.1)
+            if (inter.width * inter.height) / min_area >= 0.25:
+                return True
+    return False
+
+
+def restore_pre_ocr_page(doc, page_num: int) -> bool:
+    """Restore a page to its state prior to OCR text layer embedding."""
+    if not doc or not (0 <= page_num < len(doc)):
+        return False
+    key = (id(doc), page_num)
+    if key not in _page_pre_ocr_snapshots:
+        return False
+    _page_snapshots[key] = _page_pre_ocr_snapshots.pop(key)
+    return restore_page_from_snapshot(doc, page_num)
+
+
+def embed_ocr_text_layer_on_page(
+    doc,
+    page_num: int,
+    ocr_doc=None,
+    ocr_words: Optional[List[Dict[str, Any]]] = None,
+    language: str = "eng",
+    dpi: int = 150,
+    tessdata_dir: Optional[str] = None,
+    replace_existing: bool = True,
+) -> Dict[str, Any]:
+    """Embed a transparent searchable text layer (PDF render_mode=3) onto a single page."""
+    if not doc or page_num < 0 or page_num >= len(doc):
+        return {"success": False, "page_num": page_num, "words_embedded": 0, "error": "Invalid document or page index"}
+
+    own_ocr_doc = False
+    try:
+        save_page_snapshot(doc, page_num)
+        key = (id(doc), page_num)
+        if key not in _page_pre_ocr_snapshots and key in _page_snapshots:
+            _page_pre_ocr_snapshots[key] = _page_snapshots[key]
+        elif key in _page_pre_ocr_snapshots and replace_existing:
+            _page_snapshots[key] = _page_pre_ocr_snapshots[key]
+            restore_page_from_snapshot(doc, page_num)
+
+        page = doc.load_page(page_num)
+
+        if ocr_words is None:
+            if ocr_doc is None:
+                from .ocr_engine import perform_ocr_on_page
+                ocr_doc = perform_ocr_on_page(
+                    doc,
+                    page_num=page_num,
+                    language=language,
+                    dpi=dpi,
+                    tessdata_dir=tessdata_dir,
+                )
+                own_ocr_doc = True
+            ocr_words = extract_ocr_words_for_page(page, ocr_doc)
+
+        existing_words = []
+        try:
+            existing_words = page.get_text("words")
+        except Exception:
+            pass
+
+        unicode_font_path = None
+        unicode_font_obj = None
+        rot = int(page.rotation) % 360
+        derot_mat = ~page.rotation_matrix if rot != 0 else None
+
+        words_embedded = 0
+        embedded_texts: List[str] = []
+
+        for w_info in ocr_words:
+            text = str(w_info.get("text", "")).strip()
+            bbox = w_info.get("bbox")
+            if not text or not bbox or len(bbox) < 4:
+                continue
+
+            x0, y0, x1, y1 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+            if _word_already_exists_on_page(existing_words, (x0, y0, x1, y1), text):
+                continue
+
+            box_w = max(1.0, x1 - x0)
+            box_h = max(2.0, y1 - y0)
+            fontsize = max(4.0, box_h * 0.85)
+            baseline_y = y1 - box_h * 0.15
+
+            needs_unicode = any(ord(c) >= 128 for c in text)
+            font_kwargs: Dict[str, Any] = {}
+            unit_w = 0.0
+
+            if needs_unicode:
+                if unicode_font_path is None:
+                    unicode_font_path = get_default_unicode_font_path() or ""
+                    if unicode_font_path:
+                        try:
+                            unicode_font_obj = fitz.Font(fontfile=unicode_font_path)
+                        except Exception:
+                            unicode_font_obj = None
+                if unicode_font_path:
+                    font_kwargs = {
+                        "fontfile": unicode_font_path,
+                        "fontname": "word_sys_ocr_u",
+                    }
+                    if unicode_font_obj is not None:
+                        try:
+                            unit_w = unicode_font_obj.text_length(text, fontsize=1.0)
+                        except Exception:
+                            unit_w = 0.0
+                else:
+                    font_kwargs = {"fontname": "helv"}
+            else:
+                font_kwargs = {"fontname": "helv"}
+                try:
+                    unit_w = fitz.get_text_length(text, fontname="helv", fontsize=1.0)
+                except Exception:
+                    unit_w = 0.0
+
+            if unit_w > 0.0 and (unit_w * fontsize) > (box_w * 1.05):
+                fontsize = max(3.0, box_w / unit_w)
+
+            vis_pt = fitz.Point(x0, baseline_y)
+            insert_pt = (vis_pt * derot_mat) if derot_mat is not None else vis_pt
+
+            page.insert_text(
+                insert_pt,
+                text,
+                fontsize=fontsize,
+                render_mode=3,
+                rotate=rot,
+                overlay=True,
+                **font_kwargs,
+            )
+            existing_words.append((x0, y0, x1, y1, text, 0, 0, words_embedded))
+            words_embedded += 1
+            embedded_texts.append(text)
+
+        save_page_snapshot(doc, page_num, force=True)
+        invalidate_page_cache(doc, page_num)
+
+        return {
+            "success": True,
+            "page_num": page_num,
+            "words_embedded": words_embedded,
+            "text": " ".join(embedded_texts),
+        }
+    except Exception as e:
+        print(f"Error embedding OCR text layer on page {page_num}: {e}")
+        return {
+            "success": False,
+            "page_num": page_num,
+            "words_embedded": 0,
+            "error": str(e),
+        }
+    finally:
+        if own_ocr_doc and ocr_doc is not None:
+            try:
+                ocr_doc.close()
+            except Exception:
+                pass
+
+
+def embed_ocr_text_layer(
+    doc,
+    page_numbers: Optional[List[int]] = None,
+    ocr_results: Optional[Dict[int, Any]] = None,
+    ocr_words_by_page: Optional[Dict[int, List[Dict[str, Any]]]] = None,
+    language: str = "eng",
+    dpi: int = 150,
+    tessdata_dir: Optional[str] = None,
+    replace_existing: bool = True,
+) -> Dict[str, Any]:
+    """Embed transparent searchable OCR text layers across one or more pages of a document."""
+    if not doc:
+        return {"success": False, "pages_processed": 0, "total_words_embedded": 0, "per_page": {}}
+
+    if page_numbers is None:
+        if ocr_words_by_page is not None:
+            page_numbers = sorted(ocr_words_by_page.keys())
+        elif ocr_results is not None:
+            page_numbers = sorted(ocr_results.keys())
+        else:
+            page_numbers = list(range(len(doc)))
+
+    per_page: Dict[int, Dict[str, Any]] = {}
+    total_words = 0
+    pages_processed = 0
+
+    for p_num in page_numbers:
+        if p_num < 0 or p_num >= len(doc):
+            continue
+        p_ocr_doc = ocr_results.get(p_num) if ocr_results else None
+        p_ocr_words = ocr_words_by_page.get(p_num) if ocr_words_by_page else None
+        res = embed_ocr_text_layer_on_page(
+            doc,
+            page_num=p_num,
+            ocr_doc=p_ocr_doc,
+            ocr_words=p_ocr_words,
+            language=language,
+            dpi=dpi,
+            tessdata_dir=tessdata_dir,
+            replace_existing=replace_existing,
+        )
+        per_page[p_num] = res
+        if res.get("success"):
+            pages_processed += 1
+            total_words += int(res.get("words_embedded", 0))
+
+    return {
+        "success": pages_processed > 0 or len(page_numbers) == 0,
+        "pages_processed": pages_processed,
+        "total_words_embedded": total_words,
+        "per_page": per_page,
+    }

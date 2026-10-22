@@ -6,7 +6,7 @@ from .undo_manager import (
     DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand,
     ReplaceImageCommand, CalibrateScaleCommand, AddMeasurementCommand, DeleteMeasurementCommand,
     AddStickyNoteCommand, DeleteStickyNoteCommand, EditStickyNoteCommand, MoveStickyNoteCommand,
-    ReorderObjectCommand, CompositeCommand
+    ReorderObjectCommand, CompositeCommand, EmbedOCRTextCommand
 )
 from .i18n import _, get_language, set_language, get_supported_languages, get_setting, set_setting
 
@@ -8935,9 +8935,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return False
 
     def _on_ocr_completed(self, target_pages: list[int], results: dict):
-        """Handle completion of OCR recognition."""
-        if hasattr(self, "status_label") and self.status_label:
-            self.status_label.set_text(_("ocr_msg_completed", len(results)))
+        """Handle completion of OCR recognition by embedding transparent searchable text layers."""
+        if not self.doc:
+            return
+        if results:
+            pages = [p for p in target_pages if p in results]
+            if not pages:
+                pages = sorted(results.keys())
+            cmd = EmbedOCRTextCommand(
+                self,
+                page_indices=pages,
+                ocr_results=results,
+            )
+            cmd.execute()
+            if hasattr(self, "undo_manager") and self.undo_manager:
+                self.undo_manager.record(cmd)
+        elif hasattr(self, "status_label") and self.status_label:
+            self.status_label.set_text(_("ocr_msg_completed", 0))
 
     def _execute_sanitize_from_dialog(self, options: dict):
         """Execute document-wide sanitization triggered from SanitizeDialog."""
