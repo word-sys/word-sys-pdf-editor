@@ -591,6 +591,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.search_match_label = None
         self.search_case_btn = None
         self.search_whole_word_btn = None
+        self.search_redact_btn = None
+        self.search_redact_box = None
+        self._search_pii_key = None
+        self._search_scope_current_page = False
         self._search_debounce_source = None
         self.ocr_banner = None
         self.ocr_banner_label = None
@@ -1807,9 +1811,37 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.search_whole_word_btn.connect("toggled", self._on_search_whole_word_toggled)
         search_box.append(self.search_whole_word_btn)
 
-        self.search_redact_btn = Gtk.Button.new_from_icon_name("edit-clear-symbolic")
-        self.search_redact_btn.set_tooltip_text(_("search_redact_all_tip"))
-        self.search_redact_btn.connect("clicked", lambda b: self.on_find_and_redact(initial_query=self.search_entry.get_text()))
+        # Redaction controls docked directly inside search bar
+        self.search_redact_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.search_redact_box.set_visible(False)
+
+        sep_sr = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        self.search_redact_box.append(sep_sr)
+
+        self.btn_search_redact_current = Gtk.Button(label=_("redaction_mark_match"))
+        self.btn_search_redact_current.set_tooltip_text(_("redaction_mark_match_tip"))
+        self.btn_search_redact_current.add_css_class("suggested-action")
+        self.btn_search_redact_current.connect("clicked", lambda b: self._redact_current_search_match())
+        self.search_redact_box.append(self.btn_search_redact_current)
+
+        self.btn_search_redact_all = Gtk.Button(label=_("search_redact_btn_stage"))
+        self.btn_search_redact_all.set_tooltip_text(_("search_redact_all_tip"))
+        self.btn_search_redact_all.add_css_class("destructive-action")
+        self.btn_search_redact_all.connect("clicked", lambda b: self._redact_all_search_matches())
+        self.search_redact_box.append(self.btn_search_redact_all)
+
+        self.search_redact_options_btn = Gtk.MenuButton()
+        self.search_redact_options_btn.set_icon_name("preferences-system-symbolic")
+        self.search_redact_options_btn.set_tooltip_text(_("redaction_options"))
+        self.search_redact_options_btn.set_popover(self._create_search_redact_options_popover())
+        self.search_redact_box.append(self.search_redact_options_btn)
+
+        search_box.append(self.search_redact_box)
+
+        self.search_redact_btn = Gtk.ToggleButton()
+        self.search_redact_btn.set_icon_name("edit-clear-symbolic")
+        self.search_redact_btn.set_tooltip_text(_("redaction_find_and_redact"))
+        self.search_redact_btn.connect("toggled", lambda b: self.search_redact_box.set_visible(b.get_active()))
         search_box.append(self.search_redact_btn)
 
         search_close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
@@ -5349,12 +5381,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             x1, y1, x2, y2 = selected_obj.bbox
             if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
-                text = selected_obj.text
-                r1 = self.selected_word_start_char / max(len(text), 1)
-                r2 = self.selected_word_end_char / max(len(text), 1)
-                x1_word = x1 + (x2 - x1) * r1
-                x2_word = x1 + (x2 - x1) * r2
-                x1, x2 = x1_word, x2_word
+                w_bbox = self.get_selected_word_bbox()
+                if w_bbox:
+                    x1, y1, x2, y2 = w_bbox
 
             padding = 3.0 / self.zoom_level
             rect_x = x1 - padding
@@ -9215,10 +9244,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.search_bar.set_search_mode(False)
         if hasattr(self, 'search_button') and self.search_button and self.search_button.get_active():
             self.search_button.set_active(False)
+        if hasattr(self, 'search_redact_btn') and self.search_redact_btn and self.search_redact_btn.get_active():
+            self.search_redact_btn.set_active(False)
+        if hasattr(self, 'search_redact_box') and self.search_redact_box:
+            self.search_redact_box.set_visible(False)
         if hasattr(self, 'search_engine') and self.search_engine:
             self.search_engine.clear()
         if hasattr(self, 'search_match_label') and self.search_match_label:
             self.search_match_label.set_text(_("search_no_results"))
+        if hasattr(self, 'btn_search_redact_current') and self.btn_search_redact_current:
+            self.btn_search_redact_current.set_sensitive(False)
+        if hasattr(self, 'btn_search_redact_all') and self.btn_search_redact_all:
+            self.btn_search_redact_all.set_sensitive(False)
         if hasattr(self, 'pdf_view') and self.pdf_view:
             self.pdf_view.queue_draw()
             self.pdf_view.grab_focus()
@@ -9259,20 +9296,39 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.search_engine.clear()
             if hasattr(self, 'search_match_label') and self.search_match_label:
                 self.search_match_label.set_text(_("search_no_results"))
+            if hasattr(self, 'btn_search_redact_current') and self.btn_search_redact_current:
+                self.btn_search_redact_current.set_sensitive(False)
+            if hasattr(self, 'btn_search_redact_all') and self.btn_search_redact_all:
+                self.btn_search_redact_all.set_sensitive(False)
             if hasattr(self, 'pdf_view') and self.pdf_view:
                 self.pdf_view.queue_draw()
             return
 
-        matches = self.search_engine.search(self.doc, query, case_sensitive=case_sensitive, whole_word=whole_word)
+        from .search_engine import PII_PATTERNS
+        target_pages = [self.current_page_index] if getattr(self, '_search_scope_current_page', False) is True else None
+        pii_key = getattr(self, '_search_pii_key', None)
+        if isinstance(pii_key, str) and pii_key in PII_PATTERNS:
+            matches = self.search_engine.search_pii(self.doc, pii_key, page_indices=target_pages)
+        else:
+            matches = self.search_engine.search(self.doc, query, case_sensitive=case_sensitive, whole_word=whole_word, page_indices=target_pages)
+
         if matches:
             self.search_engine.find_nearest_match(self.current_page_index)
             curr = self.search_engine.current_index
             if hasattr(self, 'search_match_label') and self.search_match_label:
                 self.search_match_label.set_text(f"{curr + 1}/{len(matches)}")
+            if hasattr(self, 'btn_search_redact_current') and self.btn_search_redact_current:
+                self.btn_search_redact_current.set_sensitive(True)
+            if hasattr(self, 'btn_search_redact_all') and self.btn_search_redact_all:
+                self.btn_search_redact_all.set_sensitive(True)
             self._jump_to_current_search_match()
         else:
             if hasattr(self, 'search_match_label') and self.search_match_label:
                 self.search_match_label.set_text(_("search_no_results"))
+            if hasattr(self, 'btn_search_redact_current') and self.btn_search_redact_current:
+                self.btn_search_redact_current.set_sensitive(False)
+            if hasattr(self, 'btn_search_redact_all') and self.btn_search_redact_all:
+                self.btn_search_redact_all.set_sensitive(False)
         if hasattr(self, 'pdf_view') and self.pdf_view:
             self.pdf_view.queue_draw()
 
@@ -10736,8 +10792,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     mid_span.alignment = alignment
                     
                     from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand
+                    target_page_num = getattr(target_obj, 'page_number', self.current_page_index)
                     commands = [DeleteObjectCommand(self, target_obj)]
                     for span in spans:
+                        span.is_new = True
+                        span.is_baked = True
+                        span.page_number = target_page_num
                         commands.append(AddObjectCommand(self, span))
                     
                     batch_cmd = CompositeCommand(self, commands)
@@ -10745,6 +10805,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.undo_manager.add_command(batch_cmd)
                     self.selected_text = mid_span
                     self.pending_format_change_obj = mid_span
+                    if hasattr(self, '_update_text_format_controls'):
+                        self._update_text_format_controls(mid_span)
                     self._update_ui_state()
                     self.pdf_view.queue_draw()
                     return
@@ -10766,25 +10828,50 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 mid_span.is_strikethrough = is_strikethrough
                 mid_span.alignment = alignment
                 mid_span.color = color
-                
+
+                from .models import _measure_text_pango
+                new_mid_w = _measure_text_pango(mid_span.text, mid_span.font_family_base, mid_span.font_size, mid_span.is_bold, mid_span.is_italic)
+                mx0, my0, mx1, my1 = mid_span.bbox
+                mid_span.bbox = (mx0, my0, mx0 + new_mid_w, my1)
+                mid_span.original_bbox = mid_span.bbox
+                dx = (mx0 + new_mid_w) - mx1
+
+                for s_idx in range(mid_index + 1, len(spans)):
+                    post_span = spans[s_idx]
+                    px0, py0, px1, py1 = post_span.bbox
+                    post_span.bbox = (px0 + dx, py0, px1 + dx, py1)
+                    post_span.original_bbox = post_span.bbox
+                    post_span.x = post_span.bbox[0]
+                    if post_span.char_boxes:
+                        for cb in post_span.char_boxes:
+                            cbx0, cby0, cbx1, cby1 = cb["bbox"]
+                            cb["bbox"] = (cbx0 + dx, cby0, cbx1 + dx, cby1)
+
                 from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand
+                target_page_num = getattr(target_obj, 'page_number', self.current_page_index)
                 commands = [DeleteObjectCommand(self, target_obj)]
                 for span in spans:
+                    span.is_new = True
+                    span.is_baked = True
+                    span.page_number = target_page_num
                     commands.append(AddObjectCommand(self, span))
-                
+
                 batch_cmd = CompositeCommand(self, commands)
                 batch_cmd.execute()
                 self.undo_manager.add_command(batch_cmd)
-                
-                self.selected_text = mid_span
-                self.pending_format_change_obj = mid_span
+
                 self.selected_text = mid_span
                 self.pending_format_change_obj = mid_span
                 self.before_format_change_state = copy.deepcopy(mid_span.__dict__)
-                
+
                 self.selected_word_start_char = 0
                 self.selected_word_end_char = len(mid_span.text)
-                
+                self.selected_word_bbox = mid_span.bbox
+
+                if hasattr(self, '_update_text_format_controls'):
+                    self._update_text_format_controls(mid_span)
+                if self.doc and self.current_page_index is not None:
+                    pdf_handler.invalidate_page_cache(self.doc, self.current_page_index)
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
                 return
@@ -13294,11 +13381,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             is_visual = True
         elif not self.view_mode and self.selected_text and self.selected_text.bbox:
             if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char'):
-                text = self.selected_text.text
-                r1 = self.selected_word_start_char / max(len(text), 1)
-                r2 = self.selected_word_end_char / max(len(text), 1)
-                x1, y1, x2, y2 = self.selected_text.bbox
-                target_rect = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
+                target_rect = self.get_selected_word_bbox() or self.selected_text.bbox
             else:
                 target_rect = self.selected_text.bbox
             is_visual = False
@@ -13333,11 +13416,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             is_visual = True
         elif not self.view_mode and self.selected_text and self.selected_text.bbox:
             if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char'):
-                text = self.selected_text.text
-                r1 = self.selected_word_start_char / max(len(text), 1)
-                r2 = self.selected_word_end_char / max(len(text), 1)
-                x1, y1, x2, y2 = self.selected_text.bbox
-                target_rect = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
+                target_rect = self.get_selected_word_bbox() or self.selected_text.bbox
             else:
                 target_rect = self.selected_text.bbox
             is_visual = False
@@ -13633,15 +13712,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         # 1. Selected editable text, shape, or image object
         if getattr(self, 'selected_text', None) and getattr(self.selected_text, 'bbox', None):
             if getattr(self, 'word_selection_mode', False) and getattr(self, 'selected_word', None):
-                word_bbox = getattr(self, 'selected_word_bbox', None)
+                word_bbox = None
+                if hasattr(self, 'get_selected_word_bbox') and callable(self.get_selected_word_bbox):
+                    wb = self.get_selected_word_bbox()
+                    if isinstance(wb, (tuple, list)) and len(wb) == 4:
+                        word_bbox = wb
+                if not word_bbox:
+                    word_bbox = getattr(self, 'selected_word_bbox', None)
                 if not isinstance(word_bbox, (tuple, list)) or len(word_bbox) != 4:
                     text = self.selected_text.text
                     start_c = getattr(self, 'selected_word_start_char', 0)
                     end_c = getattr(self, 'selected_word_end_char', len(text))
-                    r1 = start_c / max(len(text), 1)
-                    r2 = end_c / max(len(text), 1)
-                    x1, y1, x2, y2 = self.selected_text.bbox
-                    word_bbox = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
+                    from .models import _measure_text_pango
+                    tx0, ty0, tx1, ty1 = self.selected_text.bbox
+                    total_w = max(1.0, float(tx1 - tx0))
+                    w_pre = _measure_text_pango(text[:start_c], self.selected_text.font_family_base, self.selected_text.font_size, self.selected_text.is_bold, self.selected_text.is_italic)
+                    w_word = _measure_text_pango(text[start_c:end_c], self.selected_text.font_family_base, self.selected_text.font_size, self.selected_text.is_bold, self.selected_text.is_italic)
+                    w_total = _measure_text_pango(text, self.selected_text.font_family_base, self.selected_text.font_size, self.selected_text.is_bold, self.selected_text.is_italic)
+                    scale = (total_w / w_total) if w_total > 0 else 1.0
+                    word_bbox = (tx0 + (w_pre * scale), ty0, tx0 + ((w_pre + w_word) * scale), ty1)
                 return self.mark_object_for_redaction(self.selected_text, bbox=word_bbox)
             return self.mark_object_for_redaction(self.selected_text)
         elif getattr(self, 'selected_shape', None) and getattr(self.selected_shape, 'bbox', None):
@@ -13697,15 +13786,24 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._handle_delete_with_confirmation(text_obj, "delete_text_confirm")
             return
 
+        from .models import _measure_text_pango
         from .undo_manager import EditObjectCommand
         old_state = copy.deepcopy(text_obj.__dict__)
         new_state = copy.deepcopy(text_obj.__dict__)
         new_state['text'] = new_text
-        ratio = len(new_text) / max(len(full_text), 1)
-        orig_w = text_obj.width
-        new_w = max(10.0, orig_w * ratio)
+
+        new_w = _measure_text_pango(new_text, text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic)
         x0, y0, x1, y1 = text_obj.bbox
         new_state['bbox'] = (x0, y0, x0 + new_w, y1)
+
+        if text_obj.char_boxes:
+            remaining_cbs = []
+            for idx, cb in enumerate(text_obj.char_boxes):
+                if idx < start_idx or idx >= end_idx:
+                    remaining_cbs.append(dict(cb))
+            for i, cb in enumerate(remaining_cbs):
+                cb["index"] = i
+            new_state['char_boxes'] = remaining_cbs
 
         cmd = EditObjectCommand(self, text_obj, old_state, new_state)
         cmd.execute()
@@ -13713,7 +13811,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.undo_manager.record(cmd)
         self.word_selection_mode = False
         self.selected_word = None
+        self.selected_word_bbox = None
+        self.selected_word_start_char = -1
+        self.selected_word_end_char = -1
         self.document_modified = True
+        if self.doc and self.current_page_index is not None:
+            pdf_handler.invalidate_page_cache(self.doc, self.current_page_index)
         self.pdf_view.queue_draw()
 
     def _update_redaction_controls(self):
@@ -13828,33 +13931,286 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.status_label.set_text(_("status_redactions_staged_count", len(cmds)))
         return len(cmds)
 
+    def _create_search_redact_options_popover(self) -> Gtk.Popover:
+        popover = Gtk.Popover()
+        pop_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        pop_box.set_margin_start(12)
+        pop_box.set_margin_end(12)
+        pop_box.set_margin_top(12)
+        pop_box.set_margin_bottom(12)
+        pop_box.set_size_request(260, -1)
+
+        # Title
+        title_lbl = Gtk.Label(label=_("search_redact_options_title"))
+        title_lbl.add_css_class("heading")
+        title_lbl.set_halign(Gtk.Align.START)
+        pop_box.append(title_lbl)
+
+        # PII Pattern Presets dropdown
+        preset_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        preset_lbl = Gtk.Label(label=_("search_redact_pattern_label"))
+        preset_lbl.add_css_class("dim-label")
+        preset_lbl.set_halign(Gtk.Align.START)
+        preset_box.append(preset_lbl)
+
+        presets = [
+            ("none", _("search_redact_mode_text")),
+            ("email", _("pii_pattern_email")),
+            ("phone", _("pii_pattern_phone")),
+            ("credit_card", _("pii_pattern_credit_card")),
+            ("ssn", _("pii_pattern_ssn")),
+            ("date", _("pii_pattern_date")),
+        ]
+        preset_strings = [p[1] for p in presets]
+        preset_dropdown = Gtk.DropDown.new_from_strings(preset_strings)
+        def _on_preset_changed(dd, ps):
+            idx = dd.get_selected()
+            key, _label = presets[idx]
+            if key == "none":
+                self._search_pii_key = None
+            else:
+                self._search_pii_key = key
+                from .search_engine import PII_PATTERNS
+                pat = PII_PATTERNS.get(key, {})
+                if pat and hasattr(self, 'search_entry') and self.search_entry:
+                    self.search_entry.set_text(pat.get("regex", ""))
+            if hasattr(self, 'search_entry') and self.search_entry:
+                self._on_search_query_changed(self.search_entry, immediate=True)
+
+        preset_dropdown.connect("notify::selected", _on_preset_changed)
+        preset_box.append(preset_dropdown)
+        pop_box.append(preset_box)
+
+        pop_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # Scope (Entire Document vs Current Page)
+        scope_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        scope_lbl = Gtk.Label(label=_("search_redact_scope_label"))
+        scope_lbl.add_css_class("dim-label")
+        scope_lbl.set_halign(Gtk.Align.START)
+        scope_box.append(scope_lbl)
+
+        curr_page_num = (self.current_page_index + 1) if getattr(self, 'current_page_index', None) is not None else 1
+        scope_dd = Gtk.DropDown.new_from_strings([
+            _("search_redact_scope_doc"),
+            _("search_redact_scope_page", curr_page_num)
+        ])
+        def _on_scope_changed(dd, ps):
+            self._search_scope_current_page = (dd.get_selected() == 1)
+            if hasattr(self, 'search_entry') and self.search_entry:
+                self._on_search_query_changed(self.search_entry, immediate=True)
+        scope_dd.connect("notify::selected", _on_scope_changed)
+        scope_box.append(scope_dd)
+        pop_box.append(scope_box)
+
+        pop_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # Overlay text
+        overlay_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        overlay_lbl = Gtk.Label(label=_("redaction_overlay_text"))
+        overlay_lbl.add_css_class("dim-label")
+        overlay_lbl.set_halign(Gtk.Align.START)
+        overlay_box.append(overlay_lbl)
+
+        self.search_redact_overlay_entry = Gtk.Entry()
+        self.search_redact_overlay_entry.set_text(getattr(self, 'redact_default_overlay', "[REDACTED]"))
+        def _on_overlay_changed(entry):
+            self.redact_default_overlay = entry.get_text()
+        self.search_redact_overlay_entry.connect("changed", _on_overlay_changed)
+        overlay_box.append(self.search_redact_overlay_entry)
+        pop_box.append(overlay_box)
+
+        popover.set_child(pop_box)
+        return popover
+
+    def _redact_current_search_match(self):
+        """Redact the currently highlighted search match and navigate to next."""
+        if not hasattr(self, 'search_engine') or not self.search_engine or not self.search_engine.matches:
+            return
+        m = self.search_engine.get_current_match()
+        if not m:
+            return
+        overlay = getattr(self, 'search_redact_overlay_entry', None)
+        overlay_text = overlay.get_text() if overlay else getattr(self, 'redact_default_overlay', "[REDACTED]")
+        fill_color = getattr(self, 'redact_default_fill', (0.0, 0.0, 0.0))
+        text_color = getattr(self, 'redact_default_text_color', (1.0, 1.0, 1.0))
+
+        self.stage_redactions_for_matches(
+            matches=[m],
+            overlay_text=overlay_text,
+            fill_color=fill_color,
+            text_color=text_color,
+        )
+        self._search_navigate_next()
+
+    def _redact_all_search_matches(self):
+        """Stage redaction marks for all current search matches at once."""
+        if not hasattr(self, 'search_engine') or not self.search_engine or not self.search_engine.matches:
+            return
+        matches = list(self.search_engine.matches)
+        overlay = getattr(self, 'search_redact_overlay_entry', None)
+        overlay_text = overlay.get_text() if overlay else getattr(self, 'redact_default_overlay', "[REDACTED]")
+        fill_color = getattr(self, 'redact_default_fill', (0.0, 0.0, 0.0))
+        text_color = getattr(self, 'redact_default_text_color', (1.0, 1.0, 1.0))
+
+        count = self.stage_redactions_for_matches(
+            matches=matches,
+            overlay_text=overlay_text,
+            fill_color=fill_color,
+            text_color=text_color,
+        )
+        if hasattr(self, 'toast_overlay') and self.toast_overlay:
+            toast = Adw.Toast(title=_("status_redactions_staged_count", count))
+            toast.set_timeout(2)
+            self.toast_overlay.add_toast(toast)
+
     def on_find_and_redact(self, initial_query: str = ""):
-        """Launch Search & Redact modal dialog."""
+        """Open docked Find & Redact bar above canvas (non-modal)."""
         if not self.doc or not self._active_session:
             return
-        from .search_redact_dialog import SearchRedactDialog
+        if hasattr(self, 'search_bar') and self.search_bar and not self.search_bar.get_search_mode():
+            self.search_bar.set_search_mode(True)
+        if hasattr(self, 'search_button') and self.search_button:
+            self.search_button.set_active(True)
+        if hasattr(self, 'search_redact_btn') and self.search_redact_btn:
+            self.search_redact_btn.set_active(True)
+        if hasattr(self, 'search_redact_box') and self.search_redact_box:
+            self.search_redact_box.set_visible(True)
+        if initial_query and hasattr(self, 'search_entry') and self.search_entry:
+            self.search_entry.set_text(initial_query)
+        if hasattr(self, 'search_entry') and self.search_entry:
+            self.search_entry.grab_focus()
+            self._on_search_query_changed(self.search_entry, immediate=True)
 
-        def _on_confirm(matches, overlay_text, fill_color, text_color):
-            self.stage_redactions_for_matches(
-                matches=matches,
-                overlay_text=overlay_text,
-                fill_color=fill_color,
-                text_color=text_color,
-            )
+    def get_selected_word_bbox(self) -> Optional[Tuple[float, float, float, float]]:
+        """Compute the sub-pixel exact bounding box of the currently selected word."""
+        if not getattr(self, 'word_selection_mode', False) or not self.selected_text:
+            return getattr(self, 'selected_word_bbox', None)
+        text_obj = self.selected_text
+        start_c = getattr(self, 'selected_word_start_char', -1)
+        end_c = getattr(self, 'selected_word_end_char', -1)
+        if start_c == -1 or end_c == -1 or start_c >= end_c:
+            return getattr(self, 'selected_word_bbox', None)
 
-        default_fill = getattr(self, 'redact_default_fill', (0.0, 0.0, 0.0))
-        default_overlay = getattr(self, 'redact_default_overlay', "[REDACTED]")
+        if getattr(text_obj, 'char_boxes', None) and len(text_obj.char_boxes) >= end_c:
+            cbs = text_obj.char_boxes[start_c:end_c]
+            if cbs:
+                x0 = min(cb['bbox'][0] for cb in cbs)
+                y0 = min(cb['bbox'][1] for cb in cbs)
+                x1 = max(cb['bbox'][2] for cb in cbs)
+                y1 = max(cb['bbox'][3] for cb in cbs)
+                return (x0, y0, x1, y1)
 
-        dialog = SearchRedactDialog(
-            parent_window=self,
-            doc=self.doc,
-            current_page_num=self.current_page_index,
-            initial_query=initial_query,
-            default_fill=default_fill,
-            default_overlay=default_overlay,
-            on_confirm_callback=_on_confirm,
-        )
-        dialog.present()
+        if text_obj.bbox:
+            tx0, ty0, tx1, ty1 = text_obj.bbox
+            total_w = max(1.0, float(tx1 - tx0))
+            from .models import _measure_text_pango
+            w_pre = _measure_text_pango(text_obj.text[:start_c], text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic)
+            w_word = _measure_text_pango(text_obj.text[start_c:end_c], text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic)
+            w_total = _measure_text_pango(text_obj.text, text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic)
+            scale = (total_w / w_total) if w_total > 0 else 1.0
+            x_start = tx0 + (w_pre * scale)
+            x_end = tx0 + ((w_pre + w_word) * scale)
+            return (x_start, ty0, x_end, ty1)
+
+        return getattr(self, 'selected_word_bbox', None)
+
+    def _toggle_word_style(self, text_obj, style_name: str):
+        """Toggle typography formatting (bold, italic, underline, strikethrough) for selected word."""
+        if not text_obj or not getattr(self, 'word_selection_mode', False):
+            return
+        start_char = getattr(self, 'selected_word_start_char', -1)
+        end_char = getattr(self, 'selected_word_end_char', -1)
+        if start_char == -1 or end_char == -1 or start_char >= end_char:
+            return
+
+        from .models import _measure_text_pango
+        from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand, EditObjectCommand
+
+        if start_char == 0 and end_char == len(text_obj.text):
+            old_props = {
+                'is_bold': text_obj.is_bold,
+                'is_italic': text_obj.is_italic,
+                'is_underline': getattr(text_obj, 'is_underline', False),
+                'is_strikethrough': getattr(text_obj, 'is_strikethrough', False),
+                'bbox': text_obj.bbox,
+            }
+            new_props = copy.deepcopy(old_props)
+            if style_name == "bold":
+                new_props['is_bold'] = not text_obj.is_bold
+            elif style_name == "italic":
+                new_props['is_italic'] = not text_obj.is_italic
+            elif style_name == "underline":
+                new_props['is_underline'] = not getattr(text_obj, 'is_underline', False)
+            elif style_name == "strikethrough":
+                new_props['is_strikethrough'] = not getattr(text_obj, 'is_strikethrough', False)
+
+            cmd = EditObjectCommand(self, text_obj, old_props, new_props)
+            cmd.execute()
+            if self.undo_manager:
+                self.undo_manager.record(cmd)
+            if hasattr(self, '_update_text_format_controls'):
+                self._update_text_format_controls(text_obj)
+            if self.doc and self.current_page_index is not None:
+                pdf_handler.invalidate_page_cache(self.doc, self.current_page_index)
+            self.pdf_view.queue_draw()
+            self._update_ui_state()
+            return
+
+        spans = text_obj.split_at_range(start_char, end_char)
+        if len(spans) > 1:
+            mid_index = 0 if start_char == 0 else 1
+            mid_span = spans[mid_index]
+            if style_name == "bold":
+                mid_span.is_bold = not getattr(text_obj, 'is_bold', False)
+            elif style_name == "italic":
+                mid_span.is_italic = not getattr(text_obj, 'is_italic', False)
+            elif style_name == "underline":
+                mid_span.is_underline = not getattr(text_obj, 'is_underline', False)
+            elif style_name == "strikethrough":
+                mid_span.is_strikethrough = not getattr(text_obj, 'is_strikethrough', False)
+
+            new_mid_w = _measure_text_pango(mid_span.text, mid_span.font_family_base, mid_span.font_size, mid_span.is_bold, mid_span.is_italic)
+            mx0, my0, mx1, my1 = mid_span.bbox
+            mid_span.bbox = (mx0, my0, mx0 + new_mid_w, my1)
+            mid_span.original_bbox = mid_span.bbox
+            dx = (mx0 + new_mid_w) - mx1
+
+            for s_idx in range(mid_index + 1, len(spans)):
+                post_span = spans[s_idx]
+                px0, py0, px1, py1 = post_span.bbox
+                post_span.bbox = (px0 + dx, py0, px1 + dx, py1)
+                post_span.original_bbox = post_span.bbox
+                post_span.x = post_span.bbox[0]
+                if post_span.char_boxes:
+                    for cb in post_span.char_boxes:
+                        cbx0, cby0, cbx1, cby1 = cb["bbox"]
+                        cb["bbox"] = (cbx0 + dx, cby0, cbx1 + dx, cby1)
+
+            target_page_num = getattr(text_obj, 'page_number', self.current_page_index)
+            commands = [DeleteObjectCommand(self, text_obj)]
+            for s in spans:
+                s.is_new = True
+                s.is_baked = True
+                s.page_number = target_page_num
+                commands.append(AddObjectCommand(self, s))
+            batch_cmd = CompositeCommand(self, commands)
+            batch_cmd.execute()
+            if self.undo_manager:
+                self.undo_manager.record(batch_cmd)
+
+            self.selected_text = mid_span
+            self.pending_format_change_obj = mid_span
+            self.before_format_change_state = copy.deepcopy(mid_span.__dict__)
+            self.selected_word_start_char = 0
+            self.selected_word_end_char = len(mid_span.text)
+            self.selected_word_bbox = mid_span.bbox
+            if hasattr(self, '_update_text_format_controls'):
+                self._update_text_format_controls(mid_span)
+            if self.doc and self.current_page_index is not None:
+                pdf_handler.invalidate_page_cache(self.doc, self.current_page_index)
+            self.pdf_view.queue_draw()
+            self._update_ui_state()
 
     def _extract_word_at_position(self, text, click_pos_in_text):
         """Extract contiguous non-whitespace word and its character indices at cursor."""
@@ -13894,68 +14250,75 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             clicked_text = self._find_text_at_pos(page_x, page_y)
             if clicked_text:
                 self.selected_text = clicked_text
-                pdf_word = pdf_handler.get_word_at_pos(self.doc, self.current_page_index, (page_x, page_y))
-                if pdf_word:
-                    self.selected_word = pdf_word['text']
-                    self.selected_word_bbox = pdf_word.get('bbox')
-                    idx = clicked_text.text.find(self.selected_word)
-                    if idx != -1:
-                        self.selected_word_start_char = idx
-                        self.selected_word_end_char = idx + len(self.selected_word)
-                        self.word_selection_mode = True
-                        self.pending_format_change_obj = clicked_text
-                        self.before_format_change_state = copy.deepcopy(clicked_text.__dict__)
-                        self.pdf_view.queue_draw()
-                        self._update_ui_state()
-                    else:
-                        unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x, page_y)
-                        rot = getattr(clicked_text, 'rotation', 0.0) % 360.0
-                        x1, y1, x2, y2 = clicked_text.bbox
-                        px, py = unrot_x, unrot_y
-                        if rot != 0.0:
-                            cx = (x1 + x2) / 2.0
-                            cy = (y1 + y2) / 2.0
-                            px, py = pdf_handler.rotate_point(unrot_x, unrot_y, cx, cy, -rot)
-                        relative_x = (px - x1) / (x2 - x1) if (x2 - x1) > 0 else 0
-                        approx_char_pos = int(relative_x * len(clicked_text.text))
-                        approx_char_pos = max(0, min(approx_char_pos, len(clicked_text.text)))
-                        
-                        word, start_pos, end_pos = self._extract_word_at_position(clicked_text.text, approx_char_pos)
-                        if word:
-                            self.selected_word = word
-                            self.selected_word_start_char = start_pos
-                            self.selected_word_end_char = end_pos
-                            r1 = start_pos / max(len(clicked_text.text), 1)
-                            r2 = end_pos / max(len(clicked_text.text), 1)
-                            self.selected_word_bbox = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
-                            self.word_selection_mode = True
-                            self.pending_format_change_obj = clicked_text
-                            self.before_format_change_state = copy.deepcopy(clicked_text.__dict__)
-                            self.pdf_view.queue_draw()
-                            self._update_ui_state()
-                else:
-                    unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x, page_y)
-                    rot = getattr(clicked_text, 'rotation', 0.0) % 360.0
-                    x1, y1, x2, y2 = clicked_text.bbox
-                    px, py = unrot_x, unrot_y
-                    if rot != 0.0:
-                        cx = (x1 + x2) / 2.0
-                        cy = (y1 + y2) / 2.0
-                        px, py = pdf_handler.rotate_point(unrot_x, unrot_y, cx, cy, -rot)
-                    relative_x = (px - x1) / (x2 - x1) if (x2 - x1) > 0 else 0
-                    approx_char_pos = int(relative_x * len(clicked_text.text))
-                    approx_char_pos = max(0, min(approx_char_pos, len(clicked_text.text)))
-                    
-                    word, start_pos, end_pos = self._extract_word_at_position(clicked_text.text, approx_char_pos)
+                unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x, page_y)
+                
+                # Stage 1: Hit-test exact character boxes
+                char_hit = clicked_text.hit_test_char(unrot_x, unrot_y, tolerance=3.0)
+                if char_hit and "index" in char_hit and 0 <= char_hit["index"] < len(clicked_text.text):
+                    char_idx = char_hit["index"]
+                    word, s_pos, e_pos = self._extract_word_at_position(clicked_text.text, char_idx)
                     if word:
                         self.selected_word = word
-                        self.selected_word_start_char = start_pos
-                        self.selected_word_end_char = end_pos
+                        self.selected_word_start_char = s_pos
+                        self.selected_word_end_char = e_pos
+                        self.selected_word_bbox = self.get_selected_word_bbox()
                         self.word_selection_mode = True
                         self.pending_format_change_obj = clicked_text
                         self.before_format_change_state = copy.deepcopy(clicked_text.__dict__)
                         self.pdf_view.queue_draw()
                         self._update_ui_state()
+                        return
+
+                # Stage 2: Fallback with PyMuPDF get_word_at_pos and closest occurrence matching
+                pdf_word = pdf_handler.get_word_at_pos(self.doc, self.current_page_index, (page_x, page_y))
+                if pdf_word and pdf_word.get('text'):
+                    w_text = pdf_word['text']
+                    best_start = -1
+                    best_dist = float('inf')
+                    search_pos = 0
+                    while search_pos < len(clicked_text.text):
+                        found_idx = clicked_text.text.find(w_text, search_pos)
+                        if found_idx == -1:
+                            break
+                        if clicked_text.char_boxes and len(clicked_text.char_boxes) >= (found_idx + len(w_text)):
+                            cbs = clicked_text.char_boxes[found_idx:found_idx + len(w_text)]
+                            cx = sum((cb["bbox"][0] + cb["bbox"][2]) / 2.0 for cb in cbs) / max(len(cbs), 1)
+                        else:
+                            from .models import _measure_text_pango
+                            pre_w = _measure_text_pango(clicked_text.text[:found_idx], clicked_text.font_family_base, clicked_text.font_size)
+                            word_w = _measure_text_pango(w_text, clicked_text.font_family_base, clicked_text.font_size)
+                            cx = (clicked_text.bbox[0] if clicked_text.bbox else clicked_text.x) + pre_w + word_w / 2.0
+                        dist = abs(unrot_x - cx)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_start = found_idx
+                        search_pos = found_idx + 1
+
+                    if best_start != -1:
+                        self.selected_word = w_text
+                        self.selected_word_start_char = best_start
+                        self.selected_word_end_char = best_start + len(w_text)
+                        self.selected_word_bbox = self.get_selected_word_bbox()
+                        self.word_selection_mode = True
+                        self.pending_format_change_obj = clicked_text
+                        self.before_format_change_state = copy.deepcopy(clicked_text.__dict__)
+                        self.pdf_view.queue_draw()
+                        self._update_ui_state()
+                        return
+
+                # Stage 3: Caret index projection fallback
+                caret_idx = clicked_text.get_caret_index_at_pos(unrot_x, unrot_y)
+                word, s_pos, e_pos = self._extract_word_at_position(clicked_text.text, caret_idx)
+                if word:
+                    self.selected_word = word
+                    self.selected_word_start_char = s_pos
+                    self.selected_word_end_char = e_pos
+                    self.selected_word_bbox = self.get_selected_word_bbox()
+                    self.word_selection_mode = True
+                    self.pending_format_change_obj = clicked_text
+                    self.before_format_change_state = copy.deepcopy(clicked_text.__dict__)
+                    self.pdf_view.queue_draw()
+                    self._update_ui_state()
 
     def _on_right_click(self, gesture, n_press, x, y):
         """Display context popover menu tailored to clicked text, shape, image, or empty area."""
@@ -14075,6 +14438,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         popover_box.set_margin_start(6); popover_box.set_margin_end(6)
         popover_box.set_margin_top(6); popover_box.set_margin_bottom(6)
         
+        is_word_mode = False
         if clicked_text:
             self.selected_text = clicked_text
             self.selected_shape = None
@@ -14088,38 +14452,130 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             )
 
             if is_word_mode:
+                popover_box.set_size_request(210, -1)
                 word_str = self.selected_word
-                start_c = self.selected_word_start_char
-                end_c = self.selected_word_end_char
-                t_len = max(len(clicked_text.text), 1)
-                r1 = start_c / t_len
-                r2 = end_c / t_len
-                x1, y1, x2, y2 = clicked_text.bbox
-                word_bbox = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
+                word_bbox = self.get_selected_word_bbox() or clicked_text.bbox
 
-                btn_copy = Gtk.Button(label=f"{_('btn_copy')} ('{word_str}')")
-                btn_copy.connect("clicked", lambda b: (
+                # Word preview header
+                preview_str = word_str if len(word_str) <= 20 else f"{word_str[:17]}…"
+                lbl_header = Gtk.Label(label=f"“{preview_str}”")
+                lbl_header.add_css_class("heading")
+                lbl_header.set_halign(Gtk.Align.CENTER)
+                lbl_header.set_ellipsize(Pango.EllipsizeMode.END)
+                lbl_header.set_max_width_chars(22)
+                popover_box.append(lbl_header)
+
+                # Clipboard actions row (Cut / Copy)
+                clip_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2, homogeneous=True)
+                clip_box.add_css_class("linked")
+
+                btn_cut_w = Gtk.Button.new_from_icon_name("edit-cut-symbolic")
+                btn_cut_w.set_tooltip_text(_("btn_cut"))
+                def on_cut_word_click(b):
+                    self.get_clipboard().set(word_str)
+                    if hasattr(self, 'context_popover') and self.context_popover:
+                        self.context_popover.popdown()
+                    self._delete_selected_word_from_text(clicked_text)
+                btn_cut_w.connect("clicked", on_cut_word_click)
+                clip_box.append(btn_cut_w)
+
+                btn_copy_w = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
+                btn_copy_w.set_tooltip_text(_("btn_copy"))
+                btn_copy_w.connect("clicked", lambda b: (
                     self.get_clipboard().set(word_str),
                     self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None
                 ))
-                popover_box.append(btn_copy)
+                clip_box.append(btn_copy_w)
+                popover_box.append(clip_box)
 
-                btn_hl = Gtk.Button(label=f"{_('menu_highlight')} ('{word_str}')")
+                # Typography row: [B] [I] [U] [S] using compact symbolic icons and tooltips
+                typo_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2, homogeneous=True)
+                typo_box.add_css_class("linked")
+
+                btn_b = Gtk.Button.new_from_icon_name("format-text-bold-symbolic")
+                btn_b.set_tooltip_text(_("bold_tip"))
+                btn_b.connect("clicked", lambda b: (
+                    self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None,
+                    self._toggle_word_style(clicked_text, "bold")
+                ))
+                typo_box.append(btn_b)
+
+                btn_i = Gtk.Button.new_from_icon_name("format-text-italic-symbolic")
+                btn_i.set_tooltip_text(_("italic_tip"))
+                btn_i.connect("clicked", lambda b: (
+                    self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None,
+                    self._toggle_word_style(clicked_text, "italic")
+                ))
+                typo_box.append(btn_i)
+
+                btn_u = Gtk.Button.new_from_icon_name("format-text-underline-symbolic")
+                btn_u.set_tooltip_text(_("underline_tip"))
+                btn_u.connect("clicked", lambda b: (
+                    self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None,
+                    self._toggle_word_style(clicked_text, "underline")
+                ))
+                typo_box.append(btn_u)
+
+                btn_s = Gtk.Button.new_from_icon_name("format-text-strikethrough-symbolic")
+                btn_s.set_tooltip_text(_("strikethrough_tip"))
+                btn_s.connect("clicked", lambda b: (
+                    self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None,
+                    self._toggle_word_style(clicked_text, "strikethrough")
+                ))
+                typo_box.append(btn_s)
+                popover_box.append(typo_box)
+
+                popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+                # Word actions
+                btn_hl = Gtk.Button(label=_("menu_highlight"))
                 btn_hl.connect("clicked", lambda b: (
                     self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None,
                     self.on_highlight_clicked(None)
                 ))
                 popover_box.append(btn_hl)
 
-                btn_redact_w = Gtk.Button(label=f"{_('menu_mark_for_redaction')} ('{word_str}')")
+                btn_link_w = Gtk.Button(label=_("menu_insert_edit_link"))
+                def on_link_word_click(b):
+                    if hasattr(self, 'context_popover') and self.context_popover:
+                        self.context_popover.popdown()
+                    start_c = getattr(self, 'selected_word_start_char', 0)
+                    end_c = getattr(self, 'selected_word_end_char', len(clicked_text.text))
+                    if start_c == 0 and end_c == len(clicked_text.text):
+                        self.show_link_popover(clicked_text, parent_widget=self.pdf_view)
+                    else:
+                        spans = clicked_text.split_at_range(start_c, end_c)
+                        if len(spans) > 1:
+                            mid_index = 0 if start_c == 0 else 1
+                            mid_span = spans[mid_index]
+                            from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand
+                            target_page_num = getattr(clicked_text, 'page_number', self.current_page_index)
+                            commands = [DeleteObjectCommand(self, clicked_text)]
+                            for s in spans:
+                                s.is_new = True
+                                s.is_baked = True
+                                s.page_number = target_page_num
+                                commands.append(AddObjectCommand(self, s))
+                            batch_cmd = CompositeCommand(self, commands)
+                            batch_cmd.execute()
+                            if self.undo_manager:
+                                self.undo_manager.record(batch_cmd)
+                            self.selected_text = mid_span
+                            self.word_selection_mode = False
+                            self.show_link_popover(mid_span, parent_widget=self.pdf_view)
+                btn_link_w.connect("clicked", on_link_word_click)
+                popover_box.append(btn_link_w)
+
+                btn_redact_w = Gtk.Button(label=_("menu_mark_for_redaction"))
                 def on_redact_word_click(b):
                     if hasattr(self, 'context_popover') and self.context_popover:
                         self.context_popover.popdown()
-                    self.mark_object_for_redaction(clicked_text, page_index=target_page, bbox=word_bbox)
+                    w_box = self.get_selected_word_bbox() or word_bbox
+                    self.mark_object_for_redaction(clicked_text, page_index=target_page, bbox=w_box)
                 btn_redact_w.connect("clicked", on_redact_word_click)
                 popover_box.append(btn_redact_w)
 
-                btn_del_w = Gtk.Button(label=f"{_('btn_delete_word')} ('{word_str}')")
+                btn_del_w = Gtk.Button(label=_("btn_delete_word"))
                 btn_del_w.add_css_class("destructive-action")
                 def on_del_word_click(b):
                     if hasattr(self, 'context_popover') and self.context_popover:
@@ -14411,7 +14867,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.context_popover.set_child(popover_box)
         self.context_popover.set_parent(self.pdf_view)
         clicked_obj = clicked_text or clicked_shape or clicked_image or clicked_measurement
-        obj_rect = self.get_object_canvas_rect(clicked_obj, page_index=target_page)
+        if is_word_mode:
+            w_bbox = self.get_selected_word_bbox()
+            obj_rect = self.get_object_canvas_rect(w_bbox, page_index=target_page, is_visual_coords=False) if w_bbox else self.get_object_canvas_rect(clicked_obj, page_index=target_page)
+        else:
+            obj_rect = self.get_object_canvas_rect(clicked_obj, page_index=target_page)
         rect, pos = self.calculate_smart_popover_placement(obj_rect, click_pos=(x, y))
         self.context_popover.set_pointing_to(rect)
         self.context_popover.set_position(pos)

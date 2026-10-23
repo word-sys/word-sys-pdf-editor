@@ -3264,6 +3264,7 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
                 to_bake.append(obj)
         for obj in sort_by_layer(to_bake):
             _apply_single_object_to_page(doc, page, obj)
+            obj.is_baked = True
         invalidate_page_cache(doc, page_num)
         return True, None
     except Exception as e:

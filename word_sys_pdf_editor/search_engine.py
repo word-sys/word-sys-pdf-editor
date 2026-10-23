@@ -98,8 +98,9 @@ class DocumentSearchEngine:
         query: Optional[str] = None,
         case_sensitive: bool = False,
         whole_word: bool = False,
+        page_indices: Optional[List[int]] = None,
     ) -> List[SearchMatch]:
-        """Search entire document across visible text and invisible OCR render mode 3 layers."""
+        """Search document across visible text and invisible OCR render mode 3 layers."""
         if query is not None or not isinstance(doc_or_query, str):
             self.doc = doc_or_query
             actual_query = query or ""
@@ -116,7 +117,8 @@ class DocumentSearchEngine:
         if not self.doc or getattr(self.doc, "is_closed", False) or not self.query or len(self.doc) == 0:
             return self.matches
 
-        for page_idx in range(len(self.doc)):
+        target_pages = page_indices if page_indices is not None else list(range(len(self.doc)))
+        for page_idx in target_pages:
             try:
                 page = self.doc[page_idx]
                 hits = page.search_for(self.query)

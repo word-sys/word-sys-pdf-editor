@@ -183,6 +183,31 @@ def decompose_font_name(font_name: str, flags: int = 0) -> Dict[str, Any]:
     }
 
 
+def _measure_text_pango(text_str: str, font_family: str, font_size: float, is_bold: bool = False, is_italic: bool = False) -> float:
+    """Measure exact rendered pixel width of a text string using Pango and Cairo."""
+    if not text_str:
+        return 0.0
+    try:
+        import cairo
+        from gi.repository import Pango, PangoCairo
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
+        cr = cairo.Context(surf)
+        layout = PangoCairo.create_layout(cr)
+        font_desc_str = f"{font_family or 'Liberation Sans'} {font_size}"
+        if is_bold:
+            font_desc_str += " Bold"
+        if is_italic:
+            font_desc_str += " Italic"
+        fd = Pango.FontDescription.from_string(font_desc_str)
+        fd.set_absolute_size(int(font_size * Pango.SCALE))
+        layout.set_font_description(fd)
+        layout.set_text(text_str, -1)
+        pw, _ = layout.get_pixel_size()
+        return max(1.0, float(pw))
+    except Exception:
+        return max(1.0, len(text_str) * font_size * 0.55)
+
+
 def extract_font_properties(font_name: str, flags: int = 0) -> Dict[str, Any]:
     """Extract and decompose font properties from a PDF font name and flags."""
     return decompose_font_name(font_name, flags)
@@ -338,6 +363,38 @@ class EditableText:
         return len(self.char_boxes)
 
     @property
+    def width(self) -> float:
+        """Return the bounding box width."""
+        if self.bbox and len(self.bbox) >= 4:
+            return max(0.0, float(self.bbox[2] - self.bbox[0]))
+        return 0.0
+
+    @width.setter
+    def width(self, val: float):
+        """Set the bounding box width."""
+        val = max(0.0, float(val))
+        if self.bbox and len(self.bbox) >= 4:
+            self.bbox = (self.bbox[0], self.bbox[1], self.bbox[0] + val, self.bbox[3])
+        else:
+            self.bbox = (self.x, self.y, self.x + val, self.y + self.font_size)
+
+    @property
+    def height(self) -> float:
+        """Return the bounding box height."""
+        if self.bbox and len(self.bbox) >= 4:
+            return max(0.0, float(self.bbox[3] - self.bbox[1]))
+        return 0.0
+
+    @height.setter
+    def height(self, val: float):
+        """Set the bounding box height."""
+        val = max(0.0, float(val))
+        if self.bbox and len(self.bbox) >= 4:
+            self.bbox = (self.bbox[0], self.bbox[1], self.bbox[2], self.bbox[1] + val)
+        else:
+            self.bbox = (self.x, self.y, self.x + len(self.text) * self.font_size * 0.6, self.y + val)
+
+    @property
     def is_link(self):
         """Return True if text has a link URL or contains a web URL."""
         return bool(self.link_url or (self.text and re.search(r'https?://', self.text)))
@@ -352,50 +409,76 @@ class EditableText:
                 return match.group(0)
         return None
 
-    def split_at_range(self, start_char, end_char):
-        """Split text into segments before, inside, and after a character selection range."""
+    def split_at_range(self, start_char: int, end_char: int) -> List['EditableText']:
+        """Split text into segments before, inside, and after a character selection range.
+        
+        Calculates sub-pixel accurate bounding boxes using exact char_boxes when available,
+        or Pango layout font metrics as fallback.
+        """
         text = self.text
-        if start_char < 0: start_char = 0
-        if end_char > len(text): end_char = len(text)
+        if start_char < 0:
+            start_char = 0
+        if end_char > len(text):
+            end_char = len(text)
         if start_char >= end_char:
             return [self]
+
         parts = []
+        has_cbs = bool(self.char_boxes and len(self.char_boxes) >= len(text))
+
+        def _make_part(p_text: str, p_cbs: List[Dict[str, Any]], fallback_x0: float, fallback_w: float) -> 'EditableText':
+            part = copy.deepcopy(self)
+            part.text = p_text
+            part.original_text = p_text
+            part.is_new = True
+            part.is_baked = True
+            part.page_number = getattr(self, 'page_number', None)
+            part.original_rotation = getattr(self, 'rotation', 0.0)
+            part.char_boxes = [dict(cb) for cb in p_cbs]
+            for idx, cb in enumerate(part.char_boxes):
+                cb["index"] = idx
+
+            y0 = self.bbox[1] if self.bbox else self.y
+            y1 = self.bbox[3] if self.bbox else (self.y + self.font_size)
+
+            if part.char_boxes:
+                bx0 = min(cb["bbox"][0] for cb in part.char_boxes)
+                by0 = min(cb["bbox"][1] for cb in part.char_boxes)
+                bx1 = max(cb["bbox"][2] for cb in part.char_boxes)
+                by1 = max(cb["bbox"][3] for cb in part.char_boxes)
+                part.bbox = (bx0, by0, bx1, by1)
+            else:
+                part.bbox = (fallback_x0, y0, fallback_x0 + fallback_w, y1)
+
+            part.original_bbox = part.bbox
+            part.x, part.y = part.bbox[0], part.bbox[1]
+            return part
+
+        orig_x0 = self.bbox[0] if self.bbox else self.x
+        total_w = self.width if self.bbox else 0.0
+        w_total = _measure_text_pango(text, self.font_family_base, self.font_size, self.is_bold, self.is_italic) if not has_cbs else 0.0
+        scale = (total_w / w_total) if (total_w > 0 and w_total > 0) else 1.0
+
+        pre_w = _measure_text_pango(text[:start_char], self.font_family_base, self.font_size, self.is_bold, self.is_italic) * scale if not has_cbs else 0.0
+        mid_w = _measure_text_pango(text[start_char:end_char], self.font_family_base, self.font_size, self.is_bold, self.is_italic) * scale if not has_cbs else 0.0
+        post_w = _measure_text_pango(text[end_char:], self.font_family_base, self.font_size, self.is_bold, self.is_italic) * scale if not has_cbs else 0.0
+
         if start_char > 0:
-            pre = copy.deepcopy(self)
-            pre.text = text[:start_char]
-            pre.original_text = text[:start_char]
-            pre.is_new = True
-            x1, y1, x2, y2 = self.bbox
-            ratio = start_char / max(len(text), 1)
-            pre.bbox = (x1, y1, x1 + (x2 - x1) * ratio, y2)
-            pre.original_bbox = pre.bbox
-            pre.original_rotation = getattr(self, 'rotation', 0.0)
-            pre.x, pre.y = pre.bbox[0], pre.bbox[1]
+            cbs = self.char_boxes[:start_char] if has_cbs else []
+            pre = _make_part(text[:start_char], cbs, orig_x0, pre_w)
             parts.append(pre)
-        mid = copy.deepcopy(self)
-        mid.text = text[start_char:end_char]
-        mid.original_text = text[start_char:end_char]
-        mid.is_new = True
-        x1, y1, x2, y2 = self.bbox
-        r1 = start_char / max(len(text), 1)
-        r2 = end_char / max(len(text), 1)
-        mid.bbox = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
-        mid.original_bbox = mid.bbox
-        mid.original_rotation = getattr(self, 'rotation', 0.0)
-        mid.x, mid.y = mid.bbox[0], mid.bbox[1]
+
+        mid_cbs = self.char_boxes[start_char:end_char] if has_cbs else []
+        mid_x0 = orig_x0 + pre_w if not has_cbs else (min(cb["bbox"][0] for cb in mid_cbs) if mid_cbs else orig_x0)
+        mid = _make_part(text[start_char:end_char], mid_cbs, mid_x0, mid_w)
         parts.append(mid)
+
         if end_char < len(text):
-            post = copy.deepcopy(self)
-            post.text = text[end_char:]
-            post.original_text = text[end_char:]
-            post.is_new = True
-            x1, y1, x2, y2 = self.bbox
-            ratio = end_char / max(len(text), 1)
-            post.bbox = (x1 + (x2 - x1) * ratio, y1, x2, y2)
-            post.original_bbox = post.bbox
-            post.original_rotation = getattr(self, 'rotation', 0.0)
-            post.x, post.y = post.bbox[0], post.bbox[1]
+            post_cbs = self.char_boxes[end_char:] if has_cbs else []
+            post_x0 = orig_x0 + pre_w + mid_w if not has_cbs else (min(cb["bbox"][0] for cb in post_cbs) if post_cbs else orig_x0 + mid_w)
+            post = _make_part(text[end_char:], post_cbs, post_x0, post_w)
             parts.append(post)
+
         return parts
 
 class EditableImage:

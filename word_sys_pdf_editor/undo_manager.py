@@ -61,7 +61,8 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
         else:
             redact_rect = fitz.Rect(x0 - 2.0, y0 - 2.0, x1 + 2.0, y1 + 2.0)
     else:
-        redact_rect = fitz.Rect(orig_bbox)
+        x0, y0, x1, y1 = orig_bbox
+        redact_rect = fitz.Rect(x0 - 0.8, y0 - 0.8, x1 + 0.8, y1 + 0.8)
 
     cx = (orig_bbox[0] + orig_bbox[2]) / 2.0
     cy = (orig_bbox[1] + orig_bbox[3]) / 2.0
@@ -504,30 +505,28 @@ class EditObjectCommand(Command):
         if self._apply_properties_to_pdf(self.new_properties, self.old_properties):
             self._update_live_object(self.new_properties)
             page_num = getattr(self.target_object, 'page_number', None)
+            doc = self._get_doc()
+            if doc is not None and page_num is not None:
+                pdf_handler.invalidate_page_cache(doc, page_num)
             if self._is_session_active():
                 if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
                     self.window._refresh_thumbnail(page_num)
                 self.window.status_label.set_text(_("change_applied"))
                 self.window.pdf_view.queue_draw()
-            elif page_num is not None:
-                doc = self._get_doc()
-                if doc:
-                    pdf_handler.invalidate_page_cache(doc, page_num)
 
     def undo(self):
         """Undo the command."""
         if self._apply_properties_to_pdf(self.old_properties, self.new_properties):
             self._update_live_object(self.old_properties)
             page_num = getattr(self.target_object, 'page_number', None)
+            doc = self._get_doc()
+            if doc is not None and page_num is not None:
+                pdf_handler.invalidate_page_cache(doc, page_num)
             if self._is_session_active():
                 if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
                     self.window._refresh_thumbnail(page_num)
                 self.window.status_label.set_text(_("reverted"))
                 self.window.pdf_view.queue_draw()
-            elif page_num is not None:
-                doc = self._get_doc()
-                if doc:
-                    pdf_handler.invalidate_page_cache(doc, page_num)
 
 class AddObjectCommand(Command):
     """Command for newly added canvas objects."""
@@ -587,13 +586,14 @@ class AddObjectCommand(Command):
             sess.document_modified = True
         self.window.document_modified = True
 
+        if doc is not None and page_num is not None:
+            pdf_handler.invalidate_page_cache(doc, page_num)
+
         if self._is_session_active():
             self._refresh_thumb()
             self.window.status_label.set_text(_("object_added"))
             self.window._update_ui_state()
             self.window.pdf_view.queue_draw()
-        elif doc is not None and page_num is not None:
-            pdf_handler.invalidate_page_cache(doc, page_num)
 
     def undo(self):
         """Undo the command."""
@@ -811,13 +811,14 @@ class DeleteObjectCommand(Command):
             sess.document_modified = True
         self.window.document_modified = True
 
+        if doc is not None and page_num is not None:
+            pdf_handler.invalidate_page_cache(doc, page_num)
+
         if self._is_session_active():
             self.window.status_label.set_text(_("object_deleted"))
             if hasattr(self.window, '_refresh_thumbnail'):
                 self.window._refresh_thumbnail(page_num)
             self.window.pdf_view.queue_draw()
-        elif doc is not None and page_num is not None:
-            pdf_handler.invalidate_page_cache(doc, page_num)
 
     def undo(self):
         """Undo the command."""
