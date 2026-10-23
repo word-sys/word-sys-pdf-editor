@@ -1807,6 +1807,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.search_whole_word_btn.connect("toggled", self._on_search_whole_word_toggled)
         search_box.append(self.search_whole_word_btn)
 
+        self.search_redact_btn = Gtk.Button.new_from_icon_name("edit-clear-symbolic")
+        self.search_redact_btn.set_tooltip_text(_("search_redact_all_tip"))
+        self.search_redact_btn.connect("clicked", lambda b: self.on_find_and_redact(initial_query=self.search_entry.get_text()))
+        search_box.append(self.search_redact_btn)
+
         search_close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
         search_close_btn.add_css_class("flat")
         search_close_btn.set_tooltip_text(_("search_close"))
@@ -2484,6 +2489,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         sep_r3 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=4, margin_end=4)
         self.redaction_toolbar_box.append(sep_r3)
+
+        self.btn_find_redact = Gtk.Button(label=_("redaction_find_and_redact"))
+        self.btn_find_redact.set_tooltip_text(_("redaction_find_and_redact_tip"))
+        self.btn_find_redact.connect("clicked", lambda b: self.on_find_and_redact())
+        self.redaction_toolbar_box.append(self.btn_find_redact)
+
+        sep_r4 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=4, margin_end=4)
+        self.redaction_toolbar_box.append(sep_r4)
 
         self.btn_sanitize_doc = Gtk.Button(label=_("menu_sanitize_document"))
         self.btn_sanitize_doc.set_tooltip_text(_("sanitize_dialog_title"))
@@ -13548,6 +13561,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.annotations_sidebar.refresh()
             if sess is self._active_session:
                 self.annotations_sidebar.sync_selection(mark)
+        self._update_redaction_controls()
         self.pdf_view.queue_draw()
 
     def _remove_redaction_mark_from_session(self, mark, session=None):
@@ -13563,6 +13577,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.document_modified = True
         if hasattr(self, 'annotations_sidebar'):
             self.annotations_sidebar.refresh()
+        self._update_redaction_controls()
         self.pdf_view.queue_draw()
 
     def _apply_redaction_mark_state(self, mark, state, session=None):
@@ -13711,6 +13726,70 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, 'status_label') and self.status_label:
                 self.status_label.set_text(_("status_redactions_applied"))
         return applied
+
+    def stage_redactions_for_matches(self, matches, overlay_text: str = "[REDACTED]", fill_color=(0.0, 0.0, 0.0), text_color=(1.0, 1.0, 1.0)) -> int:
+        """Stage visual redaction marks for search matches using CompositeCommand."""
+        if not self.doc or not self._active_session or not matches:
+            return 0
+        from .models import RedactionMark
+        from .undo_manager import AddRedactionCommand, CompositeCommand
+
+        cmds = []
+        for m in matches:
+            page_idx = getattr(m, 'page_index', getattr(m, 'page', None))
+            bbox = getattr(m, 'bbox', getattr(m, 'rect', None))
+            if page_idx is None or bbox is None:
+                continue
+            mark = RedactionMark(
+                page_number=page_idx,
+                bbox=tuple(bbox),
+                fill_color=tuple(fill_color),
+                overlay_text=overlay_text,
+                text_color=tuple(text_color),
+            )
+            cmds.append(AddRedactionCommand(self, mark))
+
+        if not cmds:
+            return 0
+
+        composite = CompositeCommand(self, cmds)
+        composite.execute()
+        if self.undo_manager:
+            self.undo_manager.record(composite)
+
+        self._update_redaction_controls()
+        self.pdf_view.queue_draw()
+        if hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(_("status_redactions_staged_count", len(cmds)))
+        return len(cmds)
+
+    def on_find_and_redact(self, initial_query: str = ""):
+        """Launch Search & Redact modal dialog."""
+        if not self.doc or not self._active_session:
+            return
+        from .search_redact_dialog import SearchRedactDialog
+
+        def _on_confirm(matches, overlay_text, fill_color, text_color):
+            self.stage_redactions_for_matches(
+                matches=matches,
+                overlay_text=overlay_text,
+                fill_color=fill_color,
+                text_color=text_color,
+            )
+
+        default_fill = getattr(self, 'redact_default_fill', (0.0, 0.0, 0.0))
+        default_overlay = getattr(self, 'redact_default_overlay', "[REDACTED]")
+
+        dialog = SearchRedactDialog(
+            parent_window=self,
+            doc=self.doc,
+            current_page_num=self.current_page_index,
+            initial_query=initial_query,
+            default_fill=default_fill,
+            default_overlay=default_overlay,
+            on_confirm_callback=_on_confirm,
+        )
+        dialog.present()
 
     def _extract_word_at_position(self, text, click_pos_in_text):
         """Extract contiguous non-whitespace word and its character indices at cursor."""

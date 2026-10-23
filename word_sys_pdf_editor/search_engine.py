@@ -7,6 +7,40 @@ from typing import Any, List, Optional, Tuple
 import pymupdf as fitz
 
 
+PII_PATTERNS = {
+    "ssn": {
+        "id": "ssn",
+        "label_key": "pii_pattern_ssn",
+        "default_label": "Social Security Number (SSN)",
+        "regex": r"\b\d{3}-\d{2}-\d{4}\b",
+    },
+    "credit_card": {
+        "id": "credit_card",
+        "label_key": "pii_pattern_credit_card",
+        "default_label": "Credit Card Number",
+        "regex": r"\b(?:\d{4}[ -]?){3}\d{4}\b",
+    },
+    "email": {
+        "id": "email",
+        "label_key": "pii_pattern_email",
+        "default_label": "Email Address",
+        "regex": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+    },
+    "phone": {
+        "id": "phone",
+        "label_key": "pii_pattern_phone",
+        "default_label": "Phone Number",
+        "regex": r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
+    },
+    "date": {
+        "id": "date",
+        "label_key": "pii_pattern_date",
+        "default_label": "Date",
+        "regex": r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})\b",
+    },
+}
+
+
 def _normalize_text_for_search(text: str) -> str:
     """Normalize text by stripping diacritics and handling special cases like Turkish dotted I."""
     text = text.replace('İ', 'I').replace('ı', 'i')
@@ -192,4 +226,87 @@ class DocumentSearchEngine:
         if not self.matches:
             return []
         return [m for m in self.matches if m.page_index == page_index]
+
+    def search_regex(
+        self,
+        doc_or_pattern: Any,
+        pattern: Optional[str] = None,
+        page_indices: Optional[List[int]] = None,
+        flags: int = re.IGNORECASE,
+    ) -> List[SearchMatch]:
+        """Search document using a regular expression pattern and return all matches with bounding boxes."""
+        if pattern is not None or not isinstance(doc_or_pattern, str):
+            self.doc = doc_or_pattern
+            actual_pattern = pattern or ""
+        else:
+            actual_pattern = doc_or_pattern
+
+        self.query = actual_pattern
+        self.matches.clear()
+        self.current_match_index = -1
+        self.last_wrapped = False
+
+        if not self.doc or getattr(self.doc, "is_closed", False) or not actual_pattern or len(self.doc) == 0:
+            return self.matches
+
+        try:
+            compiled = re.compile(actual_pattern, flags)
+        except re.error as err:
+            print(f"Warning: invalid regex '{actual_pattern}': {err}")
+            return self.matches
+
+        target_pages = page_indices if page_indices is not None else list(range(len(self.doc)))
+
+        for page_idx in target_pages:
+            if page_idx < 0 or page_idx >= len(self.doc):
+                continue
+            try:
+                page = self.doc[page_idx]
+                page_text = page.get_text("text")
+                if not page_text:
+                    continue
+
+                seen_rects = set()
+                for match in compiled.finditer(page_text):
+                    m_text = match.group(0).strip()
+                    if not m_text:
+                        continue
+                    rects = page.search_for(m_text)
+                    for r in rects:
+                        r_key = (round(r.x0, 1), round(r.y0, 1), round(r.x1, 1), round(r.y1, 1))
+                        if r_key not in seen_rects:
+                            seen_rects.add(r_key)
+                            self.matches.append(SearchMatch(
+                                page_index=page_idx,
+                                bbox=(r.x0, r.y0, r.x1, r.y1),
+                                text=m_text
+                            ))
+            except Exception as err:
+                print(f"Warning: regex search failed on page {page_idx}: {err}")
+
+        if self.matches:
+            self.current_match_index = 0
+
+        return self.matches
+
+    def search_pii(
+        self,
+        doc_or_pattern_key: Any,
+        pattern_key: Optional[str] = None,
+        page_indices: Optional[List[int]] = None,
+    ) -> List[SearchMatch]:
+        """Search document for standard PII pattern presets (ssn, credit_card, email, phone, date)."""
+        if pattern_key is not None or not isinstance(doc_or_pattern_key, str):
+            doc = doc_or_pattern_key
+            key = pattern_key or "ssn"
+        else:
+            doc = self.doc
+            key = doc_or_pattern_key
+
+        preset = PII_PATTERNS.get(key)
+        if not preset:
+            return []
+
+        return self.search_regex(doc, preset["regex"], page_indices=page_indices)
+
 
