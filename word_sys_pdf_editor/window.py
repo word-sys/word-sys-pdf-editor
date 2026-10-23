@@ -13600,31 +13600,54 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.annotations_sidebar.refresh()
         self.pdf_view.queue_draw()
 
+    def mark_object_for_redaction(self, target_object, page_index=None, bbox=None):
+        """Mark specified editable object (text, shape, image) for visual redaction."""
+        if not self.doc or not self._active_session or not target_object:
+            return None
+        target_bbox = bbox if (isinstance(bbox, (tuple, list)) and len(bbox) == 4) else getattr(target_object, 'bbox', None)
+        if not target_bbox or not isinstance(target_bbox, (tuple, list)) or len(target_bbox) != 4:
+            return None
+        p = page_index if page_index is not None else getattr(target_object, 'page_number', self.current_page_index)
+        fill_c = getattr(self, 'redact_default_fill', (0.0, 0.0, 0.0))
+        text_c = getattr(self, 'redact_default_text_color', (1.0, 1.0, 1.0))
+        overlay_t = getattr(self, 'redact_default_overlay', "[REDACTED]")
+        mark = RedactionMark(
+            page_number=p,
+            bbox=tuple(target_bbox),
+            fill_color=fill_c,
+            overlay_text=overlay_t,
+            text_color=text_c,
+        )
+        from .undo_manager import AddRedactionCommand
+        cmd = AddRedactionCommand(self, mark)
+        cmd.execute()
+        if self.undo_manager:
+            self.undo_manager.record(cmd)
+        self._open_redaction_popover(mark)
+        return mark
+
     def mark_selection_for_redaction(self):
         """Mark currently selected text or object for visual redaction."""
         if not self.doc or not self._active_session:
             return
-        # 1. Selected editable text object
+        # 1. Selected editable text, shape, or image object
         if getattr(self, 'selected_text', None) and getattr(self.selected_text, 'bbox', None):
-            t = self.selected_text
-            p = getattr(t, 'page_number', self.current_page_index)
-            fill_c = getattr(self, 'redact_default_fill', (0.0, 0.0, 0.0))
-            text_c = getattr(self, 'redact_default_text_color', (1.0, 1.0, 1.0))
-            overlay_t = getattr(self, 'redact_default_overlay', "[REDACTED]")
-            mark = RedactionMark(
-                page_number=p,
-                bbox=tuple(t.bbox),
-                fill_color=fill_c,
-                overlay_text=overlay_t,
-                text_color=text_c,
-            )
-            from .undo_manager import AddRedactionCommand
-            cmd = AddRedactionCommand(self, mark)
-            cmd.execute()
-            if self.undo_manager:
-                self.undo_manager.record(cmd)
-            self._open_redaction_popover(mark)
-            return
+            if getattr(self, 'word_selection_mode', False) and getattr(self, 'selected_word', None):
+                word_bbox = getattr(self, 'selected_word_bbox', None)
+                if not isinstance(word_bbox, (tuple, list)) or len(word_bbox) != 4:
+                    text = self.selected_text.text
+                    start_c = getattr(self, 'selected_word_start_char', 0)
+                    end_c = getattr(self, 'selected_word_end_char', len(text))
+                    r1 = start_c / max(len(text), 1)
+                    r2 = end_c / max(len(text), 1)
+                    x1, y1, x2, y2 = self.selected_text.bbox
+                    word_bbox = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
+                return self.mark_object_for_redaction(self.selected_text, bbox=word_bbox)
+            return self.mark_object_for_redaction(self.selected_text)
+        elif getattr(self, 'selected_shape', None) and getattr(self.selected_shape, 'bbox', None):
+            return self.mark_object_for_redaction(self.selected_shape)
+        elif getattr(self, 'selected_image', None) and getattr(self.selected_image, 'bbox', None):
+            return self.mark_object_for_redaction(self.selected_image)
 
         # 2. View mode text selection rectangle
         if getattr(self, 'view_sel_rect', None):
@@ -13649,7 +13672,49 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.view_sel_rect = None
                 self.view_selected_text = ""
                 self._open_redaction_popover(mark)
-                return
+                return mark
+
+    def _delete_selected_word_from_text(self, text_obj):
+        """Delete currently selected word from editable text with full undo/redo reversibility."""
+        if not text_obj or not getattr(self, 'selected_word', None):
+            return
+        word = self.selected_word
+        full_text = text_obj.text
+        start_idx = getattr(self, 'selected_word_start_char', -1)
+        end_idx = getattr(self, 'selected_word_end_char', -1)
+        if start_idx == -1 or end_idx == -1:
+            start_idx = full_text.find(word)
+            end_idx = start_idx + len(word) if start_idx != -1 else -1
+        if start_idx == -1:
+            return
+
+        before = full_text[:start_idx]
+        after = full_text[end_idx:]
+        if before.endswith(" ") and after.startswith(" "):
+            after = after[1:]
+        new_text = (before + after).strip()
+        if not new_text:
+            self._handle_delete_with_confirmation(text_obj, "delete_text_confirm")
+            return
+
+        from .undo_manager import EditObjectCommand
+        old_state = copy.deepcopy(text_obj.__dict__)
+        new_state = copy.deepcopy(text_obj.__dict__)
+        new_state['text'] = new_text
+        ratio = len(new_text) / max(len(full_text), 1)
+        orig_w = text_obj.width
+        new_w = max(10.0, orig_w * ratio)
+        x0, y0, x1, y1 = text_obj.bbox
+        new_state['bbox'] = (x0, y0, x0 + new_w, y1)
+
+        cmd = EditObjectCommand(self, text_obj, old_state, new_state)
+        cmd.execute()
+        if self.undo_manager:
+            self.undo_manager.record(cmd)
+        self.word_selection_mode = False
+        self.selected_word = None
+        self.document_modified = True
+        self.pdf_view.queue_draw()
 
     def _update_redaction_controls(self):
         """Update live count badge and sensitivity for redaction controls."""
@@ -13832,6 +13897,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 pdf_word = pdf_handler.get_word_at_pos(self.doc, self.current_page_index, (page_x, page_y))
                 if pdf_word:
                     self.selected_word = pdf_word['text']
+                    self.selected_word_bbox = pdf_word.get('bbox')
                     idx = clicked_text.text.find(self.selected_word)
                     if idx != -1:
                         self.selected_word_start_char = idx
@@ -13841,6 +13907,32 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self.before_format_change_state = copy.deepcopy(clicked_text.__dict__)
                         self.pdf_view.queue_draw()
                         self._update_ui_state()
+                    else:
+                        unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x, page_y)
+                        rot = getattr(clicked_text, 'rotation', 0.0) % 360.0
+                        x1, y1, x2, y2 = clicked_text.bbox
+                        px, py = unrot_x, unrot_y
+                        if rot != 0.0:
+                            cx = (x1 + x2) / 2.0
+                            cy = (y1 + y2) / 2.0
+                            px, py = pdf_handler.rotate_point(unrot_x, unrot_y, cx, cy, -rot)
+                        relative_x = (px - x1) / (x2 - x1) if (x2 - x1) > 0 else 0
+                        approx_char_pos = int(relative_x * len(clicked_text.text))
+                        approx_char_pos = max(0, min(approx_char_pos, len(clicked_text.text)))
+                        
+                        word, start_pos, end_pos = self._extract_word_at_position(clicked_text.text, approx_char_pos)
+                        if word:
+                            self.selected_word = word
+                            self.selected_word_start_char = start_pos
+                            self.selected_word_end_char = end_pos
+                            r1 = start_pos / max(len(clicked_text.text), 1)
+                            r2 = end_pos / max(len(clicked_text.text), 1)
+                            self.selected_word_bbox = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
+                            self.word_selection_mode = True
+                            self.pending_format_change_obj = clicked_text
+                            self.before_format_change_state = copy.deepcopy(clicked_text.__dict__)
+                            self.pdf_view.queue_draw()
+                            self._update_ui_state()
                 else:
                     unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x, page_y)
                     rot = getattr(clicked_text, 'rotation', 0.0) % 360.0
@@ -13988,112 +14080,186 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_shape = None
             self.selected_image = None
             
-            btn_copy = Gtk.Button(label=_("btn_copy"))
-            def on_copy_clicked(b):
-                if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word'):
-                    self.get_clipboard().set(self.selected_word)
-                else:
+            is_word_mode = bool(
+                getattr(self, 'word_selection_mode', False) and
+                getattr(self, 'selected_word', None) and
+                hasattr(self, 'selected_word_start_char') and
+                hasattr(self, 'selected_word_end_char')
+            )
+
+            if is_word_mode:
+                word_str = self.selected_word
+                start_c = self.selected_word_start_char
+                end_c = self.selected_word_end_char
+                t_len = max(len(clicked_text.text), 1)
+                r1 = start_c / t_len
+                r2 = end_c / t_len
+                x1, y1, x2, y2 = clicked_text.bbox
+                word_bbox = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
+
+                btn_copy = Gtk.Button(label=f"{_('btn_copy')} ('{word_str}')")
+                btn_copy.connect("clicked", lambda b: (
+                    self.get_clipboard().set(word_str),
+                    self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None
+                ))
+                popover_box.append(btn_copy)
+
+                btn_hl = Gtk.Button(label=f"{_('menu_highlight')} ('{word_str}')")
+                btn_hl.connect("clicked", lambda b: (
+                    self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None,
+                    self.on_highlight_clicked(None)
+                ))
+                popover_box.append(btn_hl)
+
+                btn_redact_w = Gtk.Button(label=f"{_('menu_mark_for_redaction')} ('{word_str}')")
+                def on_redact_word_click(b):
+                    if hasattr(self, 'context_popover') and self.context_popover:
+                        self.context_popover.popdown()
+                    self.mark_object_for_redaction(clicked_text, page_index=target_page, bbox=word_bbox)
+                btn_redact_w.connect("clicked", on_redact_word_click)
+                popover_box.append(btn_redact_w)
+
+                btn_del_w = Gtk.Button(label=f"{_('btn_delete_word')} ('{word_str}')")
+                btn_del_w.add_css_class("destructive-action")
+                def on_del_word_click(b):
+                    if hasattr(self, 'context_popover') and self.context_popover:
+                        self.context_popover.popdown()
+                    self._delete_selected_word_from_text(clicked_text)
+                btn_del_w.connect("clicked", on_del_word_click)
+                popover_box.append(btn_del_w)
+
+                popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+                btn_edit = Gtk.Button(label=_("menu_edit_text"))
+                btn_edit.connect("clicked", lambda b: self._handle_context_action("edit_text", clicked_text, x, y))
+                popover_box.append(btn_edit)
+
+                btn_redact_p = Gtk.Button(label=_("menu_mark_paragraph_for_redaction"))
+                btn_redact_p.connect("clicked", lambda b: (
+                    self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None,
+                    self.mark_object_for_redaction(clicked_text, page_index=target_page, bbox=clicked_text.bbox)
+                ))
+                popover_box.append(btn_redact_p)
+
+                btn_del_p = Gtk.Button(label=_("btn_delete_paragraph"))
+                btn_del_p.add_css_class("destructive-action")
+                btn_del_p.connect("clicked", lambda b: (
+                    self.context_popover.popdown() if hasattr(self, 'context_popover') and self.context_popover else None,
+                    self._handle_delete_with_confirmation(clicked_text, "delete_text_confirm")
+                ))
+                popover_box.append(btn_del_p)
+            else:
+                btn_copy = Gtk.Button(label=_("btn_copy"))
+                def on_copy_clicked(b):
                     self.get_clipboard().set(clicked_text.text)
-                if hasattr(self, 'context_popover') and self.context_popover:
-                    self.context_popover.popdown()
-            btn_copy.connect("clicked", on_copy_clicked)
-            popover_box.append(btn_copy)
-            
-            btn_paste = Gtk.Button(label=_("btn_paste"))
-            btn_paste.set_sensitive(False)
-            popover_box.append(btn_paste)
-            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-            
-            btn_bold = Gtk.Button(label=_("bold_tip"))
-            btn_italic = Gtk.Button(label=_("italic_tip"))
-            btn_underline = Gtk.Button(label=_("underline_tip"))
-            btn_strikethrough = Gtk.Button(label=_("strikethrough_tip"))
-            def on_bold_clicked(b):
-                self._toggle_text_bold(clicked_text)
-            def on_italic_clicked(b):
-                self._toggle_text_italic(clicked_text)
-            def on_underline_clicked(b):
-                self._toggle_text_underline(clicked_text)
-            def on_strikethrough_clicked(b):
-                self._toggle_text_strikethrough(clicked_text)
-            btn_bold.connect("clicked", on_bold_clicked)
-            btn_italic.connect("clicked", on_italic_clicked)
-            btn_underline.connect("clicked", on_underline_clicked)
-            btn_strikethrough.connect("clicked", on_strikethrough_clicked)
-            popover_box.append(btn_bold)
-            popover_box.append(btn_italic)
-            popover_box.append(btn_underline)
-            popover_box.append(btn_strikethrough)
-            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+                    if hasattr(self, 'context_popover') and self.context_popover:
+                        self.context_popover.popdown()
+                btn_copy.connect("clicked", on_copy_clicked)
+                popover_box.append(btn_copy)
+                
+                btn_paste = Gtk.Button(label=_("btn_paste"))
+                btn_paste.set_sensitive(False)
+                popover_box.append(btn_paste)
+                popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+                
+                btn_bold = Gtk.Button(label=_("bold_tip"))
+                btn_italic = Gtk.Button(label=_("italic_tip"))
+                btn_underline = Gtk.Button(label=_("underline_tip"))
+                btn_strikethrough = Gtk.Button(label=_("strikethrough_tip"))
+                def on_bold_clicked(b):
+                    self._toggle_text_bold(clicked_text)
+                def on_italic_clicked(b):
+                    self._toggle_text_italic(clicked_text)
+                def on_underline_clicked(b):
+                    self._toggle_text_underline(clicked_text)
+                def on_strikethrough_clicked(b):
+                    self._toggle_text_strikethrough(clicked_text)
+                btn_bold.connect("clicked", on_bold_clicked)
+                btn_italic.connect("clicked", on_italic_clicked)
+                btn_underline.connect("clicked", on_underline_clicked)
+                btn_strikethrough.connect("clicked", on_strikethrough_clicked)
+                popover_box.append(btn_bold)
+                popover_box.append(btn_italic)
+                popover_box.append(btn_underline)
+                popover_box.append(btn_strikethrough)
+                popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-            align_popover_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-            align_popover_box.add_css_class("linked")
-            btn_al_l = Gtk.Button(icon_name="format-justify-left-symbolic")
-            btn_al_l.set_tooltip_text(_("align_left_tip"))
-            btn_al_l.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "left"))
-            align_popover_box.append(btn_al_l)
+                align_popover_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+                align_popover_box.add_css_class("linked")
+                btn_al_l = Gtk.Button(icon_name="format-justify-left-symbolic")
+                btn_al_l.set_tooltip_text(_("align_left_tip"))
+                btn_al_l.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "left"))
+                align_popover_box.append(btn_al_l)
 
-            btn_al_c = Gtk.Button(icon_name="format-justify-center-symbolic")
-            btn_al_c.set_tooltip_text(_("align_center_tip"))
-            btn_al_c.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "center"))
-            align_popover_box.append(btn_al_c)
+                btn_al_c = Gtk.Button(icon_name="format-justify-center-symbolic")
+                btn_al_c.set_tooltip_text(_("align_center_tip"))
+                btn_al_c.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "center"))
+                align_popover_box.append(btn_al_c)
 
-            btn_al_r = Gtk.Button(icon_name="format-justify-right-symbolic")
-            btn_al_r.set_tooltip_text(_("align_right_tip"))
-            btn_al_r.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "right"))
-            align_popover_box.append(btn_al_r)
+                btn_al_r = Gtk.Button(icon_name="format-justify-right-symbolic")
+                btn_al_r.set_tooltip_text(_("align_right_tip"))
+                btn_al_r.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "right"))
+                align_popover_box.append(btn_al_r)
 
-            btn_al_j = Gtk.Button(icon_name="format-justify-fill-symbolic")
-            btn_al_j.set_tooltip_text(_("align_justify_tip"))
-            btn_al_j.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "justify"))
-            align_popover_box.append(btn_al_j)
-            popover_box.append(align_popover_box)
-            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-            
-            btn_hl = Gtk.Button(label=_("menu_highlight"))
-            btn_hl.connect("clicked", lambda b: self._handle_context_action("highlight_edit", clicked_text, x, y))
-            popover_box.append(btn_hl)
-            
-            btn_rm_hl = Gtk.Button(label=_("menu_remove_highlight"))
-            btn_rm_hl.connect("clicked", lambda b: self._handle_context_action("remove_highlight", clicked_text, x, y))
-            popover_box.append(btn_rm_hl)
-            
-            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-            btn_edit = Gtk.Button(label=_("menu_edit_text"))
-            btn_edit.connect("clicked", lambda b: self._handle_context_action("edit_text", clicked_text, x, y))
-            popover_box.append(btn_edit)
+                btn_al_j = Gtk.Button(icon_name="format-justify-fill-symbolic")
+                btn_al_j.set_tooltip_text(_("align_justify_tip"))
+                btn_al_j.connect("clicked", lambda b: self._set_text_alignment(clicked_text, "justify"))
+                align_popover_box.append(btn_al_j)
+                popover_box.append(align_popover_box)
+                popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+                
+                btn_hl = Gtk.Button(label=_("menu_highlight"))
+                btn_hl.connect("clicked", lambda b: self._handle_context_action("highlight_edit", clicked_text, x, y))
+                popover_box.append(btn_hl)
+                
+                btn_rm_hl = Gtk.Button(label=_("menu_remove_highlight"))
+                btn_rm_hl.connect("clicked", lambda b: self._handle_context_action("remove_highlight", clicked_text, x, y))
+                popover_box.append(btn_rm_hl)
+                
+                popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+                btn_edit = Gtk.Button(label=_("menu_edit_text"))
+                btn_edit.connect("clicked", lambda b: self._handle_context_action("edit_text", clicked_text, x, y))
+                popover_box.append(btn_edit)
 
-            btn_link = Gtk.Button(label=_("menu_insert_edit_link"))
-            def on_link_ctx(b):
-                if hasattr(self, 'context_popover') and self.context_popover:
-                    self.context_popover.popdown()
-                self.show_link_popover(clicked_text, parent_widget=self.pdf_view)
-            btn_link.connect("clicked", on_link_ctx)
-            popover_box.append(btn_link)
+                btn_link = Gtk.Button(label=_("menu_insert_edit_link"))
+                def on_link_ctx(b):
+                    if hasattr(self, 'context_popover') and self.context_popover:
+                        self.context_popover.popdown()
+                    self.show_link_popover(clicked_text, parent_widget=self.pdf_view)
+                btn_link.connect("clicked", on_link_ctx)
+                popover_box.append(btn_link)
 
-            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-            layer_box_t = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            btn_front_t = Gtk.Button(label=_("action_bring_to_front"))
-            btn_front_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("front")))
-            layer_box_t.append(btn_front_t)
-            btn_fwd_t = Gtk.Button(label=_("action_bring_forward"))
-            btn_fwd_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("forward")))
-            layer_box_t.append(btn_fwd_t)
-            btn_back_t = Gtk.Button(label=_("action_send_backward"))
-            btn_back_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("backward")))
-            layer_box_t.append(btn_back_t)
-            btn_bottom_t = Gtk.Button(label=_("action_send_to_back"))
-            btn_bottom_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("back")))
-            layer_box_t.append(btn_bottom_t)
-            popover_box.append(layer_box_t)
-            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-            
-            btn_del = Gtk.Button(label=_("delete_confirm"))
-            btn_del.add_css_class("destructive-action")
-            def on_delete_text(b):
-                self._handle_delete_with_confirmation(clicked_text, "delete_text_confirm")
-            btn_del.connect("clicked", on_delete_text)
-            popover_box.append(btn_del)
+                popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+                layer_box_t = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                btn_front_t = Gtk.Button(label=_("action_bring_to_front"))
+                btn_front_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("front")))
+                layer_box_t.append(btn_front_t)
+                btn_fwd_t = Gtk.Button(label=_("action_bring_forward"))
+                btn_fwd_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("forward")))
+                layer_box_t.append(btn_fwd_t)
+                btn_back_t = Gtk.Button(label=_("action_send_backward"))
+                btn_back_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("backward")))
+                layer_box_t.append(btn_back_t)
+                btn_bottom_t = Gtk.Button(label=_("action_send_to_back"))
+                btn_bottom_t.connect("clicked", lambda b: (self.context_popover.popdown(), self.reorder_selected_object("back")))
+                layer_box_t.append(btn_bottom_t)
+                popover_box.append(layer_box_t)
+                popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+                btn_redact_t = Gtk.Button(label=_("menu_mark_for_redaction"))
+                def on_redact_text(b):
+                    if hasattr(self, 'context_popover') and self.context_popover:
+                        self.context_popover.popdown()
+                    self.mark_object_for_redaction(clicked_text, page_index=target_page)
+                btn_redact_t.connect("clicked", on_redact_text)
+                popover_box.append(btn_redact_t)
+                
+                btn_del = Gtk.Button(label=_("delete_confirm"))
+                btn_del.add_css_class("destructive-action")
+                def on_delete_text(b):
+                    self._handle_delete_with_confirmation(clicked_text, "delete_text_confirm")
+                btn_del.connect("clicked", on_delete_text)
+                popover_box.append(btn_del)
             
         elif clicked_shape:
             self.selected_shape = clicked_shape
@@ -14115,6 +14281,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             layer_box_s.append(btn_bottom_s)
             popover_box.append(layer_box_s)
             popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+            btn_redact_s = Gtk.Button(label=_("menu_mark_for_redaction"))
+            def on_redact_shape(b):
+                if hasattr(self, 'context_popover') and self.context_popover:
+                    self.context_popover.popdown()
+                self.mark_object_for_redaction(clicked_shape, page_index=target_page)
+            btn_redact_s.connect("clicked", on_redact_shape)
+            popover_box.append(btn_redact_s)
             
             btn_del = Gtk.Button(label=_("menu_delete_shape"))
             btn_del.add_css_class("destructive-action")
@@ -14162,6 +14336,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             layer_box_i.append(btn_bottom_i)
             popover_box.append(layer_box_i)
             popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+            btn_redact_i = Gtk.Button(label=_("menu_mark_for_redaction"))
+            def on_redact_image(b):
+                if hasattr(self, 'context_popover') and self.context_popover:
+                    self.context_popover.popdown()
+                self.mark_object_for_redaction(clicked_image, page_index=target_page)
+            btn_redact_i.connect("clicked", on_redact_image)
+            popover_box.append(btn_redact_i)
 
             btn_del = Gtk.Button(label=_("menu_delete_image"))
             btn_del.add_css_class("destructive-action")

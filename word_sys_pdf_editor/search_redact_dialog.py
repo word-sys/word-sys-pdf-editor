@@ -42,9 +42,10 @@ class SearchRedactDialog(Adw.Window):
 
         self.set_transient_for(parent_window)
         self.set_modal(True)
-        self.set_title(_safe_markup(_("search_redact_dialog_title")))
+        self.set_title(_("search_redact_dialog_title"))
         self.set_default_size(520, 620)
-        self.set_resizable(False)
+        self.set_resizable(True)
+        self.connect("close-request", self._on_close_request)
 
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_content(main_box)
@@ -52,7 +53,7 @@ class SearchRedactDialog(Adw.Window):
         # Header Bar
         header = Adw.HeaderBar()
         self.cancel_btn = Gtk.Button(label=_("btn_cancel"))
-        self.cancel_btn.connect("clicked", lambda b: self.destroy())
+        self.cancel_btn.connect("clicked", lambda b: (self._clear_canvas_preview(), self.destroy()))
         header.pack_start(self.cancel_btn)
 
         self.confirm_btn = Gtk.Button(label=_("search_redact_btn_stage"))
@@ -114,7 +115,7 @@ class SearchRedactDialog(Adw.Window):
         if initial_query:
             self.query_entry.set_text(initial_query)
         self.query_entry.connect("changed", lambda e: self._update_matches())
-        self.query_entry.connect("activate", lambda e: self._on_preview_clicked(None))
+        self.query_entry.connect("activate", lambda e: self._on_next_match_clicked(None))
         self.query_row = Adw.ActionRow(title=_safe_markup(_("search_placeholder")))
         self.query_row.add_suffix(self.query_entry)
         self.query_row.set_activatable_widget(self.query_entry)
@@ -220,15 +221,53 @@ class SearchRedactDialog(Adw.Window):
 
         self.results_row = Adw.ActionRow()
         self.results_row.set_title(_safe_markup(_("search_redact_no_matches")))
+
+        nav_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        nav_box.set_valign(Gtk.Align.CENTER)
+
+        self.prev_match_btn = Gtk.Button.new_from_icon_name("go-up-symbolic")
+        self.prev_match_btn.set_tooltip_text(f"{_('search_prev')} (Shift+F3)")
+        self.prev_match_btn.set_sensitive(False)
+        self.prev_match_btn.connect("clicked", self._on_prev_match_clicked)
+        nav_box.append(self.prev_match_btn)
+
+        self.next_match_btn = Gtk.Button.new_from_icon_name("go-down-symbolic")
+        self.next_match_btn.set_tooltip_text(f"{_('search_next')} (F3 / Enter)")
+        self.next_match_btn.set_sensitive(False)
+        self.next_match_btn.connect("clicked", self._on_next_match_clicked)
+        nav_box.append(self.next_match_btn)
+
         self.preview_btn = Gtk.Button(label=_("search_redact_btn_preview"))
         self.preview_btn.set_valign(Gtk.Align.CENTER)
         self.preview_btn.add_css_class("flat")
         self.preview_btn.connect("clicked", self._on_preview_clicked)
-        self.results_row.add_suffix(self.preview_btn)
+        nav_box.append(self.preview_btn)
+
+        self.results_row.add_suffix(nav_box)
         results_group.add(self.results_row)
 
         if initial_query:
             self._update_matches()
+
+    def _on_close_request(self, window):
+        self._clear_canvas_preview()
+        return False
+
+    def _clear_canvas_preview(self):
+        if self.parent_window and hasattr(self.parent_window, 'search_engine') and self.parent_window.search_engine:
+            self.parent_window.search_engine.clear()
+            if hasattr(self.parent_window, 'pdf_view') and self.parent_window.pdf_view:
+                self.parent_window.pdf_view.queue_draw()
+
+    def _on_prev_match_clicked(self, _button):
+        if self.parent_window and hasattr(self.parent_window, '_search_navigate_prev'):
+            self.parent_window._search_navigate_prev()
+            self._update_results_ui()
+
+    def _on_next_match_clicked(self, _button):
+        if self.parent_window and hasattr(self.parent_window, '_search_navigate_next'):
+            self.parent_window._search_navigate_next()
+            self._update_results_ui()
 
     def _on_mode_changed(self, dropdown, param):
         is_pattern = (dropdown.get_selected() == 1)
@@ -244,6 +283,7 @@ class SearchRedactDialog(Adw.Window):
     def _update_matches(self):
         if not self.doc or len(self.doc) == 0:
             self.current_matches = []
+            self._clear_canvas_preview()
             self._update_results_ui()
             return
 
@@ -277,16 +317,42 @@ class SearchRedactDialog(Adw.Window):
 
         self._update_results_ui()
 
+        # Synchronize live search preview highlights on parent canvas
+        if self.parent_window and hasattr(self.parent_window, 'search_engine') and self.parent_window.search_engine:
+            self.parent_window.search_engine.doc = self.doc
+            self.parent_window.search_engine.matches = list(self.current_matches)
+            if self.current_matches:
+                self.parent_window.search_engine.find_nearest_match(self.current_page_num)
+                if hasattr(self.parent_window, '_jump_to_current_search_match'):
+                    self.parent_window._jump_to_current_search_match()
+            else:
+                self.parent_window.search_engine.clear()
+            if hasattr(self.parent_window, 'pdf_view') and self.parent_window.pdf_view:
+                self.parent_window.pdf_view.queue_draw()
+
     def _update_results_ui(self):
         count = len(self.current_matches)
         if count > 0:
+            curr_idx = -1
+            if self.parent_window and hasattr(self.parent_window, 'search_engine') and self.parent_window.search_engine:
+                curr_idx = self.parent_window.search_engine.current_index
             pages = len(set(m.page_index for m in self.current_matches))
             msg = _("search_redact_matches_found", count, pages)
+            if curr_idx >= 0:
+                msg += f" • [{curr_idx + 1}/{count}]"
             self.results_row.set_title(_safe_markup(msg))
             self.confirm_btn.set_sensitive(True)
+            if hasattr(self, 'prev_match_btn'):
+                self.prev_match_btn.set_sensitive(count > 1)
+            if hasattr(self, 'next_match_btn'):
+                self.next_match_btn.set_sensitive(count > 1)
         else:
             self.results_row.set_title(_safe_markup(_("search_redact_no_matches")))
             self.confirm_btn.set_sensitive(False)
+            if hasattr(self, 'prev_match_btn'):
+                self.prev_match_btn.set_sensitive(False)
+            if hasattr(self, 'next_match_btn'):
+                self.next_match_btn.set_sensitive(False)
 
     def _on_confirm_clicked(self, _button):
         if not self.current_matches:
@@ -295,6 +361,7 @@ class SearchRedactDialog(Adw.Window):
         matches = list(self.current_matches)
         fill_col = self.selected_fill
         text_col = self.selected_text_color
+        self._clear_canvas_preview()
 
         if self.on_confirm_callback:
             self.on_confirm_callback(matches, overlay_text, fill_col, text_col)
