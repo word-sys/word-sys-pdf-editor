@@ -24,8 +24,10 @@ def run_main_loop(iterations=20, delay=0.02):
     """Pump the GLib main context to process idle callbacks."""
     ctx = GLib.MainContext.default()
     for _ in range(iterations):
-        while ctx.pending():
+        count = 0
+        while ctx.pending() and count < 100:
             ctx.iteration(False)
+            count += 1
         time.sleep(delay)
 
 

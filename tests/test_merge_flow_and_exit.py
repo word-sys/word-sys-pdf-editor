@@ -85,14 +85,19 @@ class TestMergeFlowAndExit(unittest.TestCase):
                 self.assertTrue(dialog.panel_b.scroll.get_visible())
                 self.assertEqual(len(dialog.panel_b.page_cards), 1)
 
+                if getattr(win, '_merge_dialog', None):
+                    win._merge_dialog.cleanup()
+                    win._merge_dialog.close()
+                    win._merge_dialog = None
                 win.close()
+                application.quit()
 
             app.connect("activate", on_activate)
             start_time = time.time()
-            GLib.timeout_add(5000, lambda: app.quit())
+            GLib.timeout_add(3000, lambda: app.quit())
             app.run([])
             elapsed = time.time() - start_time
-            self.assertLess(elapsed, 4.5)
+            self.assertLess(elapsed, 2.5)
 
 
 if __name__ == "__main__":

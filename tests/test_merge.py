@@ -26,8 +26,10 @@ from word_sys_pdf_editor.window import PdfEditorWindow
 def drain_events(cycles=10):
     ctx = GLib.MainContext.default()
     for _ in range(cycles):
-        while ctx.pending():
+        count = 0
+        while ctx.pending() and count < 100:
             ctx.iteration(False)
+            count += 1
 
 
 class TestMergeLocalization(unittest.TestCase):

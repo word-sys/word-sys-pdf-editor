@@ -601,6 +601,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.ocr_banner_progress = None
         self.ocr_banner_cancel_btn = None
         self._ocr_cancel_requested = False
+        self._font_combo_populated = False
 
         self._build_ui()
         self._setup_controllers()
@@ -613,9 +614,33 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _on_font_scan_complete(self):
         """Callback when background system font scan finishes, populating font combo."""
+        if getattr(self, '_is_closing', None) is True or getattr(self, '_is_closed', None) is True:
+            return
         self.font_scan_in_progress = False
         utils.get_default_unicode_font_path()
-        self._populate_font_combo()
+
+        if getattr(self, 'selected_text', None) is not None or getattr(self, '_font_combo_populated', False) is True:
+            self._populate_font_combo()
+        else:
+            default_font = "Liberation Sans"
+            if utils.FONT_FAMILY_LIST_SORTED and default_font not in utils.FONT_FAMILY_LIST_SORTED:
+                default_font = utils.FONT_FAMILY_LIST_SORTED[0]
+            signals_blocked = False
+            try:
+                self.font_combo.handler_block_by_func(self.on_text_format_changed)
+                signals_blocked = True
+            except Exception:
+                pass
+            try:
+                self.font_store.clear()
+                self.font_store.append([default_font, default_font])
+                self.font_combo.set_active(0)
+            finally:
+                if signals_blocked:
+                    try:
+                        self.font_combo.handler_unblock_by_func(self.on_text_format_changed)
+                    except Exception:
+                        pass
 
         if not utils.UNICODE_FONT_PATH:
              show_error_dialog(self, _("font_warning_msg"), _("font_warning_title"))
@@ -628,26 +653,49 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.status_label.set_text(_("new_doc_loaded"))
         self._update_ui_state()
 
+    def _ensure_font_combo_populated(self):
+        """Lazily populate font combo dropdown with discovered system fonts on first interaction."""
+        if getattr(self, '_font_combo_populated', False) is True or getattr(self, '_is_closing', None) is True or getattr(self, '_is_closed', None) is True:
+            return
+        self._populate_font_combo()
+
     def _populate_font_combo(self):
         """Populate font selector dropdown with discovered system fonts."""
-        self.font_store.clear() 
-        if utils.FONT_FAMILY_LIST_SORTED:
-            for family_name in utils.FONT_FAMILY_LIST_SORTED:
-                self.font_store.append([family_name, family_name])
-            if len(self.font_store) > 0:
-                try:
-                    self.font_combo.handler_block_by_func(self.on_text_format_changed)
-                    self.font_combo.set_active(0)
-                    self.font_combo.handler_unblock_by_func(self.on_text_format_changed)
-                except Exception:
+        if getattr(self, '_is_closing', None) is True or getattr(self, '_is_closed', None) is True:
+            return
+        self._font_combo_populated = True
+
+        signals_blocked = False
+        try:
+            self.font_combo.handler_block_by_func(self.on_text_format_changed)
+            signals_blocked = True
+        except Exception:
+            pass
+
+        try:
+            self.font_store.clear() 
+            if utils.FONT_FAMILY_LIST_SORTED:
+                for family_name in utils.FONT_FAMILY_LIST_SORTED:
+                    self.font_store.append([family_name, family_name])
+                if len(self.font_store) > 0:
+                    default_font = "Liberation Sans"
+                    if default_font in utils.FONT_FAMILY_LIST_SORTED:
+                        idx = utils.FONT_FAMILY_LIST_SORTED.index(default_font)
+                    else:
+                        idx = 0
+                    self.font_combo.set_active(idx)
+                else:
+                    self.font_store.append([_("font_none_error"), ""])
                     self.font_combo.set_active(0)
             else:
-                 self.font_store.append([_("font_none_error"), ""])
-                 self.font_combo.set_active(0)
-        else:
-            self.font_store.append([_("font_none"), ""])
-            self.font_combo.set_active(0)
-            print("WARNING: utils.FONT_FAMILY_LIST_SORTED is empty.")
+                self.font_store.append([_("font_none"), ""])
+                self.font_combo.set_active(0)
+        finally:
+            if signals_blocked:
+                try:
+                    self.font_combo.handler_unblock_by_func(self.on_text_format_changed)
+                except Exception:
+                    pass
         
         self._update_ui_state()
 
@@ -2157,6 +2205,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.font_combo.set_active(0)
         self.font_combo.set_tooltip_text(_("font_tip"))
         self.font_combo.connect("changed", self.on_text_format_changed)
+        self.font_combo.connect("notify::popup-shown", lambda *a: self._ensure_font_combo_populated())
         self.font_combo.set_sensitive(False)
         self.text_format_box.append(self.font_combo)
 
@@ -8173,6 +8222,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     b.handler_unblock_by_func(self.on_text_format_changed)
             return
 
+        self._ensure_font_combo_populated()
         signals_blocked = False
         align_btns = [getattr(self, 'align_left_button', None), getattr(self, 'align_center_button', None),
                       getattr(self, 'align_right_button', None), getattr(self, 'align_justify_button', None)]

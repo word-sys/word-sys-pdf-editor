@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import subprocess
 import threading
+import json
+import shutil
 from gi.repository import GLib
 from .i18n import _, get_setting, set_setting
 
@@ -95,30 +97,171 @@ def parse_font_name(filename):
 
     return display_family_name, detected_style_key
 
-def scan_system_fonts_async(callback_on_done=None):
-    """Scan system font directories in a background thread."""
-    def _scan():
-        global SYSTEM_FONTS, FONT_FAMILY_LIST_SORTED, FONT_SCAN_COMPLETED
-        print("Scanning system and embedded fonts...")
-        font_dirs = _get_font_dirs()
-        temp_fonts_data = {}
+def get_font_cache_path():
+    """Retrieve the persistent font cache file path."""
+    cache_base = os.environ.get("XDG_CACHE_HOME")
+    if cache_base:
+        base = Path(cache_base)
+    else:
+        base = Path.home() / ".cache"
+    cache_dir = base / "word-sys-pdf-editor"
+    return cache_dir / "font_cache.json"
 
+def load_persistent_font_cache(cache_path=None):
+    """Load system font mappings from persistent disk cache if directory mtimes are unchanged.
+    Returns True if successfully loaded from cache, False otherwise.
+    """
+    global SYSTEM_FONTS, FONT_FAMILY_LIST_SORTED, FONT_SCAN_COMPLETED
+    if cache_path is None:
+        cache_path = get_font_cache_path()
+
+    if not cache_path.is_file():
+        return False
+
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            cache_data = json.load(f)
+
+        if not isinstance(cache_data, dict) or cache_data.get("version") != 1:
+            return False
+
+        cached_mtimes = cache_data.get("dir_mtimes", {})
+        font_dirs = _get_font_dirs()
+        current_existing_dirs = {str(d): d for d in font_dirs if d.is_dir()}
+
+        # Verify that all tracked directories exist and their mtimes match
+        if set(cached_mtimes.keys()) != set(current_existing_dirs.keys()):
+            return False
+
+        for d_str, d_path in current_existing_dirs.items():
+            current_mtime = d_path.stat().st_mtime
+            if abs(current_mtime - float(cached_mtimes.get(d_str, 0.0))) > 0.001:
+                return False
+
+        SYSTEM_FONTS = cache_data.get("system_fonts", {})
+        FONT_FAMILY_LIST_SORTED = cache_data.get("family_list", [])
+        if not FONT_FAMILY_LIST_SORTED and SYSTEM_FONTS:
+            FONT_FAMILY_LIST_SORTED = sorted(SYSTEM_FONTS.keys())
+
+        if FONT_FAMILY_LIST_SORTED:
+            FONT_SCAN_COMPLETED.set()
+            return True
+        return False
+
+    except Exception as e:
+        print(f"DEBUG: Could not load persistent font cache ({cache_path}): {e}")
+        return False
+
+def save_persistent_font_cache(fonts_data, family_list, font_dirs, cache_path=None):
+    """Persist font mappings and directory mtimes atomically to disk."""
+    if cache_path is None:
+        cache_path = get_font_cache_path()
+
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        dir_mtimes = {}
+        for d in font_dirs:
+            if d.is_dir():
+                try:
+                    dir_mtimes[str(d)] = d.stat().st_mtime
+                except OSError:
+                    pass
+
+        payload = {
+            "version": 1,
+            "dir_mtimes": dir_mtimes,
+            "system_fonts": fonts_data,
+            "family_list": family_list
+        }
+
+        temp_path = cache_path.with_suffix(".tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.replace(temp_path, cache_path)
+        return True
+    except Exception as e:
+        print(f"DEBUG: Failed to save persistent font cache ({cache_path}): {e}")
+        return False
+
+def _scan_system_fonts_direct(font_dirs):
+    """Collect font file paths and parse family/style mappings using fast fontconfig query or fallback."""
+    temp_fonts_data = {}
+    found_files = []
+
+    # Fast fontconfig listing path on Linux if fc-list is available
+    if platform.system() == "Linux":
+        fc_list_path = shutil.which("fc-list")
+        if fc_list_path:
+            try:
+                res = subprocess.run(
+                    [fc_list_path, "-f", "%{file}\n"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=5.0,
+                    check=False
+                )
+                if res.returncode == 0 and res.stdout:
+                    for line in res.stdout.splitlines():
+                        fpath = line.strip()
+                        if fpath.lower().endswith((".ttf", ".otf")):
+                            found_files.append(Path(fpath))
+            except Exception as fc_err:
+                print(f"DEBUG: fc-list scan failed, falling back to disk walk: {fc_err}")
+
+    # Fallback to filesystem walk if fc-list produced no files or on non-Linux
+    if not found_files:
         for directory in font_dirs:
             try:
                 for item in list(directory.rglob('*.ttf')) + list(directory.rglob('*.otf')):
                     if item.is_file():
-                        family_name, style_key = parse_font_name(item)
-                        if family_name and style_key:
-                            if family_name not in temp_fonts_data:
-                                temp_fonts_data[family_name] = {}
-                            if style_key not in temp_fonts_data[family_name]:
-                                temp_fonts_data[family_name][style_key] = str(item)
+                        found_files.append(item)
             except Exception as e:
                 print(_("warn_scanning_dir", directory, e))
+
+    # Also include any embedded fonts directory if present
+    embedded_dir = _get_embedded_font_dir()
+    if embedded_dir and embedded_dir.is_dir():
+        try:
+            for item in list(embedded_dir.glob('*.ttf')) + list(embedded_dir.glob('*.otf')):
+                if item.is_file() and item not in found_files:
+                    found_files.append(item)
+        except Exception:
+            pass
+
+    for item in found_files:
+        try:
+            family_name, style_key = parse_font_name(item)
+            if family_name and style_key:
+                if family_name not in temp_fonts_data:
+                    temp_fonts_data[family_name] = {}
+                if style_key not in temp_fonts_data[family_name]:
+                    temp_fonts_data[family_name][style_key] = str(item)
+        except Exception:
+            pass
+
+    return temp_fonts_data
+
+def scan_system_fonts_async(callback_on_done=None, force_rescan=False, cache_path=None):
+    """Scan system font directories or load from persistent cache."""
+    font_dirs = _get_font_dirs()
+
+    # Attempt instant cache load first (< 5ms) unless explicitly forced to re-scan
+    if not force_rescan and load_persistent_font_cache(cache_path=cache_path):
+        print(_("font_scan_completed", len(FONT_FAMILY_LIST_SORTED)))
+        if callback_on_done:
+            GLib.idle_add(callback_on_done)
+        return
+
+    def _scan():
+        global SYSTEM_FONTS, FONT_FAMILY_LIST_SORTED, FONT_SCAN_COMPLETED
+        print("Scanning system and embedded fonts...")
+        temp_fonts_data = _scan_system_fonts_direct(font_dirs)
 
         SYSTEM_FONTS = temp_fonts_data
         FONT_FAMILY_LIST_SORTED = sorted(SYSTEM_FONTS.keys())
         FONT_SCAN_COMPLETED.set()
+        save_persistent_font_cache(SYSTEM_FONTS, FONT_FAMILY_LIST_SORTED, font_dirs, cache_path=cache_path)
         print(_("font_scan_completed", len(FONT_FAMILY_LIST_SORTED)))
 
         if callback_on_done:

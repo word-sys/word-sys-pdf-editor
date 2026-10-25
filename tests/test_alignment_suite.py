@@ -371,8 +371,10 @@ class TestAlignmentToggleButtonsGroup(unittest.TestCase):
 
         main_ctx = GLib.MainContext.default()
         def pump():
-            while main_ctx.pending():
+            count = 0
+            while main_ctx.pending() and count < 100:
                 main_ctx.iteration(False)
+                count += 1
 
         # Initial: only left is True
         self.assertTrue(b_left.get_active())
