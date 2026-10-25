@@ -114,8 +114,101 @@ class TestThumbnailVirtualization(unittest.TestCase):
         factory._on_teardown(factory, list_item)
         self.assertIsNone(list_item.get_child())
 
+    def test_placeholder_card_texture(self):
+        """get_thumbnail_placeholder_texture should return a 150x200 Gdk.Texture singleton."""
+        from word_sys_pdf_editor.ui_components import get_thumbnail_placeholder_texture
+        tex1 = get_thumbnail_placeholder_texture()
+        tex2 = get_thumbnail_placeholder_texture()
+        self.assertIsNotNone(tex1)
+        self.assertIs(tex1, tex2, "Placeholder texture should be a cached singleton")
+        self.assertEqual(tex1.get_width(), 150)
+        self.assertEqual(tex1.get_height(), 200)
+
+    def test_priority_scheduling_ordering(self):
+        """Visible priority tasks must execute before background tasks."""
+        pipeline = pdf_handler.ThumbnailPipeline(max_workers=1)
+        try:
+            executed = []
+            def on_done(page_idx, thumb, gen_id):
+                executed.append(page_idx)
+
+            # Queue background tasks for pages 10, 11, 12
+            pipeline.request(1, self.doc, 1, priority=pdf_handler.PRIORITY_BACKGROUND, callback=on_done)
+            pipeline.request(1, self.doc, 2, priority=pdf_handler.PRIORITY_BACKGROUND, callback=on_done)
+            # Queue visible task for page 4
+            pipeline.request(1, self.doc, 4, priority=pdf_handler.PRIORITY_VISIBLE, callback=on_done)
+
+            # Wait for execution
+            time.sleep(0.15)
+            ctx = GLib.MainContext.default()
+            for _ in range(50):
+                if ctx.pending(): ctx.iteration(False)
+
+            self.assertIn(4, executed)
+            # Visible page 4 should have been dispatched ahead of at least page 2
+            idx_4 = executed.index(4)
+            idx_2 = executed.index(2)
+            self.assertLess(idx_4, idx_2, "Visible task should execute before lower priority background task")
+        finally:
+            pipeline.shutdown(wait=True)
+
+    def test_task_cancellation_on_rapid_scroll(self):
+        """Cancelled page requests should be skipped by the pipeline without rendering."""
+        pipeline = pdf_handler.ThumbnailPipeline(max_workers=1)
+        try:
+            rendered = []
+            def on_done(page_idx, thumb, gen_id):
+                rendered.append(page_idx)
+
+            # Queue tasks
+            pipeline.request(1, self.doc, 1, priority=pdf_handler.PRIORITY_BACKGROUND, callback=on_done)
+            pipeline.request(1, self.doc, 2, priority=pdf_handler.PRIORITY_BACKGROUND, callback=on_done)
+            pipeline.request(1, self.doc, 3, priority=pdf_handler.PRIORITY_BACKGROUND, callback=on_done)
+
+            # Cancel page 2
+            pipeline.cancel_page(1, 2)
+
+            time.sleep(0.15)
+            ctx = GLib.MainContext.default()
+            for _ in range(50):
+                if ctx.pending(): ctx.iteration(False)
+
+            self.assertIn(1, rendered)
+            self.assertNotIn(2, rendered, "Cancelled task for page 2 should not be rendered")
+            self.assertIn(3, rendered)
+        finally:
+            pipeline.shutdown(wait=True)
+
+    def test_generation_cancellation_on_document_switch(self):
+        """Switching documents should cancel all pending tasks from the previous generation."""
+        pipeline = pdf_handler.ThumbnailPipeline(max_workers=1)
+        try:
+            rendered = []
+            def on_done(page_idx, thumb, gen_id):
+                rendered.append((gen_id, page_idx))
+
+            # Queue tasks for generation 1
+            pipeline.request(1, self.doc, 0, priority=pdf_handler.PRIORITY_BACKGROUND, callback=on_done)
+            pipeline.request(1, self.doc, 1, priority=pdf_handler.PRIORITY_BACKGROUND, callback=on_done)
+
+            # Cancel all generation 1 tasks
+            pipeline.cancel_generation(1)
+
+            # Queue task for generation 2
+            pipeline.request(2, self.doc, 3, priority=pdf_handler.PRIORITY_VISIBLE, callback=on_done)
+
+            time.sleep(0.15)
+            ctx = GLib.MainContext.default()
+            for _ in range(50):
+                if ctx.pending(): ctx.iteration(False)
+
+            self.assertIn((2, 3), rendered)
+            self.assertNotIn((1, 1), rendered)
+        finally:
+            pipeline.shutdown(wait=True)
+
     def test_request_thumbnail_execution(self):
-        """request_thumbnail should generate thumbnail and update target item on idle."""
+        """request_thumbnail should generate thumbnail via pipeline and update target item on idle."""
         mock_session = MagicMock()
         mock_session.doc = self.doc
         store = Gio.ListStore(item_type=PdfPage)
@@ -125,26 +218,21 @@ class TestThumbnailVirtualization(unittest.TestCase):
         from word_sys_pdf_editor.window import PdfEditorWindow
         win = MagicMock(spec=PdfEditorWindow)
         win._active_session = mock_session
-        win._pending_thumb_requests = set()
+        win._thumb_generation_id = 999
+        win._on_thumbnail_rendered = PdfEditorWindow._on_thumbnail_rendered.__get__(win, PdfEditorWindow)
 
         PdfEditorWindow.request_thumbnail(win, 2, session=mock_session)
-        self.assertIn(2, win._pending_thumb_requests)
 
-        # Duplicate request should be ignored while in progress
-        PdfEditorWindow.request_thumbnail(win, 2, session=mock_session)
-
-        # Run pending idle callbacks
+        # Allow worker thread to render and main loop to deliver
+        time.sleep(0.1)
         ctx = GLib.MainContext.default()
         for _ in range(50):
             if ctx.pending():
                 ctx.iteration(False)
-            else:
-                break
 
         item_2 = store.get_item(2)
         self.assertIsNotNone(item_2.thumbnail)
         self.assertIsInstance(item_2.thumbnail, GdkPixbuf.Pixbuf)
-        self.assertNotIn(2, win._pending_thumb_requests)
 
     def test_load_thumbnails_virtualization(self):
         """_load_thumbnails should populate model immediately and render active page."""

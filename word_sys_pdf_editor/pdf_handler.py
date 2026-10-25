@@ -29,6 +29,11 @@ WSPDF_SALT_LEN = 16
 WSPDF_NONCE_LEN = 12
 WSPDF_TAG_LEN = 16
 WSPDF_PBKDF2_ROUNDS = 100_000
+import queue
+import itertools
+import threading
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, List, Dict, Any, Tuple, Union, Set
 try:
     import anyconvert
@@ -42,7 +47,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Gdk', '4.0')
 gi.require_version('GdkPixbuf', '2.0')
-from gi.repository import GdkPixbuf, Gdk, Pango, PangoCairo
+from gi.repository import GdkPixbuf, Gdk, Pango, PangoCairo, GLib
 from .models import (
     EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape, EditableStroke,
     AcroFormField, decompose_font_name, extract_font_properties, get_base14_font_variant,
@@ -409,6 +414,7 @@ def load_pdf_document(filepath, password=None):
 def close_pdf_document(doc):
     """Close PDF document."""
     if doc:
+        release_doc_lock(doc)
         try:
             invalidate_page_cache(doc)
             doc.close()
@@ -419,21 +425,218 @@ def get_page_count(doc):
     """Get the page count."""
     return doc.page_count if doc else 0
 
+PRIORITY_VISIBLE = 0
+PRIORITY_PREFETCH = 1
+PRIORITY_BACKGROUND = 2
+
+_DOC_LOCKS = {}
+_DOC_LOCKS_LOCK = threading.Lock()
+
+def get_doc_lock(doc):
+    """Retrieve or create a reentrant threading lock for a document."""
+    if doc is None:
+        return None
+    doc_id = id(doc)
+    with _DOC_LOCKS_LOCK:
+        lock = _DOC_LOCKS.get(doc_id)
+        if lock is None:
+            lock = threading.RLock()
+            _DOC_LOCKS[doc_id] = lock
+        return lock
+
+def release_doc_lock(doc):
+    """Release and remove lock entry when document is closed."""
+    if doc is None:
+        return
+    doc_id = id(doc)
+    with _DOC_LOCKS_LOCK:
+        _DOC_LOCKS.pop(doc_id, None)
+
+class ThumbnailTask:
+    """Encapsulates a pending thumbnail generation job."""
+    __slots__ = ('generation_id', 'doc', 'page_index', 'target_width', 'priority', 'callback', 'cancelled')
+    def __init__(self, generation_id, doc, page_index, target_width, priority, callback):
+        self.generation_id = generation_id
+        self.doc = doc
+        self.page_index = page_index
+        self.target_width = target_width
+        self.priority = priority
+        self.callback = callback
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+
+class ThumbnailPipeline:
+    """Priority-scheduled asynchronous thumbnail rendering pipeline backed by ThreadPoolExecutor(max_workers=2)."""
+    def __init__(self, max_workers=2):
+        self.max_workers = max_workers
+        self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="thumb-worker")
+        self._queue = queue.PriorityQueue()
+        self._counter = itertools.count()
+        self._lock = threading.Lock()
+        self._tasks = {}
+        self._active_workers = 0
+        self._shutdown = False
+
+    def request(self, generation_id, doc, page_index, target_width=150, priority=PRIORITY_VISIBLE, callback=None):
+        """Enqueue a thumbnail render request with priority scheduling."""
+        if self._shutdown or doc is None or getattr(doc, 'is_closed', False):
+            return None
+        key = (generation_id, page_index)
+        with self._lock:
+            existing = self._tasks.get(key)
+            if existing is not None and not existing.cancelled:
+                if existing.priority <= priority:
+                    return existing
+                existing.cancel()
+
+            task = ThumbnailTask(generation_id, doc, page_index, target_width, priority, callback)
+            self._tasks[key] = task
+            count = next(self._counter)
+            self._queue.put((priority, count, task))
+            self._check_dispatch_locked()
+            return task
+
+    def cancel_page(self, generation_id, page_index):
+        """Cancel pending render job for a specific page."""
+        key = (generation_id, page_index)
+        with self._lock:
+            task = self._tasks.pop(key, None)
+            if task:
+                task.cancel()
+
+    def cancel_generation(self, generation_id):
+        """Cancel all pending render jobs for a specific document generation."""
+        with self._lock:
+            keys_to_remove = [k for k in self._tasks if k[0] == generation_id]
+            for k in keys_to_remove:
+                task = self._tasks.pop(k, None)
+                if task:
+                    task.cancel()
+
+    def cancel_all(self):
+        """Cancel all pending thumbnail jobs."""
+        with self._lock:
+            for task in self._tasks.values():
+                task.cancel()
+            self._tasks.clear()
+
+    def shutdown(self, wait=False):
+        """Shut down the thread pool and cancel pending jobs."""
+        self._shutdown = True
+        self.cancel_all()
+        try:
+            self.executor.shutdown(wait=wait, cancel_futures=True)
+        except Exception:
+            pass
+
+    def _check_dispatch_locked(self):
+        """Dispatch queued items to executor if workers are available."""
+        while not self._shutdown and self._active_workers < self.max_workers and not self._queue.empty():
+            item = self._queue.get()
+            self._active_workers += 1
+            self.executor.submit(self._run_job, item)
+
+    def _run_job(self, item):
+        """Execute thumbnail rendering job in thread pool worker."""
+        prio, count, task = item
+        try:
+            if task.cancelled or self._shutdown:
+                return
+
+            doc = task.doc
+            if doc is None or getattr(doc, 'is_closed', False):
+                return
+
+            lock = get_doc_lock(doc)
+            thumb = None
+            try:
+                if lock:
+                    with lock:
+                        if not task.cancelled and not getattr(doc, 'is_closed', False):
+                            thumb = generate_thumbnail(doc, task.page_index, target_width=task.target_width)
+                else:
+                    if not task.cancelled and not getattr(doc, 'is_closed', False):
+                        thumb = generate_thumbnail(doc, task.page_index, target_width=task.target_width)
+            except Exception:
+                thumb = None
+
+            if not task.cancelled and not self._shutdown and thumb is not None and task.callback:
+                cb = task.callback
+                gen_id = task.generation_id
+                p_idx = task.page_index
+                GLib.idle_add(cb, p_idx, thumb, gen_id)
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                self._active_workers -= 1
+                key = (task.generation_id, task.page_index)
+                if self._tasks.get(key) is task:
+                    self._tasks.pop(key, None)
+                self._check_dispatch_locked()
+
+
+_THUMBNAIL_PIPELINE = None
+_THUMBNAIL_PIPELINE_LOCK = threading.Lock()
+
+def get_thumbnail_pipeline():
+    """Retrieve or initialize the global thumbnail rendering pipeline."""
+    global _THUMBNAIL_PIPELINE
+    with _THUMBNAIL_PIPELINE_LOCK:
+        if _THUMBNAIL_PIPELINE is None or _THUMBNAIL_PIPELINE._shutdown:
+            _THUMBNAIL_PIPELINE = ThumbnailPipeline(max_workers=2)
+        return _THUMBNAIL_PIPELINE
+
+def request_thumbnail_async(generation_id, doc, page_index, target_width=150, priority=PRIORITY_VISIBLE, callback=None):
+    """Submit asynchronous thumbnail generation request to pipeline."""
+    pipeline = get_thumbnail_pipeline()
+    return pipeline.request(generation_id, doc, page_index, target_width, priority, callback)
+
+def cancel_thumbnail_async(generation_id, page_index):
+    """Cancel pending asynchronous thumbnail generation for page."""
+    pipeline = get_thumbnail_pipeline()
+    pipeline.cancel_page(generation_id, page_index)
+
+def cancel_generation_thumbnails(generation_id):
+    """Cancel all pending asynchronous thumbnail jobs for generation."""
+    pipeline = get_thumbnail_pipeline()
+    pipeline.cancel_generation(generation_id)
+
+def shutdown_thumbnail_pipeline(wait=False):
+    """Shut down global thumbnail rendering pipeline."""
+    global _THUMBNAIL_PIPELINE
+    with _THUMBNAIL_PIPELINE_LOCK:
+        if _THUMBNAIL_PIPELINE is not None:
+            _THUMBNAIL_PIPELINE.shutdown(wait=wait)
+            _THUMBNAIL_PIPELINE = None
+
+
 def generate_thumbnail(doc, page_index, target_width=150):
     """Generate thumbnail."""
     if not doc or not (0 <= page_index < doc.page_count):
         return None
     try:
-        page = doc.load_page(page_index)
-        
-        page_w = page.rect.width
-        if page_w == 0: 
-            page_w = 1 
-            
-        zoom_factor = target_width / page_w
-        matrix = fitz.Matrix(zoom_factor, zoom_factor)
+        lock = get_doc_lock(doc)
+        if lock:
+            with lock:
+                page = doc.load_page(page_index)
+                page_w = page.rect.width
+                if page_w == 0:
+                    page_w = 1
+                zoom_factor = target_width / page_w
+                matrix = fitz.Matrix(zoom_factor, zoom_factor)
+                pix = page.get_pixmap(matrix=matrix, alpha=False)
+        else:
+            page = doc.load_page(page_index)
+            page_w = page.rect.width
+            if page_w == 0:
+                page_w = 1
+            zoom_factor = target_width / page_w
+            matrix = fitz.Matrix(zoom_factor, zoom_factor)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
 
-        pix = page.get_pixmap(matrix=matrix, alpha=False)
         gdk_pixbuf = GdkPixbuf.Pixbuf.new_from_data(
             pix.samples, GdkPixbuf.Colorspace.RGB, False, 8,
             pix.width, pix.height, pix.stride

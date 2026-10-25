@@ -3586,7 +3586,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._load_page(target_page, reload_objects=True)
             if hasattr(self, 'annotations_sidebar'):
                 self.annotations_sidebar.refresh()
-            GLib.idle_add(self._load_thumbnails, sess)
+            self._load_thumbnails(sess)
 
         self.open_button.set_sensitive(True)
         self.select_tool_button.set_sensitive(True)
@@ -3599,8 +3599,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.measure_area_tool_button.set_sensitive(True)
         self._update_ui_state()
 
-    def request_thumbnail(self, page_index, session=None):
-        """On-demand thumbnail request for a visible sidebar item."""
+    def request_thumbnail(self, page_index, session=None, priority=None):
+        """On-demand thumbnail request for a visible or prefetch sidebar item."""
         sess = session or self._active_session
         if not sess or not sess.doc:
             return
@@ -3613,27 +3613,50 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not item or getattr(item, 'thumbnail', None) is not None:
             return
 
-        if not hasattr(self, '_pending_thumb_requests'):
-            self._pending_thumb_requests = set()
-        if page_index in self._pending_thumb_requests:
-            return
-        self._pending_thumb_requests.add(page_index)
+        gen_id = getattr(self, '_thumb_generation_id', 1)
+        prio = pdf_handler.PRIORITY_VISIBLE if priority is None else priority
+        pdf_handler.request_thumbnail_async(
+            gen_id,
+            sess.doc,
+            page_index,
+            target_width=150,
+            priority=prio,
+            callback=self._on_thumbnail_rendered
+        )
 
-        def _do_render():
-            self._pending_thumb_requests.discard(page_index)
-            if sess.doc is None or not (0 <= page_index < pdf_handler.get_page_count(sess.doc)):
-                return GLib.SOURCE_REMOVE
-            try:
-                thumb = pdf_handler.generate_thumbnail(sess.doc, page_index, target_width=150)
-                if thumb and target_model and page_index < target_model.get_n_items():
-                    target_item = target_model.get_item(page_index)
-                    if target_item and getattr(target_item, 'index', None) == page_index:
-                        target_item.thumbnail = thumb
-            except Exception:
-                pass
-            return GLib.SOURCE_REMOVE
+        if prio == pdf_handler.PRIORITY_VISIBLE:
+            page_count = pdf_handler.get_page_count(sess.doc)
+            for adj in (page_index - 1, page_index + 1):
+                if 0 <= adj < page_count and adj < target_model.get_n_items():
+                    adj_item = target_model.get_item(adj)
+                    if adj_item and getattr(adj_item, 'thumbnail', None) is None:
+                        pdf_handler.request_thumbnail_async(
+                            gen_id,
+                            sess.doc,
+                            adj,
+                            target_width=150,
+                            priority=pdf_handler.PRIORITY_PREFETCH,
+                            callback=self._on_thumbnail_rendered
+                        )
 
-        GLib.idle_add(_do_render)
+    def cancel_thumbnail_request(self, page_index):
+        """Cancel pending render request for a page that scrolled out of view."""
+        gen_id = getattr(self, '_thumb_generation_id', None)
+        if gen_id is not None:
+            pdf_handler.cancel_thumbnail_async(gen_id, page_index)
+
+    def _on_thumbnail_rendered(self, page_index, thumb, gen_id):
+        """Receive asynchronously rendered thumbnail pixbuf and update model item."""
+        if getattr(self, '_thumb_generation_id', None) != gen_id:
+            return False
+        sess = self._active_session
+        if not sess or not sess.pages_model:
+            return False
+        if 0 <= page_index < sess.pages_model.get_n_items():
+            item = sess.pages_model.get_item(page_index)
+            if item and getattr(item, 'index', None) == page_index:
+                item.thumbnail = thumb
+        return False
 
     def _load_thumbnails(self, session=None, target_page=None):
         """Asynchronously populate sidebar thumbnail model and progressively load page pixbufs."""
@@ -3655,7 +3678,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         # Build virtualized PdfPage items with thumbnail=None
         new_items = [PdfPage(index=i, thumbnail=None) for i in range(page_count)]
 
-        # Immediately generate thumbnail for the current / target page so it is visible instantly
+        # Immediately generate thumbnail for the active target page
         active_target = target_page if target_page is not None else getattr(self, 'current_page_index', 0)
         if 0 <= active_target < page_count:
             try:
@@ -3664,6 +3687,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     new_items[active_target].thumbnail = active_thumb
             except Exception:
                 pass
+
+        # Cancel any previous thumbnail generation tasks for previous documents
+        old_gen = getattr(self, '_thumb_generation_id', None)
+        if old_gen is not None:
+            pdf_handler.cancel_generation_thumbnails(old_gen)
+        self._thumb_generation_id = (old_gen or 0) + 1
+        current_gen = self._thumb_generation_id
 
         # Atomic model splice: O(1) memory and instant population
         target_model.splice(0, old_count, new_items)
@@ -3699,36 +3729,38 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             else:
                 self._update_ui_state()
 
-        # Cancel any previous progressive generator task
-        if not hasattr(self, '_thumb_generation_id'):
-            self._thumb_generation_id = 0
-        self._thumb_generation_id += 1
-        current_gen = self._thumb_generation_id
+        # Request high-priority thumbnail for active page
+        active_target = getattr(self, 'current_page_index', 0)
+        if 0 <= active_target < page_count:
+            self.request_thumbnail(active_target, priority=pdf_handler.PRIORITY_VISIBLE)
 
-        # Low-priority idle generator for remaining off-screen pages
+        # Progressive background feed for remaining off-screen pages in chunks of 50
         bg_iter = [0]
-        def _bg_generate_step():
-            if self._thumb_generation_id != current_gen:
+        def _feed_bg_chunk():
+            if getattr(self, '_thumb_generation_id', None) != current_gen:
                 return GLib.SOURCE_REMOVE
             if sess.doc != target_doc:
                 return GLib.SOURCE_REMOVE
 
-            while bg_iter[0] < page_count:
-                idx = bg_iter[0]
-                bg_iter[0] += 1
-                if idx < target_model.get_n_items():
-                    item = target_model.get_item(idx)
+            chunk_end = min(page_count, bg_iter[0] + 50)
+            for idx in range(bg_iter[0], chunk_end):
+                if idx != active_target:
+                    item = target_model.get_item(idx) if idx < target_model.get_n_items() else None
                     if item and getattr(item, 'thumbnail', None) is None:
-                        try:
-                            thumb = pdf_handler.generate_thumbnail(target_doc, idx, target_width=150)
-                            if thumb and self._thumb_generation_id == current_gen:
-                                item.thumbnail = thumb
-                        except Exception:
-                            pass
-                        return GLib.SOURCE_CONTINUE
+                        pdf_handler.request_thumbnail_async(
+                            current_gen,
+                            target_doc,
+                            idx,
+                            target_width=150,
+                            priority=pdf_handler.PRIORITY_BACKGROUND,
+                            callback=self._on_thumbnail_rendered
+                        )
+            bg_iter[0] = chunk_end
+            if bg_iter[0] < page_count:
+                return GLib.SOURCE_CONTINUE
             return GLib.SOURCE_REMOVE
 
-        GLib.idle_add(_bg_generate_step, priority=GLib.PRIORITY_LOW)
+        GLib.idle_add(_feed_bg_chunk, priority=GLib.PRIORITY_LOW)
 
     def _recompute_continuous_layout(self):
         """Compute cumulative vertical offsets and dimensions for all pages."""
@@ -13521,6 +13553,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not self.doc or not (0 <= page_index < pdf_handler.get_page_count(self.doc)):
             return
         try:
+            gen_id = getattr(self, '_thumb_generation_id', None)
+            if gen_id is not None:
+                pdf_handler.cancel_thumbnail_async(gen_id, page_index)
+
             thumb = pdf_handler.generate_thumbnail(self.doc, page_index, target_width=150)
             if thumb and self.pages_model:
                 n = self.pages_model.get_n_items()

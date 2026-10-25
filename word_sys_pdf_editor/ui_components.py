@@ -7,6 +7,49 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, Adw, GLib, GObject, Gio, Pango, P
 from .i18n import _
 
 
+_PLACEHOLDER_TEXTURE = None
+
+def get_thumbnail_placeholder_texture():
+    """Return a cached singleton neutral document placeholder texture for unrendered pages."""
+    global _PLACEHOLDER_TEXTURE
+    if _PLACEHOLDER_TEXTURE is not None:
+        return _PLACEHOLDER_TEXTURE
+    try:
+        width, height = 150, 200
+        surface = cairo.ImageSurface(cairo.FORMAT_RGB24, width, height)
+        cr = cairo.Context(surface)
+        
+        cr.set_source_rgb(0.95, 0.95, 0.96)
+        cr.paint()
+        
+        cr.set_source_rgb(0.98, 0.98, 0.99)
+        cr.rectangle(12, 12, width - 24, height - 24)
+        cr.fill()
+        
+        cr.set_source_rgb(0.85, 0.85, 0.88)
+        cr.set_line_width(1.0)
+        cr.rectangle(12.5, 12.5, width - 25, height - 25)
+        cr.stroke()
+        
+        cr.set_source_rgb(0.88, 0.88, 0.91)
+        for y in range(40, height - 40, 18):
+            cr.rectangle(24, y, width - 48, 4)
+            cr.fill()
+            
+        cr.set_source_rgb(0.80, 0.80, 0.83)
+        cr.rectangle(0.5, 0.5, width - 1, height - 1)
+        cr.stroke()
+        
+        pix = GdkPixbuf.Pixbuf.new_from_data(
+            surface.get_data(), GdkPixbuf.Colorspace.RGB, False, 8,
+            surface.get_width(), surface.get_height(), surface.get_stride()
+        )
+        _PLACEHOLDER_TEXTURE = Gdk.Texture.new_for_pixbuf(pix)
+        return _PLACEHOLDER_TEXTURE
+    except Exception:
+        return None
+
+
 class PageThumbnailFactory(Gtk.SignalListItemFactory):
     """Factory class to create and bind page thumbnail widgets in the sidebar."""
     def __init__(self, editor_window=None):
@@ -83,8 +126,11 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=6, margin_bottom=6)
         
         image = Gtk.Picture()
-        image.set_size_request(150, -1)
+        image.set_size_request(150, 200)
         image.set_can_shrink(False)
+        placeholder = get_thumbnail_placeholder_texture()
+        if placeholder:
+            image.set_paintable(placeholder)
 
         label = Gtk.Label()
         label.set_halign(Gtk.Align.CENTER)
@@ -117,7 +163,8 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
             picture.set_visible(True)
         else:
             picture.set_size_request(150, 200)
-            picture.set_paintable(None)
+            placeholder = get_thumbnail_placeholder_texture()
+            picture.set_paintable(placeholder)
             picture.set_visible(True)
             if self.editor_window and hasattr(self.editor_window, 'request_thumbnail'):
                 self.editor_window.request_thumbnail(pdf_page.index)
@@ -131,7 +178,8 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
                     picture.set_visible(True)
                 else:
                     picture.set_size_request(150, 200)
-                    picture.set_paintable(None)
+                    placeholder = get_thumbnail_placeholder_texture()
+                    picture.set_paintable(placeholder)
                     picture.set_visible(True)
 
         if isinstance(pdf_page, GObject.GObject):
@@ -158,13 +206,17 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         box._thumb_page = None
 
     def _on_unbind(self, factory, list_item):
-        """Recycle row: disconnect notification and release Cairo/GPU texture."""
+        """Recycle row: disconnect notification, release texture, and cancel off-screen request."""
         box = list_item.get_child()
         if box:
             self._cleanup_notification(box)
             picture = box.get_first_child()
             if picture:
                 picture.set_paintable(None)
+        pdf_page = list_item.get_item()
+        if pdf_page and getattr(pdf_page, 'thumbnail', None) is None:
+            if self.editor_window and hasattr(self.editor_window, 'cancel_thumbnail_request'):
+                self.editor_window.cancel_thumbnail_request(pdf_page.index)
 
     def _on_teardown(self, factory, list_item):
         """Clean up all references when widget is destroyed."""
