@@ -10,14 +10,76 @@ from .i18n import _
 class PageThumbnailFactory(Gtk.SignalListItemFactory):
     """Factory class to create and bind page thumbnail widgets in the sidebar."""
     def __init__(self, editor_window=None):
-        """Initialise the factory with setup and bind signal handlers."""
+        """Initialise the factory with setup, bind, unbind, and teardown signal handlers."""
         super().__init__()
         self.editor_window = editor_window
         self.connect("setup", self._on_setup)
         self.connect("bind", self._on_bind)
+        self.connect("unbind", self._on_unbind)
+        self.connect("teardown", self._on_teardown)
+
+    def _ensure_controllers(self, box, list_item):
+        """Attach drag, drop, and right-click controllers to the thumbnail box once."""
+        if getattr(box, '_controllers_attached', False):
+            return
+
+        drag_source = Gtk.DragSource.new()
+        drag_source.set_actions(Gdk.DragAction.MOVE)
+
+        def on_prepare(source, x, y):
+            if self.editor_window and getattr(self.editor_window, 'view_mode', False):
+                return None
+            pdf_pg = list_item.get_item()
+            if not pdf_pg:
+                return None
+            val = GObject.Value(GObject.TYPE_INT, pdf_pg.index)
+            return Gdk.ContentProvider.new_for_value(val)
+
+        def on_drag_begin(source, drag):
+            pdf_pg = list_item.get_item()
+            if pdf_pg and getattr(pdf_pg, 'thumbnail', None):
+                tex = Gdk.Texture.new_for_pixbuf(pdf_pg.thumbnail)
+                Gtk.DragSource.set_icon(source, tex, 0, 0)
+
+        drag_source.connect("prepare", on_prepare)
+        drag_source.connect("drag-begin", on_drag_begin)
+        box.add_controller(drag_source)
+
+        drop_target = Gtk.DropTarget.new(GObject.TYPE_INT, Gdk.DragAction.MOVE)
+
+        def on_drop(target, value, x, y):
+            if self.editor_window and getattr(self.editor_window, 'view_mode', False):
+                return False
+            pdf_pg = list_item.get_item()
+            if not pdf_pg:
+                return False
+            to_idx = pdf_pg.index
+            from_idx = value
+            if from_idx == to_idx:
+                return False
+            if self.editor_window and hasattr(self.editor_window, 'on_page_reorder'):
+                self.editor_window.on_page_reorder(from_idx, to_idx)
+            return True
+
+        drop_target.connect("drop", on_drop)
+        box.add_controller(drop_target)
+
+        right_click = Gtk.GestureClick.new()
+        right_click.set_button(3)
+
+        def on_right_click(gesture, n_press, rx, ry):
+            pdf_pg = list_item.get_item()
+            if not pdf_pg:
+                return
+            if self.editor_window and hasattr(self.editor_window, 'show_thumbnail_context_menu'):
+                self.editor_window.show_thumbnail_context_menu(box, rx, ry, pdf_pg.index)
+
+        right_click.connect("pressed", on_right_click)
+        box.add_controller(right_click)
+        box._controllers_attached = True
 
     def _on_setup(self, factory, list_item):
-        """Set up initial layout for the thumbnail list item."""
+        """Set up initial layout and controllers for the thumbnail list item."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=6, margin_bottom=6)
         
         image = Gtk.Picture()
@@ -30,70 +92,86 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         box.append(image)
         box.append(label)
         list_item.set_child(box)
+        self._ensure_controllers(box, list_item)
 
     def _on_bind(self, factory, list_item):
         """Bind a PDF page object and its thumbnail image to the list item."""
         box = list_item.get_child()
+        if not box:
+            return
+        self._ensure_controllers(box, list_item)
+
         picture = box.get_first_child()
         label = box.get_last_child()
         pdf_page = list_item.get_item()
+        if not pdf_page:
+            return
 
-        if pdf_page and pdf_page.thumbnail:
+        label.set_text(_("page_info").format(pdf_page.index + 1))
+        self._cleanup_notification(box)
+
+        if getattr(pdf_page, 'thumbnail', None):
+            picture.set_size_request(150, -1)
             texture = Gdk.Texture.new_for_pixbuf(pdf_page.thumbnail)
             picture.set_paintable(texture)
             picture.set_visible(True)
         else:
+            picture.set_size_request(150, 200)
             picture.set_paintable(None)
-            picture.set_visible(False)
+            picture.set_visible(True)
+            if self.editor_window and hasattr(self.editor_window, 'request_thumbnail'):
+                self.editor_window.request_thumbnail(pdf_page.index)
 
-        page_index = pdf_page.index
-        label.set_text(_("page_info").format(page_index + 1))
+        def on_thumb_notify(obj, pspec):
+            if list_item.get_item() == obj:
+                if getattr(obj, 'thumbnail', None):
+                    picture.set_size_request(150, -1)
+                    texture = Gdk.Texture.new_for_pixbuf(obj.thumbnail)
+                    picture.set_paintable(texture)
+                    picture.set_visible(True)
+                else:
+                    picture.set_size_request(150, 200)
+                    picture.set_paintable(None)
+                    picture.set_visible(True)
 
-        for ctrl in list(box.observe_controllers()):
-            if isinstance(ctrl, Gtk.DragSource) or isinstance(ctrl, Gtk.DropTarget):
-                box.remove_controller(ctrl)
+        if isinstance(pdf_page, GObject.GObject):
+            try:
+                handler_id = pdf_page.connect("notify::thumbnail", on_thumb_notify)
+                box._thumb_handler_id = handler_id
+                box._thumb_page = pdf_page
+            except Exception:
+                pass
 
-        drag_source = Gtk.DragSource.new()
-        drag_source.set_actions(Gdk.DragAction.MOVE)
+    def _cleanup_notification(self, box):
+        """Disconnect thumbnail notify listener from the previously bound item."""
+        if not box:
+            return
+        handler_id = getattr(box, '_thumb_handler_id', None)
+        page = getattr(box, '_thumb_page', None)
+        if handler_id and page:
+            try:
+                if isinstance(page, GObject.GObject) and page.handler_is_connected(handler_id):
+                    page.disconnect(handler_id)
+            except Exception:
+                pass
+        box._thumb_handler_id = None
+        box._thumb_page = None
 
-        def on_prepare(source, x, y, idx=page_index):
-            if self.editor_window and getattr(self.editor_window, 'view_mode', False):
-                return None
-            val = GObject.Value(GObject.TYPE_INT, idx)
-            return Gdk.ContentProvider.new_for_value(val)
+    def _on_unbind(self, factory, list_item):
+        """Recycle row: disconnect notification and release Cairo/GPU texture."""
+        box = list_item.get_child()
+        if box:
+            self._cleanup_notification(box)
+            picture = box.get_first_child()
+            if picture:
+                picture.set_paintable(None)
 
-        def on_drag_begin(source, drag, idx=page_index, pic=picture):
-            pdf_pg = list_item.get_item()
-            if pdf_pg and pdf_pg.thumbnail:
-                tex = Gdk.Texture.new_for_pixbuf(pdf_pg.thumbnail)
-                Gtk.DragSource.set_icon(source, tex, 0, 0)
-
-        drag_source.connect("prepare", on_prepare)
-        drag_source.connect("drag-begin", on_drag_begin)
-        box.add_controller(drag_source)
-
-        drop_target = Gtk.DropTarget.new(GObject.TYPE_INT, Gdk.DragAction.MOVE)
-
-        def on_drop(target, value, x, y, to_idx=page_index):
-            if self.editor_window and getattr(self.editor_window, 'view_mode', False):
-                return False
-            from_idx = value
-            if from_idx == to_idx:
-                return False
-            if self.editor_window:
-                self.editor_window.on_page_reorder(from_idx, to_idx)
-            return True
-
-        drop_target.connect("drop", on_drop)
-        box.add_controller(drop_target)
-
-        right_click = Gtk.GestureClick.new()
-        right_click.set_button(3)
-        def on_right_click(gesture, n_press, rx, ry, idx=page_index):
-            if self.editor_window and hasattr(self.editor_window, 'show_thumbnail_context_menu'):
-                self.editor_window.show_thumbnail_context_menu(box, rx, ry, idx)
-        right_click.connect("pressed", on_right_click)
-        box.add_controller(right_click)
+    def _on_teardown(self, factory, list_item):
+        """Clean up all references when widget is destroyed."""
+        box = list_item.get_child()
+        if box:
+            self._cleanup_notification(box)
+        list_item.set_child(None)
 
 
 def show_error_dialog(parent_window, message, title="Error"):

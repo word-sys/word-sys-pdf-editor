@@ -635,7 +635,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             for family_name in utils.FONT_FAMILY_LIST_SORTED:
                 self.font_store.append([family_name, family_name])
             if len(self.font_store) > 0:
-                self.font_combo.set_active(0)
+                try:
+                    self.font_combo.handler_block_by_func(self.on_text_format_changed)
+                    self.font_combo.set_active(0)
+                    self.font_combo.handler_unblock_by_func(self.on_text_format_changed)
+                except Exception:
+                    self.font_combo.set_active(0)
             else:
                  self.font_store.append([_("font_none_error"), ""])
                  self.font_combo.set_active(0)
@@ -2062,16 +2067,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         sidebar_box.append(pages_header)
 
         factory = PageThumbnailFactory(editor_window=self)
-        self.thumbnails_list = Gtk.GridView.new(None, factory)
-        self.thumbnails_list.set_max_columns(1)
-        self.thumbnails_list.set_min_columns(1)
-        self.thumbnails_list.set_vexpand(True)
-
         self.thumbnail_selection_model = Gtk.SingleSelection(model=self.pages_model)
         self.thumbnail_selection_model.set_autoselect(False)
         self.thumbnail_selection_model.set_can_unselect(False)
-        self.thumbnails_list.set_model(self.thumbnail_selection_model)
         self.thumbnail_selection_model.connect("selection-changed", self.on_thumbnail_selected)
+
+        self.thumbnails_list = Gtk.ListView.new(self.thumbnail_selection_model, factory)
+        self.thumbnails_list.set_vexpand(True)
 
         self.thumbnails_scroll = Gtk.ScrolledWindow(vexpand=True)
         self.thumbnails_scroll.set_child(self.thumbnails_list)
@@ -3597,8 +3599,44 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.measure_area_tool_button.set_sensitive(True)
         self._update_ui_state()
 
+    def request_thumbnail(self, page_index, session=None):
+        """On-demand thumbnail request for a visible sidebar item."""
+        sess = session or self._active_session
+        if not sess or not sess.doc:
+            return
+        if not (0 <= page_index < pdf_handler.get_page_count(sess.doc)):
+            return
+        target_model = sess.pages_model
+        if not target_model or page_index >= target_model.get_n_items():
+            return
+        item = target_model.get_item(page_index)
+        if not item or getattr(item, 'thumbnail', None) is not None:
+            return
+
+        if not hasattr(self, '_pending_thumb_requests'):
+            self._pending_thumb_requests = set()
+        if page_index in self._pending_thumb_requests:
+            return
+        self._pending_thumb_requests.add(page_index)
+
+        def _do_render():
+            self._pending_thumb_requests.discard(page_index)
+            if sess.doc is None or not (0 <= page_index < pdf_handler.get_page_count(sess.doc)):
+                return GLib.SOURCE_REMOVE
+            try:
+                thumb = pdf_handler.generate_thumbnail(sess.doc, page_index, target_width=150)
+                if thumb and target_model and page_index < target_model.get_n_items():
+                    target_item = target_model.get_item(page_index)
+                    if target_item and getattr(target_item, 'index', None) == page_index:
+                        target_item.thumbnail = thumb
+            except Exception:
+                pass
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(_do_render)
+
     def _load_thumbnails(self, session=None, target_page=None):
-        """Asynchronously generate and populate sidebar thumbnails for each document page."""
+        """Asynchronously populate sidebar thumbnail model and progressively load page pixbufs."""
         sess = session or self._active_session
         if not sess or not sess.doc:
             return
@@ -3608,59 +3646,89 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         target_doc = sess.doc
         target_model = sess.pages_model
-        if target_model is not None:
-            target_model.remove_all()
-        page_count = pdf_handler.get_page_count(target_doc)
+        if target_model is None:
+            return
 
-        thumb_iter = [0]
-        def _load_next_thumb():
+        page_count = pdf_handler.get_page_count(target_doc)
+        old_count = target_model.get_n_items()
+
+        # Build virtualized PdfPage items with thumbnail=None
+        new_items = [PdfPage(index=i, thumbnail=None) for i in range(page_count)]
+
+        # Immediately generate thumbnail for the current / target page so it is visible instantly
+        active_target = target_page if target_page is not None else getattr(self, 'current_page_index', 0)
+        if 0 <= active_target < page_count:
+            try:
+                active_thumb = pdf_handler.generate_thumbnail(target_doc, active_target, target_width=150)
+                if active_thumb:
+                    new_items[active_target].thumbnail = active_thumb
+            except Exception:
+                pass
+
+        # Atomic model splice: O(1) memory and instant population
+        target_model.splice(0, old_count, new_items)
+
+        # Update document title and status immediately without waiting for off-screen pages
+        if self._active_session == sess:
+            if sess.pdf_path:
+                self.status_label.set_text(_("loaded").format(os.path.basename(sess.pdf_path)))
+            else:
+                self.status_label.set_text(_("new_doc_loaded"))
+
+            if page_count > 0:
+                target = getattr(self, 'target_page_after_load', None)
+                self.target_page_after_load = None
+                if target is not None:
+                    if target >= page_count:
+                        target = page_count - 1
+                    if target < 0:
+                        target = 0
+                    if getattr(self, 'current_page_index', None) != target:
+                        self._load_page(target)
+                    else:
+                        self._sync_thumbnail_selection()
+                        self._update_ui_state()
+                else:
+                    curr = getattr(self, 'current_page_index', 0)
+                    if curr >= page_count:
+                        curr = max(0, page_count - 1)
+                        self._load_page(curr)
+                    else:
+                        self._sync_thumbnail_selection()
+                        self._update_ui_state()
+            else:
+                self._update_ui_state()
+
+        # Cancel any previous progressive generator task
+        if not hasattr(self, '_thumb_generation_id'):
+            self._thumb_generation_id = 0
+        self._thumb_generation_id += 1
+        current_gen = self._thumb_generation_id
+
+        # Low-priority idle generator for remaining off-screen pages
+        bg_iter = [0]
+        def _bg_generate_step():
+            if self._thumb_generation_id != current_gen:
+                return GLib.SOURCE_REMOVE
             if sess.doc != target_doc:
                 return GLib.SOURCE_REMOVE
-            if thumb_iter[0] < page_count:
-                index = thumb_iter[0]
-                thumb = pdf_handler.generate_thumbnail(target_doc, index, target_width=150)
 
-                if thumb and target_model is not None:
-                    pdf_page_obj = PdfPage(index=index, thumbnail=thumb)
-                    target_model.append(pdf_page_obj)
-                thumb_iter[0] += 1
-                if self._active_session == sess:
-                    if index % 5 == 0 or index == page_count - 1:
-                        self.status_label.set_text(_("thumbnail_loaded").format(index + 1, page_count))
-                    cur = getattr(self, 'current_page_index', 0)
-                    if index == cur:
-                        self._sync_thumbnail_selection(cur)
-                return GLib.SOURCE_CONTINUE 
-            else:
-                if self._active_session == sess:
-                    if sess.pdf_path:
-                        self.status_label.set_text(_("loaded").format(os.path.basename(sess.pdf_path)))
-                    else:
-                        self.status_label.set_text(_("new_doc_loaded"))                
-                    if page_count > 0:
-                        target = getattr(self, 'target_page_after_load', None)
-                        self.target_page_after_load = None
-                        if target is not None:
-                            if target >= page_count: target = page_count - 1
-                            if target < 0: target = 0
-                            if getattr(self, 'current_page_index', None) != target:
-                                self._load_page(target)
-                            else:
-                                self._sync_thumbnail_selection()
-                                self._update_ui_state()
-                        else:
-                            curr = getattr(self, 'current_page_index', 0)
-                            if curr >= page_count:
-                                curr = max(0, page_count - 1)
-                                self._load_page(curr)
-                            else:
-                                self._sync_thumbnail_selection()
-                                self._update_ui_state()
-                    else:
-                        self._update_ui_state()
-                return GLib.SOURCE_REMOVE
+            while bg_iter[0] < page_count:
+                idx = bg_iter[0]
+                bg_iter[0] += 1
+                if idx < target_model.get_n_items():
+                    item = target_model.get_item(idx)
+                    if item and getattr(item, 'thumbnail', None) is None:
+                        try:
+                            thumb = pdf_handler.generate_thumbnail(target_doc, idx, target_width=150)
+                            if thumb and self._thumb_generation_id == current_gen:
+                                item.thumbnail = thumb
+                        except Exception:
+                            pass
+                        return GLib.SOURCE_CONTINUE
+            return GLib.SOURCE_REMOVE
 
-        GLib.idle_add(_load_next_thumb)
+        GLib.idle_add(_bg_generate_step, priority=GLib.PRIORITY_LOW)
 
     def _recompute_continuous_layout(self):
         """Compute cumulative vertical offsets and dimensions for all pages."""
@@ -13454,14 +13522,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
         try:
             thumb = pdf_handler.generate_thumbnail(self.doc, page_index, target_width=150)
-            if thumb:
+            if thumb and self.pages_model:
                 n = self.pages_model.get_n_items()
+                if page_index < n:
+                    item = self.pages_model.get_item(page_index)
+                    if item and getattr(item, 'index', None) == page_index:
+                        item.thumbnail = thumb
+                        GLib.idle_add(self._sync_thumbnail_selection)
+                        return
                 for i in range(n):
                     item = self.pages_model.get_item(i)
-                    if item and item.index == page_index:
-                        from .models import PdfPage
-                        new_item = PdfPage(page_index, thumb)
-                        self.pages_model.splice(i, 1, [new_item])
+                    if item and getattr(item, 'index', None) == page_index:
+                        item.thumbnail = thumb
                         GLib.idle_add(self._sync_thumbnail_selection)
                         break
         except Exception as e:

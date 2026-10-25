@@ -1442,7 +1442,7 @@ class PdfPage(GObject.GObject):
     index = GObject.Property(type=int)
     thumbnail = GObject.Property(type=GdkPixbuf.Pixbuf)
 
-    def __init__(self, index, thumbnail):
+    def __init__(self, index, thumbnail=None):
         super().__init__(index=index, thumbnail=thumbnail)
 
 
