@@ -1374,57 +1374,79 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     @property
     def editable_texts(self):
         """Active document editable texts list."""
-        return self._active_session.editable_texts if self._active_session else []
+        if self._active_session:
+            return self._active_session.editable_texts
+        return getattr(self, '_fallback_editable_texts', [])
 
     @editable_texts.setter
     def editable_texts(self, val):
         if self._active_session:
             self._active_session.editable_texts = val
+        else:
+            self._fallback_editable_texts = val
 
     @property
     def editable_images(self):
         """Active document editable images list."""
-        return self._active_session.editable_images if self._active_session else []
+        if self._active_session:
+            return self._active_session.editable_images
+        return getattr(self, '_fallback_editable_images', [])
 
     @editable_images.setter
     def editable_images(self, val):
         if self._active_session:
             self._active_session.editable_images = val
+        else:
+            self._fallback_editable_images = val
 
     @property
     def editable_shapes(self):
         """Active document editable shapes list."""
-        return self._active_session.editable_shapes if self._active_session else []
+        if self._active_session:
+            return self._active_session.editable_shapes
+        return getattr(self, '_fallback_editable_shapes', [])
 
     @editable_shapes.setter
     def editable_shapes(self, val):
         if self._active_session:
             self._active_session.editable_shapes = val
+        else:
+            self._fallback_editable_shapes = val
 
     @property
     def editable_strokes(self):
         """Active document editable strokes list."""
-        return self._active_session.editable_strokes if self._active_session else []
+        if self._active_session:
+            return self._active_session.editable_strokes
+        return getattr(self, '_fallback_editable_strokes', [])
 
     @editable_strokes.setter
     def editable_strokes(self, val):
         if self._active_session:
             self._active_session.editable_strokes = val
+        else:
+            self._fallback_editable_strokes = val
 
     @property
     def form_fields(self):
         """Active document interactive AcroForm fields."""
-        return self._active_session.form_fields if self._active_session else []
+        if self._active_session:
+            return self._active_session.form_fields
+        return getattr(self, '_fallback_form_fields', [])
 
     @form_fields.setter
     def form_fields(self, val):
         if self._active_session:
             self._active_session.form_fields = val
+        else:
+            self._fallback_form_fields = val
 
     @property
     def selected_text(self):
         """Active document selected text."""
-        return self._active_session.selected_text if self._active_session else None
+        if self._active_session:
+            return self._active_session.selected_text
+        return getattr(self, '_fallback_selected_text', None)
 
     @selected_text.setter
     def selected_text(self, val):
@@ -1432,6 +1454,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.commit_pending_format_change()
         if self._active_session:
             self._active_session.selected_text = val
+        else:
+            self._fallback_selected_text = val
         if val is not None:
             self.pending_format_change_obj = val
             self.before_format_change_state = copy.deepcopy(val.__dict__)
@@ -1442,42 +1466,58 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     @property
     def selected_image(self):
         """Active document selected image."""
-        return self._active_session.selected_image if self._active_session else None
+        if self._active_session:
+            return self._active_session.selected_image
+        return getattr(self, '_fallback_selected_image', None)
 
     @selected_image.setter
     def selected_image(self, val):
         if self._active_session:
             self._active_session.selected_image = val
+        else:
+            self._fallback_selected_image = val
 
     @property
     def selected_shape(self):
         """Active document selected shape."""
-        return self._active_session.selected_shape if self._active_session else None
+        if self._active_session:
+            return self._active_session.selected_shape
+        return getattr(self, '_fallback_selected_shape', None)
 
     @selected_shape.setter
     def selected_shape(self, val):
         if self._active_session:
             self._active_session.selected_shape = val
+        else:
+            self._fallback_selected_shape = val
 
     @property
     def selected_stroke(self):
         """Active document selected stroke."""
-        return self._active_session.selected_stroke if self._active_session else None
+        if self._active_session:
+            return self._active_session.selected_stroke
+        return getattr(self, '_fallback_selected_stroke', None)
 
     @selected_stroke.setter
     def selected_stroke(self, val):
         if self._active_session:
             self._active_session.selected_stroke = val
+        else:
+            self._fallback_selected_stroke = val
 
     @property
     def selected_form_field(self):
         """Active document selected form field."""
-        return self._active_session.selected_form_field if self._active_session else None
+        if self._active_session:
+            return self._active_session.selected_form_field
+        return getattr(self, '_fallback_selected_form_field', None)
 
     @selected_form_field.setter
     def selected_form_field(self, val):
         if self._active_session:
             self._active_session.selected_form_field = val
+        else:
+            self._fallback_selected_form_field = val
 
     @property
     def view_sel_start(self):
@@ -3541,7 +3581,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.set_active_session(sess)
 
             self.target_page_after_load = target_page
-            self._load_page(target_page)
+            self._load_page(target_page, reload_objects=True)
             if hasattr(self, 'annotations_sidebar'):
                 self.annotations_sidebar.refresh()
             GLib.idle_add(self._load_thumbnails, sess)
@@ -4278,7 +4318,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._create_form_field_overlays()
         self.pdf_view.queue_draw()
 
-    def _load_page(self, page_index, preserve_scroll=False, reload_objects=True):
+    def _load_page(self, page_index, preserve_scroll=False, reload_objects=False):
         """Extract editable objects, dimensions, and render page at given index."""
         current_v_scroll = 0
         current_h_scroll = 0
@@ -4298,12 +4338,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         old_page_idx = getattr(self, 'current_page_index', None)
         if self.doc and old_page_idx is not None and (0 <= old_page_idx < pdf_handler.get_page_count(self.doc)):
-            if old_page_idx != page_index and reload_objects:
-                pdf_handler.save_page_snapshot(self.doc, old_page_idx, force=True)
-            self._stash_page_objects(old_page_idx)
+            if old_page_idx != page_index:
+                if reload_objects:
+                    pdf_handler.save_page_snapshot(self.doc, old_page_idx, force=True)
+                self._stash_page_objects(old_page_idx)
 
-        if reload_objects:
-            self.undo_manager.clear()
+        # Do not clear undo_manager on page navigation! Undo history belongs to the document session.
 
         self.current_page_index = page_index
         self.selected_text = None
@@ -8759,6 +8799,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         )
         
         if success:
+            if hasattr(self, '_page_objects_cache') and self._page_objects_cache:
+                new_cache = {}
+                for p, objs in self._page_objects_cache.items():
+                    if p >= insert_position:
+                        new_cache[p + 1] = objs
+                        for coll_key in ('texts', 'images', 'shapes', 'strokes', 'form_fields'):
+                            for obj in objs.get(coll_key, []):
+                                if hasattr(obj, 'page_number') and obj.page_number is not None:
+                                    obj.page_number += 1
+                    else:
+                        new_cache[p] = objs
+                self._page_objects_cache.clear()
+                self._page_objects_cache.update(new_cache)
+
             self.document_modified = True
             self.status_label.set_text(message)
             self._load_page(insert_position)
@@ -10081,6 +10135,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         success, message = pdf_handler.insert_blank_page(self.doc, insert_position, page_width, page_height)
 
         if success:
+            if hasattr(self, '_page_objects_cache') and self._page_objects_cache:
+                new_cache = {}
+                for p, objs in self._page_objects_cache.items():
+                    if p >= insert_position:
+                        new_cache[p + 1] = objs
+                        for coll_key in ('texts', 'images', 'shapes', 'strokes', 'form_fields'):
+                            for obj in objs.get(coll_key, []):
+                                if hasattr(obj, 'page_number') and obj.page_number is not None:
+                                    obj.page_number += 1
+                    else:
+                        new_cache[p] = objs
+                self._page_objects_cache.clear()
+                self._page_objects_cache.update(new_cache)
+
             self.document_modified = True
             self.status_label.set_text(message)
             self._load_page(insert_position)
@@ -10117,6 +10185,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         success, message = pdf_handler.delete_page(self.doc, page_to_delete)
 
         if success:
+            if hasattr(self, '_page_objects_cache') and self._page_objects_cache:
+                new_cache = {}
+                for p, objs in self._page_objects_cache.items():
+                    if p == page_to_delete:
+                        continue
+                    elif p > page_to_delete:
+                        new_cache[p - 1] = objs
+                        for coll_key in ('texts', 'images', 'shapes', 'strokes', 'form_fields'):
+                            for obj in objs.get(coll_key, []):
+                                if hasattr(obj, 'page_number') and obj.page_number is not None:
+                                    obj.page_number -= 1
+                    else:
+                        new_cache[p] = objs
+                self._page_objects_cache.clear()
+                self._page_objects_cache.update(new_cache)
+
             self.document_modified = True
             self.status_label.set_text(message)
             new_page_count = pdf_handler.get_page_count(self.doc)

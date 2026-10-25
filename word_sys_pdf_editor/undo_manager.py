@@ -290,10 +290,28 @@ class Command:
             return sess.doc
         return getattr(self.window, 'doc', None)
 
-    def _get_collection(self, attr_name):
+    def _get_collection(self, attr_name, page_num=None):
         sess = self._get_target_session()
-        if sess is not None and hasattr(sess, attr_name):
-            val = getattr(sess, attr_name)
+        target = sess if sess is not None else self.window
+
+        if page_num is not None:
+            curr_page = getattr(target, 'current_page_index', getattr(self.window, 'current_page_index', 0))
+            if page_num != curr_page:
+                cache = getattr(target, '_page_objects_cache', getattr(target, 'page_objects_cache', None))
+                if isinstance(cache, dict) and page_num in cache:
+                    mapping = {
+                        'editable_texts': 'texts',
+                        'editable_images': 'images',
+                        'editable_shapes': 'shapes',
+                        'editable_strokes': 'strokes',
+                        'form_fields': 'form_fields',
+                    }
+                    key = mapping.get(attr_name, attr_name)
+                    if key in cache[page_num]:
+                        return cache[page_num][key]
+
+        if hasattr(target, attr_name):
+            val = getattr(target, attr_name)
             if val is not None:
                 return val
         val = getattr(self.window, attr_name, None)
@@ -349,6 +367,16 @@ class UndoManager:
         """Check if a redo action is available."""
         return bool(self.redo_stack)
 
+    def _get_command_page(self, command):
+        """Helper to extract target page index from command if applicable."""
+        target_obj = getattr(command, 'target_object', getattr(command, 'new_object', None))
+        if target_obj is None and hasattr(command, 'commands') and command.commands:
+            target_obj = getattr(command.commands[0], 'target_object', getattr(command.commands[0], 'new_object', None))
+        page_idx = getattr(target_obj, 'page_number', None)
+        if page_idx is None:
+            page_idx = getattr(command, 'page_index', getattr(command, 'page_num', None))
+        return page_idx
+
     def undo(self):
         """Undo the command."""
         if hasattr(self.window, 'commit_pending_format_change'):
@@ -356,6 +384,13 @@ class UndoManager:
         if not self.undo_stack:
             return
         command = self.undo_stack.pop()
+        target_page = self._get_command_page(command)
+        if target_page is not None and hasattr(self.window, 'doc') and self.window.doc and (0 <= target_page < len(self.window.doc)):
+            if target_page != getattr(self.window, 'current_page_index', None):
+                if getattr(self.window, 'continuous_scroll', False) and hasattr(self.window, 'scroll_to_page'):
+                    self.window.scroll_to_page(target_page)
+                elif hasattr(self.window, '_load_page'):
+                    self.window._load_page(target_page)
         command.undo()
         self.redo_stack.append(command)
         self._update_ui_callback()
@@ -370,6 +405,13 @@ class UndoManager:
         if not self.redo_stack:
             return
         command = self.redo_stack.pop()
+        target_page = self._get_command_page(command)
+        if target_page is not None and hasattr(self.window, 'doc') and self.window.doc and (0 <= target_page < len(self.window.doc)):
+            if target_page != getattr(self.window, 'current_page_index', None):
+                if getattr(self.window, 'continuous_scroll', False) and hasattr(self.window, 'scroll_to_page'):
+                    self.window.scroll_to_page(target_page)
+                elif hasattr(self.window, '_load_page'):
+                    self.window._load_page(target_page)
         command.execute()
         self.undo_stack.append(command)
         self._update_ui_callback()
@@ -408,10 +450,10 @@ class EditObjectCommand(Command):
         if doc is None:
             return False
 
-        texts = self._get_collection('editable_texts')
-        shapes = self._get_collection('editable_shapes')
-        images = self._get_collection('editable_images')
-        strokes = self._get_collection('editable_strokes')
+        texts = self._get_collection('editable_texts', page_num=page_num)
+        shapes = self._get_collection('editable_shapes', page_num=page_num)
+        images = self._get_collection('editable_images', page_num=page_num)
+        strokes = self._get_collection('editable_strokes', page_num=page_num)
         measurements = self._get_collection('measurements')
         sticky_notes = self._get_collection('sticky_notes')
 
@@ -964,10 +1006,10 @@ class RotateObjectCommand(Command):
             else:
                 temp_obj.rotation = float(to_angle) % 360.0
 
-            texts = self._get_collection('editable_texts')
-            shapes = self._get_collection('editable_shapes')
-            images = self._get_collection('editable_images')
-            strokes = self._get_collection('editable_strokes')
+            texts = self._get_collection('editable_texts', page_num=page_num)
+            shapes = self._get_collection('editable_shapes', page_num=page_num)
+            images = self._get_collection('editable_images', page_num=page_num)
+            strokes = self._get_collection('editable_strokes', page_num=page_num)
             measurements = self._get_collection('measurements')
             sticky_notes = self._get_collection('sticky_notes')
 

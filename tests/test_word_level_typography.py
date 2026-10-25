@@ -72,6 +72,11 @@ def create_mock_window(doc):
         lambda self: self._active_session.word_selection_mode if self._active_session else False,
         lambda self, val: setattr(self._active_session, 'word_selection_mode', val) if self._active_session else None
     )
+    type(window)._page_objects_cache = PdfEditorWindow._page_objects_cache
+    type(window).form_fields = property(
+        lambda self: self._active_session.form_fields if self._active_session else [],
+        lambda self, val: setattr(self._active_session, 'form_fields', val) if self._active_session else None
+    )
 
     # Bind methods
     window.commit_pending_format_change = PdfEditorWindow.commit_pending_format_change.__get__(window, PdfEditorWindow)
@@ -606,6 +611,324 @@ def test_single_word_selection_has_its_own_rotation_stalk():
     # Far away from the word (e.g. above "KONU:") should NOT detect the word's rotation stalk
     handle_away = window._find_resize_handle_at_pos(60.0, word_stalk_y, t)
     assert handle_away is None
+
+
+def test_page_change_preserves_rotated_object_and_cache():
+    """Verify that rotating an object on a page preserves its rotation, bbox, and undo history across page changes."""
+    doc = fitz.open()
+    doc.new_page(width=500, height=500)
+    doc.new_page(width=500, height=500)
+    window, session = create_mock_window(doc)
+
+    window._stash_page_objects = PdfEditorWindow._stash_page_objects.__get__(window, PdfEditorWindow)
+    window._restore_page_objects = PdfEditorWindow._restore_page_objects.__get__(window, PdfEditorWindow)
+    window._load_page = PdfEditorWindow._load_page.__get__(window, PdfEditorWindow)
+    window._switch_active_page = PdfEditorWindow._switch_active_page.__get__(window, PdfEditorWindow)
+    window.continuous_scroll = False
+    window.pdf_scroll = MagicMock()
+    window._sync_thumbnail_selection = MagicMock()
+    window._sync_window_title_and_subtitle = MagicMock()
+    window._create_form_field_overlays = MagicMock()
+    window._clear_form_field_overlays = MagicMock()
+    window.hide_text_editor = MagicMock()
+    window.commit_pending_format_change = MagicMock()
+
+    t = EditableText(text="Mühendisliği", x=100.0, y=100.0, font_size=12.0, page_number=0)
+    t.bbox = (100.0, 100.0, 200.0, 120.0)
+    t.original_bbox = t.bbox
+    session.editable_texts = [t]
+    window._page_objects_cache[0] = {
+        'texts': [t],
+        'images': [],
+        'shapes': [],
+        'strokes': [],
+        'form_fields': []
+    }
+
+    # Rotate object to 90 degrees
+    from word_sys_pdf_editor.undo_manager import RotateObjectCommand
+    cmd = RotateObjectCommand(window, t, 0.0, 90.0)
+    cmd.execute()
+    window.undo_manager.add_command(cmd)
+
+    assert t.rotation == 90.0
+    assert t.bbox == (100.0, 100.0, 200.0, 120.0) # Unrotated bbox is intact
+    assert len(window.undo_manager.undo_stack) == 1
+
+    # Navigate to page 1
+    window._load_page(1)
+    assert window.current_page_index == 1
+    # Undo stack must NOT be cleared on page change!
+    assert len(window.undo_manager.undo_stack) == 1
+
+    # Navigate back to page 0
+    window._load_page(0)
+    assert window.current_page_index == 0
+    assert len(window.undo_manager.undo_stack) == 1
+    assert len(session.editable_texts) == 1
+
+    restored_text = session.editable_texts[0]
+    assert restored_text.text == "Mühendisliği"
+    assert restored_text.rotation == 90.0
+    # Must retain original unrotated bbox (width=100, height=20), NOT revert or double-rotate
+    assert restored_text.bbox == (100.0, 100.0, 200.0, 120.0)
+
+    # Undo rotation across pages
+    window.undo_manager.undo()
+    assert restored_text.rotation == 0.0
+
+
+def test_page_change_preserves_multiparagraph_textbox():
+    """Verify that a single multi-paragraph text box is not split into separate boxes on page change."""
+    doc = fitz.open()
+    doc.new_page(width=500, height=500)
+    doc.new_page(width=500, height=500)
+    window, session = create_mock_window(doc)
+
+    window._stash_page_objects = PdfEditorWindow._stash_page_objects.__get__(window, PdfEditorWindow)
+    window._restore_page_objects = PdfEditorWindow._restore_page_objects.__get__(window, PdfEditorWindow)
+    window._load_page = PdfEditorWindow._load_page.__get__(window, PdfEditorWindow)
+    window.continuous_scroll = False
+    window.pdf_scroll = MagicMock()
+    window._sync_thumbnail_selection = MagicMock()
+    window._sync_window_title_and_subtitle = MagicMock()
+    window._create_form_field_overlays = MagicMock()
+    window._clear_form_field_overlays = MagicMock()
+    window.hide_text_editor = MagicMock()
+    window.commit_pending_format_change = MagicMock()
+
+    multi_text = "Paragraph 1: Intro\nParagraph 2: Body\nParagraph 3: Discussion\nParagraph 4: Conclusion"
+    t = EditableText(text=multi_text, x=50.0, y=50.0, font_size=12.0, page_number=0)
+    t.bbox = (50.0, 50.0, 350.0, 200.0)
+    session.editable_texts = [t]
+    window._page_objects_cache[0] = {
+        'texts': [t],
+        'images': [],
+        'shapes': [],
+        'strokes': [],
+        'form_fields': []
+    }
+
+    # Switch to page 1
+    window._load_page(1)
+    assert window.current_page_index == 1
+
+    # Switch back to page 0
+    window._load_page(0)
+    assert window.current_page_index == 0
+
+    # Must still be exactly ONE EditableText object with all 4 paragraphs
+    assert len(session.editable_texts) == 1
+    assert session.editable_texts[0].text == multi_text
+
+
+def test_extract_editable_text_unrotates_rotated_pdf_text():
+    """Verify extract_editable_text accurately unrotates bounding box and char boxes for rotated PDF text."""
+    doc = fitz.open()
+    page = doc.new_page(width=500, height=500)
+    unrot_rect = fitz.Rect(100, 100, 250, 120)
+    cx = (unrot_rect.x0 + unrot_rect.x1) / 2.0
+    cy = (unrot_rect.y0 + unrot_rect.y1) / 2.0
+    rot = 90.0
+    morph = (fitz.Point(cx, cy), fitz.Matrix(-rot))
+    page.insert_text(fitz.Point(100, 115), "Muhendisligi", fontsize=12, morph=morph)
+
+    texts, err = pdf_handler.extract_editable_text(doc, 0)
+    assert err is None
+    assert len(texts) == 1
+
+    t = texts[0]
+    assert t.text == "Muhendisligi"
+    assert t.rotation == 90.0
+
+    # Unrotated width must be horizontal (width > height), NOT vertical (height > width)
+    w = t.bbox[2] - t.bbox[0]
+    h = t.bbox[3] - t.bbox[1]
+    assert w > h
+    assert 50.0 < w < 100.0
+    assert 10.0 < h < 25.0
+
+
+def test_multipage_undo_redo_automatic_navigation():
+    """Verify that undoing/redoing commands on different pages automatically navigates to that page."""
+    doc = fitz.open()
+    doc.new_page(width=500, height=500)
+    doc.new_page(width=500, height=500)
+    window, session = create_mock_window(doc)
+
+    window._stash_page_objects = PdfEditorWindow._stash_page_objects.__get__(window, PdfEditorWindow)
+    window._restore_page_objects = PdfEditorWindow._restore_page_objects.__get__(window, PdfEditorWindow)
+    window._load_page = PdfEditorWindow._load_page.__get__(window, PdfEditorWindow)
+    window.continuous_scroll = False
+    window.pdf_scroll = MagicMock()
+    window._sync_thumbnail_selection = MagicMock()
+    window._sync_window_title_and_subtitle = MagicMock()
+    window._create_form_field_overlays = MagicMock()
+    window._clear_form_field_overlays = MagicMock()
+    window.hide_text_editor = MagicMock()
+    window.commit_pending_format_change = MagicMock()
+
+    from word_sys_pdf_editor.undo_manager import RotateObjectCommand
+
+    # Page 0: object t0 rotated to 45 deg
+    t0 = EditableText(text="Page0Text", x=100.0, y=100.0, font_size=12.0, page_number=0)
+    t0.bbox = (100.0, 100.0, 200.0, 120.0)
+    session.editable_texts = [t0]
+    window._page_objects_cache[0] = {'texts': [t0], 'images': [], 'shapes': [], 'strokes': [], 'form_fields': []}
+
+    cmd0 = RotateObjectCommand(window, t0, 0.0, 45.0)
+    cmd0.execute()
+    window.undo_manager.add_command(cmd0)
+    assert t0.rotation == 45.0
+
+    # Switch to Page 1: object t1 rotated to 90 deg
+    window._load_page(1)
+    assert window.current_page_index == 1
+
+    t1 = EditableText(text="Page1Text", x=50.0, y=50.0, font_size=12.0, page_number=1)
+    t1.bbox = (50.0, 50.0, 150.0, 70.0)
+    session.editable_texts = [t1]
+    window._page_objects_cache[1] = {'texts': [t1], 'images': [], 'shapes': [], 'strokes': [], 'form_fields': []}
+
+    cmd1 = RotateObjectCommand(window, t1, 0.0, 90.0)
+    cmd1.execute()
+    window.undo_manager.add_command(cmd1)
+    assert t1.rotation == 90.0
+
+    # Undo 1: Reverts t1 on page 1
+    window.undo_manager.undo()
+    assert window.current_page_index == 1
+    assert t1.rotation == 0.0
+
+    # Undo 2: Must automatically navigate to page 0 and revert t0
+    window.undo_manager.undo()
+    assert window.current_page_index == 0
+    assert t0.rotation == 0.0
+
+    # Redo 1: Must re-apply rotation on page 0
+    window.undo_manager.redo()
+    assert window.current_page_index == 0
+    assert t0.rotation == 45.0
+
+    # Redo 2: Must automatically navigate to page 1 and re-apply rotation on page 1
+    window.undo_manager.redo()
+    assert window.current_page_index == 1
+    assert t1.rotation == 90.0
+
+
+def test_rotated_shape_persists_across_page_change():
+    """Verify that an EditableShape with rotation retains its angle and bounds when switching pages."""
+    doc = fitz.open()
+    doc.new_page(width=500, height=500)
+    doc.new_page(width=500, height=500)
+    window, session = create_mock_window(doc)
+
+    window._stash_page_objects = PdfEditorWindow._stash_page_objects.__get__(window, PdfEditorWindow)
+    window._restore_page_objects = PdfEditorWindow._restore_page_objects.__get__(window, PdfEditorWindow)
+    window._load_page = PdfEditorWindow._load_page.__get__(window, PdfEditorWindow)
+    window.continuous_scroll = False
+    window.pdf_scroll = MagicMock()
+    window._sync_thumbnail_selection = MagicMock()
+    window._sync_window_title_and_subtitle = MagicMock()
+    window._create_form_field_overlays = MagicMock()
+    window._clear_form_field_overlays = MagicMock()
+    window.hide_text_editor = MagicMock()
+    window.commit_pending_format_change = MagicMock()
+
+    from word_sys_pdf_editor.models import EditableShape
+    from word_sys_pdf_editor.undo_manager import RotateObjectCommand
+
+    shape = EditableShape(bbox=(100.0, 100.0, 200.0, 200.0), page_number=0, shape_type=EditableShape.SHAPE_RECTANGLE)
+    shape.original_bbox = shape.bbox
+    session.editable_shapes = [shape]
+    window._page_objects_cache[0] = {'texts': [], 'images': [], 'shapes': [shape], 'strokes': [], 'form_fields': []}
+
+    cmd = RotateObjectCommand(window, shape, 0.0, 45.0)
+    cmd.execute()
+    window.undo_manager.add_command(cmd)
+    assert shape.rotation == 45.0
+
+    # Switch to page 1
+    window._load_page(1)
+    assert window.current_page_index == 1
+
+    # Switch back to page 0
+    window._load_page(0)
+    assert window.current_page_index == 0
+
+    assert len(session.editable_shapes) == 1
+    restored_shape = session.editable_shapes[0]
+    assert restored_shape.rotation == 45.0
+    assert restored_shape.bbox == (100.0, 100.0, 200.0, 200.0)
+
+
+def test_multipage_rotate_page_change_undo_redo_and_save(tmp_path):
+    """End-to-end test: rotate on page 0, navigate pages, undo/redo across pages, save, and reopen."""
+    orig_path = str(tmp_path / "orig.pdf")
+    saved_path = str(tmp_path / "saved.pdf")
+
+    doc = fitz.open()
+    p0 = doc.new_page(width=500, height=400)
+    p0.insert_text(fitz.Point(100, 100), "Hello Page Zero", fontsize=14)
+    p1 = doc.new_page(width=500, height=400)
+    p1.insert_text(fitz.Point(100, 100), "Hello Page One", fontsize=14)
+    doc.save(orig_path)
+    doc.close()
+
+    win = PdfEditorWindow()
+    loaded, err = pdf_handler.load_pdf_document(orig_path)
+    win._finish_loading(loaded, None, orig_path, 0, win._active_session)
+
+    assert len(win.editable_texts) == 1
+    obj = win.editable_texts[0]
+    assert obj.rotation == 0.0
+
+    from word_sys_pdf_editor.undo_manager import RotateObjectCommand
+    cmd = RotateObjectCommand(win, obj, 0.0, 90.0)
+    cmd.execute()
+    win.undo_manager.add_command(cmd)
+    assert obj.rotation == 90.0
+
+    # Switch to page 1
+    win._load_page(1)
+    assert win.current_page_index == 1
+    assert len(win.editable_texts) == 1
+    assert win.editable_texts[0].text == "Hello Page One"
+
+    # Switch back to page 0
+    win._load_page(0)
+    assert win.current_page_index == 0
+    assert len(win.editable_texts) == 1
+    restored_obj = win.editable_texts[0]
+    assert restored_obj.rotation == 90.0
+
+    # Switch to page 1 and undo
+    win._load_page(1)
+    assert win.current_page_index == 1
+    win.undo_manager.undo()
+    assert win.current_page_index == 0
+    assert win.editable_texts[0].rotation == 0.0
+
+    # Redo
+    win.undo_manager.redo()
+    assert win.current_page_index == 0
+    assert win.editable_texts[0].rotation == 90.0
+
+    # Save document
+    win.save_document(saved_path)
+
+    # Reopen saved document fresh
+    win2 = PdfEditorWindow()
+    loaded2, err2 = pdf_handler.load_pdf_document(saved_path)
+    win2._finish_loading(loaded2, None, saved_path, 0, win2._active_session)
+
+    assert len(win2.editable_texts) == 1
+    reopened_obj = win2.editable_texts[0]
+    assert reopened_obj.text == "Hello Page Zero"
+    assert reopened_obj.rotation == 90.0
+
+
+
 
 
 

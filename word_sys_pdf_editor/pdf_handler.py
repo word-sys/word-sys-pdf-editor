@@ -722,13 +722,41 @@ def extract_editable_text(doc, page_index):
                         if line_dir and (abs(line_dir[0] - 1.0) > 1e-3 or abs(line_dir[1]) > 1e-3):
                             line_rot = round(math.degrees(math.atan2(line_dir[1], line_dir[0])), 1) % 360.0
 
+                        if line_rot != 0.0:
+                            cx = (min_x + max_x) / 2.0
+                            cy = (min_y + max_y) / 2.0
+                            rad = math.radians(-line_rot)
+                            cos_a = math.cos(rad)
+                            sin_a = math.sin(rad)
+                            def _unrot_pt(px, py):
+                                dx = px - cx
+                                dy = py - cy
+                                return (dx * cos_a - dy * sin_a + cx, dx * sin_a + dy * cos_a + cy)
+
+                            unrot_pts = []
+                            for c in (non_space if non_space else all_chars):
+                                cb = c.get("bbox", [0, 0, 0, 0])
+                                for px, py in [(cb[0], cb[1]), (cb[2], cb[1]), (cb[2], cb[3]), (cb[0], cb[3])]:
+                                    unrot_pts.append(_unrot_pt(px, py))
+                            if unrot_pts:
+                                u_min_x = min(p[0] for p in unrot_pts)
+                                u_min_y = min(p[1] for p in unrot_pts)
+                                u_max_x = max(p[0] for p in unrot_pts)
+                                u_max_y = max(p[1] for p in unrot_pts)
+                                bbox = [u_min_x, u_min_y, u_max_x, u_max_y]
+
+                            unrot_orig = _unrot_pt(orig_origin[0], orig_origin[1])
+                            baseline_val = unrot_orig[1]
+                        else:
+                            baseline_val = orig_origin[1]
+
                         editable = EditableText(
                             x=bbox[0], y=bbox[1], text=combined_text,
                             font_size=first_span.get("size", 11) if first_span else 11,
                             font_family=first_span.get("font", "Liberation Sans") if first_span else "Liberation Sans",
                             color=first_span.get("color", 0) if first_span else 0,
                             span_data=span_data,
-                            baseline=orig_origin[1],
+                            baseline=baseline_val,
                             rotation=line_rot
                         )
                         editable.bbox = tuple(bbox)
@@ -736,15 +764,31 @@ def extract_editable_text(doc, page_index):
                         editable.original_baseline = editable.baseline
                         editable.original_rotation = editable.rotation
                         editable.page_number = page_index
-                        editable.char_boxes = [
-                            {
-                                "char": c.get("c", ""),
-                                "bbox": tuple(c.get("bbox", [0, 0, 0, 0])),
-                                "origin": tuple(c.get("origin", (c.get("bbox", [0, 0])[0], orig_origin[1]))),
-                                "synthetic": bool(c.get("synthetic", False)),
-                            }
-                            for c in all_chars
-                        ]
+                        if line_rot != 0.0:
+                            editable.char_boxes = [
+                                {
+                                    "char": c.get("c", ""),
+                                    "bbox": (
+                                        min(_unrot_pt(c["bbox"][0], c["bbox"][1])[0], _unrot_pt(c["bbox"][2], c["bbox"][1])[0], _unrot_pt(c["bbox"][2], c["bbox"][3])[0], _unrot_pt(c["bbox"][0], c["bbox"][3])[0]),
+                                        min(_unrot_pt(c["bbox"][0], c["bbox"][1])[1], _unrot_pt(c["bbox"][2], c["bbox"][1])[1], _unrot_pt(c["bbox"][2], c["bbox"][3])[1], _unrot_pt(c["bbox"][0], c["bbox"][3])[1]),
+                                        max(_unrot_pt(c["bbox"][0], c["bbox"][1])[0], _unrot_pt(c["bbox"][2], c["bbox"][1])[0], _unrot_pt(c["bbox"][2], c["bbox"][3])[0], _unrot_pt(c["bbox"][0], c["bbox"][3])[0]),
+                                        max(_unrot_pt(c["bbox"][0], c["bbox"][1])[1], _unrot_pt(c["bbox"][2], c["bbox"][1])[1], _unrot_pt(c["bbox"][2], c["bbox"][3])[1], _unrot_pt(c["bbox"][0], c["bbox"][3])[1])
+                                    ) if c.get("bbox") else (0, 0, 0, 0),
+                                    "origin": _unrot_pt(c.get("origin", (c.get("bbox", [0, 0])[0], orig_origin[1]))[0], c.get("origin", (c.get("bbox", [0, 0])[0], orig_origin[1]))[1]),
+                                    "synthetic": bool(c.get("synthetic", False)),
+                                }
+                                for c in all_chars
+                            ]
+                        else:
+                            editable.char_boxes = [
+                                {
+                                    "char": c.get("c", ""),
+                                    "bbox": tuple(c.get("bbox", [0, 0, 0, 0])),
+                                    "origin": tuple(c.get("origin", (c.get("bbox", [0, 0])[0], orig_origin[1]))),
+                                    "synthetic": bool(c.get("synthetic", False)),
+                                }
+                                for c in all_chars
+                            ]
                         editable.font_properties = decompose_font_name(
                             editable.font_family_original,
                             flags=first_span.get("flags", 0) if first_span else 0
@@ -1516,12 +1560,45 @@ def extract_editable_images(doc, page_index):
                         print(f"DEBUG: Could not extract image data for xref {xref}")
                         continue
                     
+                    img_rot = 0.0
+                    transform = img_info.get('transform')
+                    if transform and len(transform) >= 4:
+                        try:
+                            a, b = float(transform[0]), float(transform[1])
+                            if abs(b) > 1e-3 or abs(a - round(a)) > 1e-3 or a < 0:
+                                calc_ang = round(math.degrees(math.atan2(-b, a)), 1) % 360.0
+                                if 0.5 < calc_ang < 359.5:
+                                    img_rot = calc_ang
+                        except Exception:
+                            img_rot = 0.0
+
+                    if img_rot != 0.0:
+                        cx = (rect.x0 + rect.x1) / 2.0
+                        cy = (rect.y0 + rect.y1) / 2.0
+                        rad = math.radians(-img_rot)
+                        cos_a = math.cos(rad)
+                        sin_a = math.sin(rad)
+                        corners = [(rect.x0, rect.y0), (rect.x1, rect.y0), (rect.x1, rect.y1), (rect.x0, rect.y1)]
+                        unrot_corners = []
+                        for px, py in corners:
+                            dx = px - cx
+                            dy = py - cy
+                            unrot_corners.append((dx * cos_a - dy * sin_a + cx, dx * sin_a + dy * cos_a + cy))
+                        img_bbox = (
+                            min(p[0] for p in unrot_corners),
+                            min(p[1] for p in unrot_corners),
+                            max(p[0] for p in unrot_corners),
+                            max(p[1] for p in unrot_corners),
+                        )
+                    else:
+                        img_bbox = (rect.x0, rect.y0, rect.x1, rect.y1)
+
                     image_obj = EditableImage(
-                        bbox=(rect.x0, rect.y0, rect.x1, rect.y1),
+                        bbox=img_bbox,
                         page_number=page_index,
                         xref=xref,
                         image_bytes=image_bytes,
-                        rotation=0.0
+                        rotation=img_rot
                     )
                     editable_images.append(image_obj)
                 except Exception as extract_error:
