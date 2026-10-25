@@ -78,6 +78,11 @@ def create_mock_window(doc):
     window._toggle_word_style = PdfEditorWindow._toggle_word_style.__get__(window, PdfEditorWindow)
     window.on_text_format_changed = PdfEditorWindow.on_text_format_changed.__get__(window, PdfEditorWindow)
     window.get_selected_word_bbox = PdfEditorWindow.get_selected_word_bbox.__get__(window, PdfEditorWindow)
+    window._isolate_selected_word_span = PdfEditorWindow._isolate_selected_word_span.__get__(window, PdfEditorWindow)
+    window.on_rotate_object_cw_clicked = PdfEditorWindow.on_rotate_object_cw_clicked.__get__(window, PdfEditorWindow)
+    window.on_object_rotation_spin_changed = PdfEditorWindow.on_object_rotation_spin_changed.__get__(window, PdfEditorWindow)
+    window._update_rotation_controls = MagicMock()
+    window._update_text_format_controls = MagicMock()
 
     return window, session
 
@@ -362,4 +367,245 @@ def test_full_text_format_changed_no_unbound_local_error():
     assert t.font_size == 14.0
     assert t.is_bold is True
     assert t.color == (0.0, 0.0, 1.0)
+
+
+def test_moved_text_single_word_hit_test_and_bbox():
+    """Verify that moving a text object dynamically synchronizes char_boxes and word selection bbox."""
+    doc = fitz.open()
+    doc.new_page(width=500, height=500)
+    window, session = create_mock_window(doc)
+
+    t = EditableText(text="Hello World", x=50.0, y=50.0, font_size=12.0, page_number=0)
+    # Populate char_boxes at original location [50..120, 50..62]
+    cbs = []
+    cx = 50.0
+    for idx, char in enumerate("Hello World"):
+        w = 4.0 if char == ' ' else 7.0
+        cbs.append({
+            "char": char,
+            "bbox": (cx, 50.0, cx + w, 62.0),
+            "origin": (cx, 60.0),
+            "index": idx
+        })
+        cx += w
+    t.char_boxes = cbs
+    t.bbox = (50.0, 50.0, cx, 62.0)
+    session.editable_texts = [t]
+
+    # Move text object by (100, 150)
+    new_bbox = (150.0, 200.0, cx + 100.0, 212.0)
+    t.bbox = new_bbox
+    t.x, t.y = new_bbox[0], new_bbox[1]
+
+    # Hit test at old location must fail, hit test at new location must succeed
+    assert t.hit_test_char(55.0, 55.0) is None
+    hit = t.hit_test_char(155.0, 205.0)
+    assert hit is not None
+    assert hit["char"] == "H"
+
+    # Select word "World" (indices 6 to 11)
+    window.selected_text = t
+    window.selected_word = "World"
+    window.selected_word_start_char = 6
+    window.selected_word_end_char = 11
+    window.word_selection_mode = True
+
+    w_bbox = window.get_selected_word_bbox()
+    assert w_bbox is not None
+    # Word bbox must be at new moved location [>= 150.0, >= 200.0]
+    assert w_bbox[0] >= 150.0
+    assert w_bbox[1] >= 200.0
+    assert w_bbox[3] <= 213.0
+
+    # Split at range must produce spans at the new moved coordinates
+    spans = t.split_at_range(6, 11)
+    assert len(spans) == 2
+    pre_span, mid_span = spans[0], spans[1]
+    assert pre_span.bbox[0] == pytest.approx(150.0, abs=0.1)
+    assert mid_span.bbox[1] == pytest.approx(200.0, abs=0.1)
+
+
+def test_rotated_text_single_word_split_alignment():
+    """Verify that splitting a rotated text object produces spans that align on the exact visual line."""
+    import math
+    doc = fitz.open()
+    doc.new_page(width=500, height=500)
+
+    for rot in [90.0, 180.0, 270.0]:
+        t = EditableText(text="Rotated Paragraph Text", x=100.0, y=100.0, font_size=12.0, rotation=rot, page_number=0)
+        cbs = []
+        cx = 100.0
+        for idx, char in enumerate("Rotated Paragraph Text"):
+            w = 4.0 if char == ' ' else 7.0
+            cbs.append({
+                "char": char,
+                "bbox": (cx, 100.0, cx + w, 114.0),
+                "origin": (cx, 111.0),
+                "index": idx
+            })
+            cx += w
+        t.char_boxes = cbs
+        t.bbox = (100.0, 100.0, cx, 114.0)
+
+        p_cx = (t.bbox[0] + t.bbox[2]) / 2.0
+        p_cy = (t.bbox[1] + t.bbox[3]) / 2.0
+
+        # Split "Paragraph" (index 8 to 17)
+        spans = t.split_at_range(8, 17, compensate_rotation=True)
+        assert len(spans) == 3
+        pre, mid, post = spans[0], spans[1], spans[2]
+        assert pre.text == "Rotated "
+        assert mid.text == "Paragraph"
+        assert post.text == " Text"
+
+        # Check visual position of characters in each span vs parent
+        for span, start_idx in [(pre, 0), (mid, 8), (post, 17)]:
+            s_cx = (span.bbox[0] + span.bbox[2]) / 2.0
+            s_cy = (span.bbox[1] + span.bbox[3]) / 2.0
+            for cb in span.char_boxes:
+                char_idx = start_idx + cb["index"]
+                orig_cb = t.char_boxes[char_idx]
+
+                # Visual pos in parent
+                pt_p = fitz.Point((orig_cb["bbox"][0] + orig_cb["bbox"][2]) / 2.0, (orig_cb["bbox"][1] + orig_cb["bbox"][3]) / 2.0)
+                vis_p = (pt_p - fitz.Point(p_cx, p_cy)) * fitz.Matrix(rot) + fitz.Point(p_cx, p_cy)
+
+                # Visual pos in span
+                pt_s = fitz.Point((cb["bbox"][0] + cb["bbox"][2]) / 2.0, (cb["bbox"][1] + cb["bbox"][3]) / 2.0)
+                vis_s = (pt_s - fitz.Point(s_cx, s_cy)) * fitz.Matrix(rot) + fitz.Point(s_cx, s_cy)
+
+                diff = abs(vis_p.x - vis_s.x) + abs(vis_p.y - vis_s.y)
+                assert diff < 0.05, f"Rot {rot} char {orig_cb['char']} misaligned by {diff} pt"
+
+
+def test_rotation_handle_stalk_detection_for_editable_text():
+    """Verify that _find_resize_handle_at_pos detects the rotation handle stalk for EditableText."""
+    doc = fitz.open()
+    doc.new_page(width=500, height=500)
+    window, session = create_mock_window(doc)
+
+    t = EditableText(text="Hello", x=100.0, y=100.0, font_size=12.0, page_number=0)
+    t.bbox = (100.0, 100.0, 150.0, 115.0)
+
+    # Bind _find_resize_handle_at_pos
+    window._find_resize_handle_at_pos = PdfEditorWindow._find_resize_handle_at_pos.__get__(window, PdfEditorWindow)
+    window._visual_to_unrotated_page_coords = PdfEditorWindow._visual_to_unrotated_page_coords.__get__(window, PdfEditorWindow)
+    window.zoom_level = 1.0
+    window.current_pdf_page_width = 500
+    window.current_pdf_page_height = 500
+    window.pdf_view.get_allocated_width.return_value = 500
+    window.pdf_view.get_allocated_height.return_value = 500
+
+    # Rotation stalk is centered at x = (100 + 150) / 2 = 125, y = 100 - padding - 22 = 75
+    # Hit testing at (125, 75)
+    handle = window._find_resize_handle_at_pos(125.0, 75.0, t)
+    assert handle == "rotate"
+
+
+def test_single_word_rotation_isolates_only_that_word():
+    """Verify that rotating a selected word isolates it and rotates ONLY that word, leaving the paragraph untouched."""
+    doc = fitz.open()
+    doc.new_page(width=500, height=500)
+    window, session = create_mock_window(doc)
+
+    t = EditableText(text="KONU: ODEV PART-2", x=50.0, y=50.0, font_size=12.0, page_number=0)
+    # Populate char boxes
+    cbs = []
+    cx = 50.0
+    for idx, c in enumerate("KONU: ODEV PART-2"):
+        w = 4.0 if c == ' ' else 7.0
+        cbs.append({
+            "char": c,
+            "bbox": (cx, 50.0, cx + w, 64.0),
+            "origin": (cx, 61.0),
+            "index": idx
+        })
+        cx += w
+    t.char_boxes = cbs
+    t.bbox = (50.0, 50.0, cx, 64.0)
+    session.editable_texts = [t]
+
+    # Middle click selects "ODEV" (start_char=6, end_char=10)
+    window.selected_text = t
+    window.selected_word = "ODEV"
+    window.selected_word_start_char = 6
+    window.selected_word_end_char = 10
+    window.word_selection_mode = True
+
+    # User clicks rotate 90 degrees CW
+    window.on_rotate_object_cw_clicked()
+
+    # Original paragraph should be split into 3 spans: pre, mid, post
+    assert len(session.editable_texts) == 3
+    pre, mid, post = session.editable_texts
+    assert pre.text == "KONU: "
+    assert mid.text == "ODEV"
+    assert post.text == " PART-2"
+
+    # Crucial assertion: ONLY mid ("ODEV") is rotated 90 degrees!
+    assert mid.rotation == 90.0
+    # pre and post remain horizontal at 0 degrees!
+    assert pre.rotation == 0.0
+    assert post.rotation == 0.0
+
+    # Undo must restore original un-rotated, un-split paragraph
+    window.undo_manager.undo() # undoes rotation
+    window.undo_manager.undo() # undoes split
+    assert len(session.editable_texts) == 1
+    assert session.editable_texts[0].text == "KONU: ODEV PART-2"
+    assert session.editable_texts[0].rotation == 0.0
+
+
+def test_single_word_selection_has_its_own_rotation_stalk():
+    """Verify that in word_selection_mode, the rotation stalk handle is located right on the word's box."""
+    doc = fitz.open()
+    doc.new_page(width=500, height=500)
+    window, session = create_mock_window(doc)
+
+    t = EditableText(text="KONU: ODEV PART-2", x=50.0, y=100.0, font_size=12.0, page_number=0)
+    cbs = []
+    cx = 50.0
+    for idx, c in enumerate("KONU: ODEV PART-2"):
+        w = 4.0 if c == ' ' else 8.0
+        cbs.append({
+            "char": c,
+            "bbox": (cx, 100.0, cx + w, 115.0),
+            "origin": (cx, 112.0),
+            "index": idx
+        })
+        cx += w
+    t.char_boxes = cbs
+    t.bbox = (50.0, 100.0, cx, 115.0)
+
+    # Word "ODEV" is indices 6 to 10:
+    # 6 chars ("KONU: ") = 5*8 + 4 = 44 -> x from 94 to 94 + 4*8 = 126
+    # Word center is ~110.0
+    window.selected_text = t
+    window.selected_word = "ODEV"
+    window.selected_word_start_char = 6
+    window.selected_word_end_char = 10
+    window.word_selection_mode = True
+
+    w_bbox = window.get_selected_word_bbox()
+    assert w_bbox is not None
+    word_cx = (w_bbox[0] + w_bbox[2]) / 2.0
+    word_stalk_y = w_bbox[1] - 3.0 - 22.0 # rect_y - stalk_len
+
+    window._find_resize_handle_at_pos = PdfEditorWindow._find_resize_handle_at_pos.__get__(window, PdfEditorWindow)
+    window._visual_to_unrotated_page_coords = PdfEditorWindow._visual_to_unrotated_page_coords.__get__(window, PdfEditorWindow)
+    window.zoom_level = 1.0
+    window.current_pdf_page_width = 500
+    window.current_pdf_page_height = 500
+    window.pdf_view.get_allocated_width.return_value = 500
+    window.pdf_view.get_allocated_height.return_value = 500
+
+    # Test rotation handle at the word's stalk tip
+    handle = window._find_resize_handle_at_pos(word_cx, word_stalk_y, t)
+    assert handle == "rotate"
+
+    # Far away from the word (e.g. above "KONU:") should NOT detect the word's rotation stalk
+    handle_away = window._find_resize_handle_at_pos(60.0, word_stalk_y, t)
+    assert handle_away is None
+
+
 

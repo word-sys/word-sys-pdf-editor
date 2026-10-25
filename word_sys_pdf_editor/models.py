@@ -332,12 +332,67 @@ class EditableText:
         """Set rotation in degrees (0-360)."""
         self.rotation = float(angle) % 360.0
 
+    def sync_char_boxes_to_bbox(self):
+        """Synchronize character bounding boxes with self.bbox if the object has moved."""
+        if not self.char_boxes or not self.bbox:
+            return
+        cb_min_x = min(cb["bbox"][0] for cb in self.char_boxes)
+        cb_min_y = min(cb["bbox"][1] for cb in self.char_boxes)
+        dx = self.bbox[0] - cb_min_x
+        dy = self.bbox[1] - cb_min_y
+        if abs(dx) > 1e-4 or abs(dy) > 1e-4:
+            for cb in self.char_boxes:
+                b = cb["bbox"]
+                cb["bbox"] = (b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy)
+                if "visual_bbox" in cb:
+                    vb = cb["visual_bbox"]
+                    cb["visual_bbox"] = (vb[0] + dx, vb[1] + dy, vb[2] + dx, vb[3] + dy)
+                if "origin" in cb:
+                    orig = cb["origin"]
+                    cb["origin"] = (orig[0] + dx, orig[1] + dy)
+
+    def compensate_for_rotation(self, parent_center: Tuple[float, float], parent_rotation: float):
+        """Compensate bounding box and character boxes so span rotates around its own center
+        while aligning exactly with the parent rotated text."""
+        rot = float(parent_rotation) % 360.0
+        if rot == 0.0 or not self.bbox:
+            return
+        sc_x = (self.bbox[0] + self.bbox[2]) / 2.0
+        sc_y = (self.bbox[1] + self.bbox[3]) / 2.0
+        dc_x = parent_center[0] - sc_x
+        dc_y = parent_center[1] - sc_y
+        rad = math.radians(rot)
+        rdx = dc_x * math.cos(rad) - dc_y * math.sin(rad)
+        rdy = dc_x * math.sin(rad) + dc_y * math.cos(rad)
+        sh_x = dc_x - rdx
+        sh_y = dc_y - rdy
+
+        if abs(sh_x) > 1e-4 or abs(sh_y) > 1e-4:
+            self.bbox = (self.bbox[0] + sh_x, self.bbox[1] + sh_y, self.bbox[2] + sh_x, self.bbox[3] + sh_y)
+            self.original_bbox = self.bbox
+            self.x = self.bbox[0]
+            self.y = self.bbox[1]
+            if hasattr(self, 'baseline') and self.baseline is not None:
+                self.baseline += sh_y
+                self.original_baseline = self.baseline
+            if self.char_boxes:
+                for cb in self.char_boxes:
+                    b = cb["bbox"]
+                    cb["bbox"] = (b[0] + sh_x, b[1] + sh_y, b[2] + sh_x, b[3] + sh_y)
+                    if "visual_bbox" in cb:
+                        vb = cb["visual_bbox"]
+                        cb["visual_bbox"] = (vb[0] + sh_x, vb[1] + sh_y, vb[2] + sh_x, vb[3] + sh_y)
+                    if "origin" in cb:
+                        orig = cb["origin"]
+                        cb["origin"] = (orig[0] + sh_x, orig[1] + sh_y)
+
     def hit_test_char(self, x: float, y: float, tolerance: float = 2.0) -> Optional[Dict[str, Any]]:
         """Hit-test a point against the character bounding boxes in this EditableText object.
         
         Returns the closest matching character dict with keys 'char', 'bbox', 'origin', 'index'
         if within tolerance, else None.
         """
+        self.sync_char_boxes_to_bbox()
         if not self.char_boxes:
             return None
             
@@ -373,8 +428,17 @@ class EditableText:
 
     def get_caret_index_at_pos(self, x: float, y: Optional[float] = None) -> int:
         """Find the nearest caret insertion index (0 to len(text)) for a given x coordinate."""
+        self.sync_char_boxes_to_bbox()
         if not self.text:
             return 0
+        rot = getattr(self, 'rotation', 0.0) % 360.0
+        if rot != 0.0 and self.bbox and y is not None:
+            cx = (self.bbox[0] + self.bbox[2]) / 2.0
+            cy = (self.bbox[1] + self.bbox[3]) / 2.0
+            rad = math.radians(-rot)
+            cos_a = math.cos(rad)
+            sin_a = math.sin(rad)
+            x = cx + (x - cx) * cos_a - (y - cy) * sin_a
         if not self.char_boxes:
             if not self.bbox or (self.bbox[2] - self.bbox[0]) <= 0:
                 return len(self.text)
@@ -447,12 +511,13 @@ class EditableText:
                 return match.group(0)
         return None
 
-    def split_at_range(self, start_char: int, end_char: int) -> List['EditableText']:
+    def split_at_range(self, start_char: int, end_char: int, compensate_rotation: bool = True) -> List['EditableText']:
         """Split text into segments before, inside, and after a character selection range.
         
         Calculates sub-pixel accurate bounding boxes using exact char_boxes when available,
         or Pango layout font metrics as fallback.
         """
+        self.sync_char_boxes_to_bbox()
         text = self.text
         if start_char < 0:
             start_char = 0
@@ -512,6 +577,13 @@ class EditableText:
             post_x0 = orig_x0 + pre_w + mid_w if not has_cbs else (min(cb["bbox"][0] for cb in post_cbs) if post_cbs else orig_x0 + mid_w)
             post = _make_part(text[end_char:], post_cbs, post_x0, post_w)
             parts.append(post)
+
+        rot = getattr(self, 'rotation', 0.0) % 360.0
+        if compensate_rotation and rot != 0.0 and self.bbox:
+            p_cx = (self.bbox[0] + self.bbox[2]) / 2.0
+            p_cy = (self.bbox[1] + self.bbox[3]) / 2.0
+            for part in parts:
+                part.compensate_for_rotation((p_cx, p_cy), rot)
 
         return parts
 

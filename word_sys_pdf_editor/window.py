@@ -5380,9 +5380,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 rgba.parse("#3584e4")
 
             x1, y1, x2, y2 = selected_obj.bbox
-            if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
+            if bool(getattr(self, 'word_selection_mode', False)) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
                 w_bbox = self.get_selected_word_bbox()
-                if w_bbox:
+                if isinstance(w_bbox, (tuple, list)) and len(w_bbox) == 4:
                     x1, y1, x2, y2 = w_bbox
 
             padding = 3.0 / self.zoom_level
@@ -5394,8 +5394,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.save()
             rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
             if rot != 0.0:
-                cx = rect_x + rect_w / 2.0
-                cy = rect_y + rect_h / 2.0
+                if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
+                    cx = (selected_obj.bbox[0] + selected_obj.bbox[2]) / 2.0
+                    cy = (selected_obj.bbox[1] + selected_obj.bbox[3]) / 2.0
+                else:
+                    cx = rect_x + rect_w / 2.0
+                    cy = rect_y + rect_h / 2.0
                 cr.translate(cx, cy)
                 cr.rotate(math.radians(rot))
                 cr.translate(-cx, -cy)
@@ -5414,9 +5418,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.close_path()
             cr.stroke()
 
-            # Stalk rotation handle
+            # Stalk rotation handle (available on all rotatable objects including EditableText and single word selection)
             is_form = isinstance(selected_obj, AcroFormField) or hasattr(selected_obj, 'field_name') or isinstance(selected_obj, MeasurementObject)
-            if not isinstance(selected_obj, EditableText) and not is_form:
+            if not is_form:
                 stalk_len = 22.0 / self.zoom_level
                 stalk_x = rect_x + rect_w / 2.0
                 stalk_base_y = rect_y
@@ -7578,6 +7582,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return None
         
         x1, y1, x2, y2 = selected_obj.bbox
+        if bool(getattr(self, 'word_selection_mode', False)) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
+            w_bbox = self.get_selected_word_bbox()
+            if isinstance(w_bbox, (tuple, list)) and len(w_bbox) == 4:
+                x1, y1, x2, y2 = w_bbox
         obj_page = getattr(selected_obj, 'page_number', self.current_page_index)
         rect = None
         if hasattr(self, 'get_page_canvas_rect'):
@@ -7610,8 +7618,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         rect_h = (y2 - y1) + (2 * padding)
 
         rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
-        cx = rect_x + rect_w / 2.0
-        cy = rect_y + rect_h / 2.0
+        if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
+            cx = (selected_obj.bbox[0] + selected_obj.bbox[2]) / 2.0
+            cy = (selected_obj.bbox[1] + selected_obj.bbox[3]) / 2.0
+        else:
+            cx = rect_x + rect_w / 2.0
+            cy = rect_y + rect_h / 2.0
 
         if rot != 0.0:
             px, py = pdf_handler.rotate_point(unrot_x, unrot_y, cx, cy, -rot)
@@ -7621,7 +7633,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         is_form_field = isinstance(selected_obj, AcroFormField) or hasattr(selected_obj, 'field_name')
         if not is_form_field:
             stalk_len = 22.0 / self.zoom_level
-            rot_hx = cx
+            rot_hx = rect_x + rect_w / 2.0
             rot_hy = rect_y - stalk_len
             rot_tolerance = 8.0 / self.zoom_level
             if math.hypot(px - rot_hx, py - rot_hy) <= rot_tolerance:
@@ -8197,6 +8209,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
         if not selected_obj:
             return
+        if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
+            selected_obj = self._isolate_selected_word_span()
 
         old_rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
         new_rot = (old_rot + 90.0) % 360.0
@@ -8215,6 +8229,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
         if not selected_obj:
             return
+        if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
+            selected_obj = self._isolate_selected_word_span()
 
         old_rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
         new_rot = (old_rot - 90.0) % 360.0
@@ -8233,6 +8249,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
         if not selected_obj:
             return
+        if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
+            selected_obj = self._isolate_selected_word_span()
 
         old_rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
         if old_rot == 0.0:
@@ -8252,6 +8270,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         selected_obj = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
         if not selected_obj:
             return
+        if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
+            selected_obj = self._isolate_selected_word_span()
 
         old_rot = getattr(selected_obj, 'rotation', 0.0) % 360.0
         new_rot = float(spin_button.get_value()) % 360.0
@@ -10777,7 +10797,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 
                 target_obj = self.inline_editor_text_obj
                 target_obj.text = current_text
-                spans = target_obj.split_at_range(start_char, end_char)
+                spans = target_obj.split_at_range(start_char, end_char, compensate_rotation=False)
                 
                 if len(spans) > 1:
                     mid_index = 0 if start_char == 0 else 1
@@ -10790,6 +10810,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     mid_span.is_underline = is_underline
                     mid_span.is_strikethrough = is_strikethrough
                     mid_span.alignment = alignment
+
+                    new_mid_w = measure_text_width(
+                        mid_span.text, mid_span.font_family_base, mid_span.font_size,
+                        mid_span.is_bold, mid_span.is_italic, mid_span
+                    )
+                    mx0, my0, mx1, my1 = mid_span.bbox
+                    mid_span.bbox = (mx0, my0, mx0 + new_mid_w, my1)
+                    mid_span.original_bbox = mid_span.bbox
+                    dx = (mx0 + new_mid_w) - mx1
+
+                    for s_idx in range(mid_index + 1, len(spans)):
+                        post_span = spans[s_idx]
+                        px0, py0, px1, py1 = post_span.bbox
+                        post_span.bbox = (px0 + dx, py0, px1 + dx, py1)
+                        post_span.original_bbox = post_span.bbox
+                        post_span.x = post_span.bbox[0]
+
+                    rot = getattr(target_obj, 'rotation', 0.0) % 360.0
+                    if rot != 0.0 and target_obj.bbox:
+                        p_cx = (target_obj.bbox[0] + target_obj.bbox[2]) / 2.0
+                        p_cy = (target_obj.bbox[1] + target_obj.bbox[3]) / 2.0
+                        for span in spans:
+                            span.compensate_for_rotation((p_cx, p_cy), rot)
                     
                     target_page_num = getattr(target_obj, 'page_number', self.current_page_index)
                     commands = [DeleteObjectCommand(self, target_obj)]
@@ -10841,7 +10884,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     new_props['is_bold'], new_props['is_italic'], target_obj
                 )
                 x0, y0, x1, y1 = target_obj.bbox
-                new_props['bbox'] = (x0, y0, x0 + new_w, y1)
+                dw = new_w - (x1 - x0)
+                rot = getattr(target_obj, 'rotation', 0.0) % 360.0
+                if rot != 0.0 and abs(dw) > 0.001:
+                    dc_x, dc_y = dw / 2.0, 0.0
+                    rad = math.radians(rot)
+                    rdx = dc_x * math.cos(rad) - dc_y * math.sin(rad)
+                    rdy = dc_x * math.sin(rad) + dc_y * math.cos(rad)
+                    d_x = rdx - dc_x
+                    d_y = rdy - dc_y
+                else:
+                    d_x, d_y = 0.0, 0.0
+
+                new_props['bbox'] = (x0 + d_x, y0 + d_y, x0 + new_w + d_x, y1 + d_y)
+                new_props['x'] = new_props['bbox'][0]
+                new_props['y'] = new_props['bbox'][1]
+                if 'baseline' in new_props and new_props['baseline'] is not None:
+                    new_props['baseline'] += d_y
                 dx = (x0 + new_w) - x1
 
                 orig_w = max(0.1, float(x1 - x0))
@@ -10851,11 +10910,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     for cb in target_obj.char_boxes:
                         ncb = dict(cb)
                         cbx0, cby0, cbx1, cby1 = ncb["bbox"]
-                        ncb["bbox"] = (x0 + (cbx0 - x0) * scale_x, cby0, x0 + (cbx1 - x0) * scale_x, cby1)
+                        ncb["bbox"] = (x0 + d_x + (cbx0 - x0) * scale_x, cby0 + d_y, x0 + d_x + (cbx1 - x0) * scale_x, cby1 + d_y)
                         if "visual_bbox" in ncb:
                             ncb["visual_bbox"] = ncb["bbox"]
                         if "origin" in ncb:
-                            ncb["origin"] = (x0 + (ncb["origin"][0] - x0) * scale_x, ncb["origin"][1])
+                            ncb["origin"] = (x0 + d_x + (ncb["origin"][0] - x0) * scale_x, ncb["origin"][1] + d_y)
                         new_cbs.append(ncb)
                     new_props['char_boxes'] = new_cbs
 
@@ -10907,7 +10966,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_ui_state()
                 return
 
-            spans = target_obj.split_at_range(start_char, end_char)
+            spans = target_obj.split_at_range(start_char, end_char, compensate_rotation=False)
             if len(spans) > 1:
                 mid_index = 0 if start_char == 0 else 1
                 mid_span = spans[mid_index]
@@ -10957,6 +11016,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                 cb["visual_bbox"] = cb["bbox"]
                             if "origin" in cb:
                                 cb["origin"] = (cb["origin"][0] + dx, cb["origin"][1])
+
+                rot = getattr(target_obj, 'rotation', 0.0) % 360.0
+                if rot != 0.0 and target_obj.bbox:
+                    p_cx = (target_obj.bbox[0] + target_obj.bbox[2]) / 2.0
+                    p_cy = (target_obj.bbox[1] + target_obj.bbox[3]) / 2.0
+                    for span in spans:
+                        span.compensate_for_rotation((p_cx, p_cy), rot)
 
                 target_page_num = getattr(target_obj, 'page_number', self.current_page_index)
                 commands = [DeleteObjectCommand(self, target_obj)]
@@ -11980,6 +12046,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.temp_polygon_vertices = []
                 self.last_mouse_page_pos = None
                 self.resize_handle = resize_handle
+                if resize_handle == "rotate" and getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char') and isinstance(selected_obj, EditableText):
+                    selected_obj = self._isolate_selected_word_span()
+
                 self.resize_start_bbox = selected_obj.bbox
                 self.dragged_object = selected_obj
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)
@@ -12480,6 +12549,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         if isinstance(self.dragged_object, EditableText):
             self.dragged_object.baseline = new_y + getattr(self.dragged_object, 'baseline_offset', self.dragged_object.font_size * 0.9)
+            self.dragged_object.sync_char_boxes_to_bbox()
 
             self.selected_text = self.dragged_object
             self.selected_image = None
@@ -12501,6 +12571,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 lt.y = lt_new_y
                 lt.bbox = (lt_new_x, lt_new_y, lt_new_x + lt_w, lt_new_y + lt_h)
                 lt.baseline = lt_new_y + getattr(lt, 'baseline_offset', lt.font_size * 0.9)
+                lt.sync_char_boxes_to_bbox()
             
         elif isinstance(self.dragged_object, EditableShape):
             self.selected_shape = self.dragged_object
@@ -13117,6 +13188,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         old_properties = self.drag_begin_state
         
+        if isinstance(self.dragged_object, EditableText):
+            self.dragged_object.sync_char_boxes_to_bbox()
         new_properties = copy.deepcopy(self.dragged_object.__dict__)
 
         dragged_obj_ref = self.dragged_object
@@ -14221,6 +14294,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not getattr(self, 'word_selection_mode', False) or not self.selected_text:
             return getattr(self, 'selected_word_bbox', None)
         text_obj = self.selected_text
+        if hasattr(text_obj, 'sync_char_boxes_to_bbox'):
+            text_obj.sync_char_boxes_to_bbox()
         start_c = getattr(self, 'selected_word_start_char', -1)
         end_c = getattr(self, 'selected_word_end_char', -1)
         if start_c == -1 or end_c == -1 or start_c >= end_c:
@@ -14248,6 +14323,54 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return (x_start, ty0, x_end, ty1)
 
         return getattr(self, 'selected_word_bbox', None)
+
+    def _isolate_selected_word_span(self):
+        """If in word_selection_mode and the selected word is part of a larger paragraph,
+        split the paragraph into [pre, mid, post] and select mid as an independent EditableText."""
+        if not getattr(self, 'word_selection_mode', False) or not self.selected_text:
+            return self.selected_text
+        start_c = getattr(self, 'selected_word_start_char', -1)
+        end_c = getattr(self, 'selected_word_end_char', -1)
+        text_obj = self.selected_text
+        if start_c == -1 or end_c == -1 or start_c >= end_c:
+            return text_obj
+        if start_c == 0 and end_c == len(text_obj.text):
+            return text_obj
+
+        # Clear pending format change tracking for text_obj to prevent duplicate/ghost edit commands
+        if getattr(self, 'pending_format_change_obj', None) is text_obj:
+            self.pending_format_change_obj = None
+            self.before_format_change_state = None
+
+        spans = text_obj.split_at_range(start_c, end_c, compensate_rotation=True)
+        if len(spans) > 1:
+            mid_index = 0 if start_c == 0 else 1
+            mid_span = spans[mid_index]
+            target_page_num = getattr(text_obj, 'page_number', self.current_page_index)
+            commands = [DeleteObjectCommand(self, text_obj)]
+            for s in spans:
+                s.is_new = True
+                s.is_baked = True
+                s.page_number = target_page_num
+                commands.append(AddObjectCommand(self, s))
+            batch_cmd = CompositeCommand(self, commands)
+            batch_cmd.execute()
+            if self.undo_manager:
+                self.undo_manager.record(batch_cmd)
+
+            self.selected_text = mid_span
+            self.pending_format_change_obj = mid_span
+            self.before_format_change_state = copy.deepcopy(mid_span.__dict__)
+            self.selected_word_start_char = 0
+            self.selected_word_end_char = len(mid_span.text)
+            self.selected_word_bbox = mid_span.bbox
+            self.word_selection_mode = False
+            if hasattr(self, '_update_rotation_controls'):
+                self._update_rotation_controls(mid_span)
+            if hasattr(self, '_update_text_format_controls'):
+                self._update_text_format_controls(mid_span)
+            return mid_span
+        return text_obj
 
     def _toggle_word_style(self, text_obj, style_name: str):
         """Toggle typography formatting (bold, italic, underline, strikethrough) for selected word."""
@@ -14280,7 +14403,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 new_props['is_bold'], new_props['is_italic'], text_obj
             )
             x0, y0, x1, y1 = text_obj.bbox
-            new_props['bbox'] = (x0, y0, x0 + new_w, y1)
+            dw = new_w - (x1 - x0)
+            rot = getattr(text_obj, 'rotation', 0.0) % 360.0
+            if rot != 0.0 and abs(dw) > 0.001:
+                dc_x, dc_y = dw / 2.0, 0.0
+                rad = math.radians(rot)
+                rdx = dc_x * math.cos(rad) - dc_y * math.sin(rad)
+                rdy = dc_x * math.sin(rad) + dc_y * math.cos(rad)
+                d_x = rdx - dc_x
+                d_y = rdy - dc_y
+            else:
+                d_x, d_y = 0.0, 0.0
+
+            new_props['bbox'] = (x0 + d_x, y0 + d_y, x0 + new_w + d_x, y1 + d_y)
+            new_props['x'] = new_props['bbox'][0]
+            new_props['y'] = new_props['bbox'][1]
+            if 'baseline' in new_props and new_props['baseline'] is not None:
+                new_props['baseline'] += d_y
             dx = (x0 + new_w) - x1
 
             orig_w = max(0.1, float(x1 - x0))
@@ -14290,11 +14429,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 for cb in text_obj.char_boxes:
                     ncb = dict(cb)
                     cbx0, cby0, cbx1, cby1 = ncb["bbox"]
-                    ncb["bbox"] = (x0 + (cbx0 - x0) * scale_x, cby0, x0 + (cbx1 - x0) * scale_x, cby1)
+                    ncb["bbox"] = (x0 + d_x + (cbx0 - x0) * scale_x, cby0 + d_y, x0 + d_x + (cbx1 - x0) * scale_x, cby1 + d_y)
                     if "visual_bbox" in ncb:
                         ncb["visual_bbox"] = ncb["bbox"]
                     if "origin" in ncb:
-                        ncb["origin"] = (x0 + (ncb["origin"][0] - x0) * scale_x, ncb["origin"][1])
+                        ncb["origin"] = (x0 + d_x + (ncb["origin"][0] - x0) * scale_x, ncb["origin"][1] + d_y)
                     new_cbs.append(ncb)
                 new_props['char_boxes'] = new_cbs
 
@@ -14348,7 +14487,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._update_ui_state()
             return
 
-        spans = text_obj.split_at_range(start_char, end_char)
+        spans = text_obj.split_at_range(start_char, end_char, compensate_rotation=False)
         if len(spans) > 1:
             mid_index = 0 if start_char == 0 else 1
             mid_span = spans[mid_index]
@@ -14395,6 +14534,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             cb["visual_bbox"] = cb["bbox"]
                         if "origin" in cb:
                             cb["origin"] = (cb["origin"][0] + dx, cb["origin"][1])
+
+            rot = getattr(text_obj, 'rotation', 0.0) % 360.0
+            if rot != 0.0 and text_obj.bbox:
+                p_cx = (text_obj.bbox[0] + text_obj.bbox[2]) / 2.0
+                p_cy = (text_obj.bbox[1] + text_obj.bbox[3]) / 2.0
+                for s in spans:
+                    s.compensate_for_rotation((p_cx, p_cy), rot)
 
             target_page_num = getattr(text_obj, 'page_number', self.current_page_index)
             commands = [DeleteObjectCommand(self, text_obj)]
@@ -14461,7 +14607,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             clicked_text = self._find_text_at_pos(page_x, page_y)
             if clicked_text:
                 self.selected_text = clicked_text
+                if hasattr(clicked_text, 'sync_char_boxes_to_bbox'):
+                    clicked_text.sync_char_boxes_to_bbox()
                 unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x, page_y)
+                
+                rot = getattr(clicked_text, 'rotation', 0.0) % 360.0
+                if rot != 0.0 and clicked_text.bbox:
+                    cx = (clicked_text.bbox[0] + clicked_text.bbox[2]) / 2.0
+                    cy = (clicked_text.bbox[1] + clicked_text.bbox[3]) / 2.0
+                    obj_unrot_x, obj_unrot_y = pdf_handler.rotate_point(unrot_x, unrot_y, cx, cy, -rot)
+                else:
+                    obj_unrot_x, obj_unrot_y = unrot_x, unrot_y
                 
                 # Stage 1: Hit-test exact character boxes
                 char_hit = clicked_text.hit_test_char(unrot_x, unrot_y, tolerance=3.0)
@@ -14499,7 +14655,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             pre_w = measure_text_width(clicked_text.text[:found_idx], clicked_text.font_family_base, clicked_text.font_size, clicked_text.is_bold, clicked_text.is_italic, clicked_text)
                             word_w = measure_text_width(w_text, clicked_text.font_family_base, clicked_text.font_size, clicked_text.is_bold, clicked_text.is_italic, clicked_text)
                             cx = (clicked_text.bbox[0] if clicked_text.bbox else clicked_text.x) + pre_w + word_w / 2.0
-                        dist = abs(unrot_x - cx)
+                        dist = abs(obj_unrot_x - cx)
                         if dist < best_dist:
                             best_dist = dist
                             best_start = found_idx
@@ -14518,7 +14674,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         return
 
                 # Stage 3: Caret index projection fallback
-                caret_idx = clicked_text.get_caret_index_at_pos(unrot_x, unrot_y)
+                caret_idx = clicked_text.get_caret_index_at_pos(obj_unrot_x, obj_unrot_y)
                 word, s_pos, e_pos = self._extract_word_at_position(clicked_text.text, caret_idx)
                 if word:
                     self.selected_word = word
