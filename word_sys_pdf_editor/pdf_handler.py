@@ -120,34 +120,113 @@ def transform_bbox_page_rot(bbox, w: float, h: float, angle_delta: int):
         return (y1, w - x2, y2, w - x1)
     return (x1, y1, x2, y2)
 
-def get_page_cairo_surface(doc, page_index, zoom_level):
-    """Get or render cached Cairo ImageSurface for the given page and zoom level."""
+def pixmap_to_cairo_surface(pix):
+    """Convert PyMuPDF Pixmap directly to Cairo ImageSurface via zero-copy / single-pass NumPy transfer."""
+    if pix is None or pix.width <= 0 or pix.height <= 0:
+        return None, None
+
+    try:
+        samples_buf = pix.samples_mv if hasattr(pix, 'samples_mv') else pix.samples
+        w, h, n, stride = pix.width, pix.height, pix.n, pix.stride
+        raw_arr = np.frombuffer(samples_buf, dtype=np.uint8)
+
+        if stride != w * n:
+            raw_arr = raw_arr.reshape((h, stride))[:, :w * n].reshape((h, w, n))
+        elif n > 1:
+            raw_arr = raw_arr.reshape((h, w, n))
+        else:
+            raw_arr = raw_arr.reshape((h, w))
+
+        cairo_stride = cairo.ImageSurface.format_stride_for_width(cairo.FORMAT_RGB24, w)
+
+        if pix.alpha:
+            fmt = cairo.FORMAT_ARGB32
+            bgra = np.empty((h, w, 4), dtype=np.uint8)
+            if n == 4:
+                # RGBA -> BGRA (PyMuPDF already premultiplies alpha)
+                bgra[..., 0] = raw_arr[..., 2] # Blue
+                bgra[..., 1] = raw_arr[..., 1] # Green
+                bgra[..., 2] = raw_arr[..., 0] # Red
+                bgra[..., 3] = raw_arr[..., 3] # Alpha
+            elif n == 2:
+                # Gray + Alpha -> BGRA
+                gray = raw_arr[..., 0]
+                bgra[..., 0] = gray
+                bgra[..., 1] = gray
+                bgra[..., 2] = gray
+                bgra[..., 3] = raw_arr[..., 1] # Alpha
+            else:
+                return None, None
+        else:
+            fmt = cairo.FORMAT_RGB24
+            bgra = np.empty((h, w, 4), dtype=np.uint8)
+            if n == 3:
+                # RGB -> BGRX
+                bgra[..., 0] = raw_arr[..., 2] # Blue
+                bgra[..., 1] = raw_arr[..., 1] # Green
+                bgra[..., 2] = raw_arr[..., 0] # Red
+                bgra[..., 3] = 255            # X/Padding
+            elif n == 1:
+                # Gray -> BGRX
+                gray = raw_arr if raw_arr.ndim == 2 else raw_arr[..., 0]
+                bgra[..., 0] = gray
+                bgra[..., 1] = gray
+                bgra[..., 2] = gray
+                bgra[..., 3] = 255            # X/Padding
+            else:
+                return None, None
+
+        surface = cairo.ImageSurface.create_for_data(bgra, fmt, w, h, cairo_stride)
+        return surface, bgra
+
+    except Exception as e:
+        print(f"Error creating Cairo surface from pixmap: {e}")
+        return None, None
+
+def get_page_cairo_surface(doc, page_index, zoom_level, clip_rect=None):
+    """Get or render cached Cairo ImageSurface for the given page and zoom level via direct pixel transfer."""
     global _cairo_page_cache
-    if not doc or not (0 <= page_index < doc.page_count):
+    if not doc or getattr(doc, 'is_closed', False) or not (0 <= page_index < doc.page_count):
         return None
+
+    # Sub-rectangle clip renders are not cached in _cairo_page_cache
+    if clip_rect is not None:
+        try:
+            lock = get_doc_lock(doc)
+            if lock:
+                with lock:
+                    page = doc.load_page(page_index)
+                    zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+                    pix = page.get_pixmap(matrix=zoom_matrix, clip=clip_rect, alpha=False)
+            else:
+                page = doc.load_page(page_index)
+                zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+                pix = page.get_pixmap(matrix=zoom_matrix, clip=clip_rect, alpha=False)
+            surf, _ = pixmap_to_cairo_surface(pix)
+            return surf
+        except Exception as e:
+            print(f"Error creating clipped surface for page {page_index}: {e}")
+            return None
 
     cache_key = (id(doc), page_index, round(float(zoom_level), 4))
     if cache_key in _cairo_page_cache:
         return _cairo_page_cache[cache_key]
 
     try:
-        page = doc.load_page(page_index)
-        zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
-        pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
-        samples_bytes = bytes(pix.samples)
+        lock = get_doc_lock(doc)
+        if lock:
+            with lock:
+                page = doc.load_page(page_index)
+                zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+                pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
+        else:
+            page = doc.load_page(page_index)
+            zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+            pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
 
-        pixbuf = GdkPixbuf.Pixbuf.new_from_data(
-            samples_bytes, GdkPixbuf.Colorspace.RGB, False, 8,
-            pix.width, pix.height, pix.stride
-        )
-
-        surf = cairo.ImageSurface(cairo.FORMAT_RGB24, pix.width, pix.height)
-        cr_surf = cairo.Context(surf)
-        cr_surf.set_source_rgb(1.0, 1.0, 1.0)
-        cr_surf.paint()
-        if pixbuf:
-            Gdk.cairo_set_source_pixbuf(cr_surf, pixbuf, 0, 0)
-            cr_surf.paint()
+        surf, _ = pixmap_to_cairo_surface(pix)
+        if surf is None:
+            return None
 
         # Limit cache size to 6 surfaces to conserve memory
         if len(_cairo_page_cache) >= 6:
@@ -159,6 +238,47 @@ def get_page_cairo_surface(doc, page_index, zoom_level):
     except Exception as e:
         print(f"Error creating cached page surface for page {page_index}: {e}")
         return None
+
+def update_page_cairo_surface_rect(doc, page_index, zoom_level, rect):
+    """Update a sub-rectangle region of the cached Cairo ImageSurface in-place.
+    rect is (x0, y0, x1, y1) in unscaled PDF points.
+    """
+    global _cairo_page_cache
+    if not doc or getattr(doc, 'is_closed', False) or not (0 <= page_index < doc.page_count):
+        return False
+
+    cache_key = (id(doc), page_index, round(float(zoom_level), 4))
+    if cache_key not in _cairo_page_cache:
+        return False
+
+    cached_surf = _cairo_page_cache[cache_key]
+    try:
+        x0, y0, x1, y1 = rect
+        clip_rect = fitz.Rect(max(0.0, x0 - 1.0), max(0.0, y0 - 1.0), x1 + 1.0, y1 + 1.0)
+        lock = get_doc_lock(doc)
+        if lock:
+            with lock:
+                page = doc.load_page(page_index)
+                zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+                clip_pix = page.get_pixmap(matrix=zoom_matrix, clip=clip_rect, alpha=False)
+        else:
+            page = doc.load_page(page_index)
+            zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+            clip_pix = page.get_pixmap(matrix=zoom_matrix, clip=clip_rect, alpha=False)
+
+        clip_surf, _ = pixmap_to_cairo_surface(clip_pix)
+        if clip_surf is None:
+            return False
+
+        cr = cairo.Context(cached_surf)
+        dest_x = clip_rect.x0 * zoom_level
+        dest_y = clip_rect.y0 * zoom_level
+        cr.set_source_surface(clip_surf, dest_x, dest_y)
+        cr.paint()
+        return True
+    except Exception as e:
+        print(f"Error updating cached sub-rectangle for page {page_index}: {e}")
+        return False
 
 def _get_font_args_for_pymupdf(text_obj):
     """Get the font args for pymupdf."""
@@ -648,62 +768,20 @@ def generate_thumbnail(doc, page_index, target_width=150):
         placeholder_pixbuf.fill(0xaaaaaaFF)
         return placeholder_pixbuf
 
-def pixmap_to_cairo_surface(pix):
-    """Pixmap to cairo surface."""
-    data = None
-    fmt = None
-    stride = 0
-    data_ref = None
-
-    try:
-        if pix.alpha:
-            if pix.n != 4: return None, None
-            fmt = cairo.FORMAT_ARGB32
-            samples_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, 4))
-            bgra_data = np.zeros_like(samples_np)
-            bgra_data[..., 0] = samples_np[..., 2] # B
-            bgra_data[..., 1] = samples_np[..., 1] # G
-            bgra_data[..., 2] = samples_np[..., 0] # R
-            bgra_data[..., 3] = samples_np[..., 3] # A
-            data = bytearray(bgra_data.tobytes())
-            stride = pix.stride
-            data_ref = data
-
-        else:
-            if pix.n != 3: return None, None
-            bgra_data = np.zeros((pix.height, pix.width, 4), dtype=np.uint8)
-            try:
-                 rgb_view = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, 3))
-            except ValueError:
-                 rgb_view = np.frombuffer(pix.samples, dtype=np.uint8).copy().reshape((pix.height, pix.width, 3))
-
-            bgra_data[:, :, 0] = rgb_view[:, :, 2]  # Blue
-            bgra_data[:, :, 1] = rgb_view[:, :, 1]  # Green
-            bgra_data[:, :, 2] = rgb_view[:, :, 0]  # Red
-            bgra_data[:, :, 3] = 255                # Alpha
-            data = bgra_data.data 
-            fmt = cairo.FORMAT_ARGB32
-            stride = pix.width * 4 
-            data_ref = bgra_data 
-
-        if data is None: return None, None
-
-        surface = cairo.ImageSurface.create_for_data(data, fmt, pix.width, pix.height, stride)
-        return surface, data_ref
-
-    except Exception as e:
-        print(f"Error creating Cairo surface from pixmap: {e}")
-        return None, None
-
-
-def draw_page_to_cairo(cr, doc, page_index, zoom_level):
+def draw_page_to_cairo(cr, doc, page_index, zoom_level, dirty_rect=None):
     """Draw page to cairo using the cached surface."""
     surf = get_page_cairo_surface(doc, page_index, zoom_level)
     if surf:
-        cr.set_source_rgb(1.0, 1.0, 1.0)
-        cr.paint()
-        cr.set_source_surface(surf, 0, 0)
-        cr.paint()
+        if dirty_rect is not None:
+            cr.save()
+            cr.rectangle(*dirty_rect)
+            cr.clip()
+            cr.set_source_surface(surf, 0, 0)
+            cr.paint()
+            cr.restore()
+        else:
+            cr.set_source_surface(surf, 0, 0)
+            cr.paint()
         return True, None
     else:
         cr.set_source_rgb(0.7, 0.7, 0.7)

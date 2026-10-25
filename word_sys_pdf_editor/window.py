@@ -4705,12 +4705,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self._update_ui_state()
 
-    def draw_pdf_page(self, area, cr, width, height):
-        """Draw PDF page."""
+    def queue_canvas_dirty_rect(self, rect):
+        """Schedule a sub-rectangle dirty region repaint on the canvas."""
+        if rect:
+            if getattr(self, '_dirty_clip_rect', None) is None:
+                self._dirty_clip_rect = rect
+            else:
+                x1 = min(self._dirty_clip_rect[0], rect[0])
+                y1 = min(self._dirty_clip_rect[1], rect[1])
+                x2 = max(self._dirty_clip_rect[0] + self._dirty_clip_rect[2], rect[0] + rect[2])
+                y2 = max(self._dirty_clip_rect[1] + self._dirty_clip_rect[3], rect[1] + rect[3])
+                self._dirty_clip_rect = (x1, y1, x2 - x1, y2 - y1)
+        self.pdf_view.queue_draw()
+
+    def draw_pdf_page(self, area, cr, width, height, dirty_rect=None):
+        """Draw PDF page with optional sub-rectangle dirty clipping."""
         if not self.doc:
             cr.set_source_rgb(0.42, 0.42, 0.42)
             cr.paint()
             return
+
+        if dirty_rect is None and getattr(self, '_dirty_clip_rect', None) is not None:
+            dirty_rect = self._dirty_clip_rect
+            self._dirty_clip_rect = None
 
         cr.set_source_rgb(0.42, 0.42, 0.42)
         cr.paint()
@@ -4730,7 +4747,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.fill()
             cr.restore()
 
-            self._draw_page_content(area, cr, self.current_page_index, page_offset_x, page_offset_y, page_w, page_h)
+            self._draw_page_content(area, cr, self.current_page_index, page_offset_x, page_offset_y, page_w, page_h, dirty_rect=dirty_rect)
         else:
             if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
                 self._recompute_continuous_layout()
@@ -4739,18 +4756,28 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             for p_idx in visible_pages:
                 px, py, pw, ph = self.get_page_canvas_rect(p_idx)
 
+                # Skip pages completely outside dirty rect when specified
+                if dirty_rect is not None:
+                    dx, dy, dw, dh = dirty_rect
+                    if px + pw < dx or px > dx + dw or py + ph < dy or py > dy + dh:
+                        continue
+
                 cr.save()
                 cr.set_source_rgba(0, 0, 0, 0.15)
                 cr.rectangle(px + 4.0, py + 4.0, pw, ph)
                 cr.fill()
                 cr.restore()
 
-                self._draw_page_content(area, cr, p_idx, px, py, pw, ph)
+                self._draw_page_content(area, cr, p_idx, px, py, pw, ph, dirty_rect=dirty_rect)
 
-    def _draw_page_content(self, area, cr, page_index, page_offset_x, page_offset_y, page_w, page_h):
+    def _draw_page_content(self, area, cr, page_index, page_offset_x, page_offset_y, page_w, page_h, dirty_rect=None):
         """Render single page contents including Cairo surface, objects, annotations, and overlays."""
         cr.save()
         cr.translate(page_offset_x, page_offset_y)
+        if dirty_rect is not None:
+            cr.rectangle(dirty_rect[0] * self.zoom_level, dirty_rect[1] * self.zoom_level,
+                         dirty_rect[2] * self.zoom_level, dirty_rect[3] * self.zoom_level)
+            cr.clip()
         cached_surf = pdf_handler.get_page_cairo_surface(self.doc, page_index, self.zoom_level)
         if cached_surf:
             cr.set_source_surface(cached_surf, 0, 0)
@@ -4767,6 +4794,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if page_rot != 0:
             mat = page.rotation_matrix
             cr.transform(cairo.Matrix(mat.a, mat.b, mat.c, mat.d, mat.e, mat.f))
+
+        pw_unscaled = page.rect.width
+        ph_unscaled = page.rect.height
+        cr.rectangle(0, 0, pw_unscaled, ph_unscaled)
+        cr.clip()
+
+        if dirty_rect is not None:
+            cr.rectangle(*dirty_rect)
+            cr.clip()
+
+        clip_x1, clip_y1, clip_x2, clip_y2 = cr.clip_extents()
 
         if page_index == self.current_page_index:
             texts = self.editable_texts
@@ -4898,7 +4936,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 r, g, b = self.dragged_object.color
                 cr.set_source_rgba(r, g, b, 0.6)
                 
-                import re
                 attr_list = Pango.AttrList()
                 
                 for match in re.finditer(r'(https?://[^\s]+|www\.[^\s]+)', self.dragged_object.text):
@@ -5008,6 +5045,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if not getattr(img_obj, 'bbox', None) or not getattr(img_obj, 'image_bytes', None):
                 continue
             x1, y1, x2, y2 = img_obj.bbox
+            if x2 < clip_x1 or x1 > clip_x2 or y2 < clip_y1 or y1 > clip_y2:
+                continue
             draw_w = x2 - x1
             draw_h = y2 - y1
             if draw_w <= 0 or draw_h <= 0:
@@ -5052,6 +5091,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if not text_obj.bbox or not text_obj.text:
                 continue
             x1, y1, x2, y2 = text_obj.bbox
+            if x2 < clip_x1 or x1 > clip_x2 or y2 < clip_y1 or y1 > clip_y2:
+                continue
             draw_x = x1
             draw_y = y1
             cr.save()
@@ -5151,6 +5192,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 continue
             
             x1, y1, x2, y2 = shape.bbox
+            if x2 < clip_x1 or x1 > clip_x2 or y2 < clip_y1 or y1 > clip_y2:
+                continue
             draw_x = x1
             draw_y = y1
             draw_w = x2 - x1
@@ -5420,6 +5463,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 continue
             if stroke is self.dragged_object:
                 continue
+            if getattr(stroke, 'bbox', None):
+                sx1, sy1, sx2, sy2 = stroke.bbox
+                if sx2 < clip_x1 or sx1 > clip_x2 or sy2 < clip_y1 or sy1 > clip_y2:
+                    continue
             cr.save()
             rot = getattr(stroke, 'rotation', 0.0) % 360.0
             if rot != 0.0 and stroke.bbox:
