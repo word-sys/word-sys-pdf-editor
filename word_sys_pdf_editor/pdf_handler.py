@@ -4307,9 +4307,13 @@ def sanitize_document(
     strip_bookmarks: bool = False,
     preserve_links: bool = True,
     preserve_forms: bool = True,
+    purge_thumbnails: bool = True,
+    purge_javascript: bool = True,
+    scrub_document_id: bool = True,
 ) -> dict:
     """Document-wide sanitization routine to purge sensitive metadata, XMP packets,
     attachments, hidden layers, comments, and orphaned/redacted bookmark references.
+    Also strips embedded page thumbnails, JavaScript/interactive actions, and randomizes trailer ID.
     """
     if not doc:
         return {"success": False, "error": "No document provided"}
@@ -4322,6 +4326,9 @@ def sanitize_document(
         "comments_purged": 0,
         "hidden_layers_purged": 0,
         "toc_items_purged": 0,
+        "thumbnails_purged": 0,
+        "javascript_actions_purged": 0,
+        "document_id_scrubbed": False,
     }
 
     try:
@@ -4451,6 +4458,95 @@ def sanitize_document(
             except Exception as e:
                 print(f"Warning: error cleaning TOC: {e}")
 
+        # 7. Purge embedded page thumbnails (/Thumb)
+        if purge_thumbnails:
+            try:
+                for p_idx in range(len(doc)):
+                    p = doc[p_idx]
+                    pxref = p.xref
+                    thumb_key = doc.xref_get_key(pxref, "Thumb")
+                    if thumb_key[0] not in ("null", ""):
+                        doc.xref_set_key(pxref, "Thumb", "null")
+                        results["thumbnails_purged"] += 1
+            except Exception as e:
+                print(f"Warning: error purging page thumbnails: {e}")
+
+        # 8. Purge JavaScript and interactive action payloads
+        if purge_javascript:
+            try:
+                cat = doc.pdf_catalog()
+                # Document-level /Names /JavaScript
+                names_key = doc.xref_get_key(cat, "Names")
+                if names_key[0] == "xref":
+                    names_xref = int(names_key[1].split()[0])
+                    if doc.xref_get_key(names_xref, "JavaScript")[0] not in ("null", ""):
+                        doc.xref_set_key(names_xref, "JavaScript", "null")
+                        results["javascript_actions_purged"] += 1
+
+                # Catalog /JavaScript
+                if doc.xref_get_key(cat, "JavaScript")[0] not in ("null", ""):
+                    doc.xref_set_key(cat, "JavaScript", "null")
+                    results["javascript_actions_purged"] += 1
+
+                # Catalog /OpenAction
+                if doc.xref_get_key(cat, "OpenAction")[0] not in ("null", ""):
+                    doc.xref_set_key(cat, "OpenAction", "null")
+                    results["javascript_actions_purged"] += 1
+
+                # Catalog /AA (Additional Actions)
+                if doc.xref_get_key(cat, "AA")[0] not in ("null", ""):
+                    doc.xref_set_key(cat, "AA", "null")
+                    results["javascript_actions_purged"] += 1
+
+                # Page-level actions, annotations, and form widgets
+                for p_idx in range(len(doc)):
+                    p = doc[p_idx]
+                    pxref = p.xref
+                    if doc.xref_get_key(pxref, "AA")[0] not in ("null", ""):
+                        doc.xref_set_key(pxref, "AA", "null")
+                        results["javascript_actions_purged"] += 1
+
+                    for annot in list(p.annots()):
+                        axref = annot.xref
+                        a_key = doc.xref_get_key(axref, "A")
+                        if a_key[0] not in ("null", ""):
+                            a_val = doc.xref_object(axref)
+                            if any(k in a_val for k in ("/JavaScript", "/Launch", "/SubmitForm", "/ImportData")):
+                                doc.xref_set_key(axref, "A", "null")
+                                results["javascript_actions_purged"] += 1
+                        aa_key = doc.xref_get_key(axref, "AA")
+                        if aa_key[0] not in ("null", ""):
+                            doc.xref_set_key(axref, "AA", "null")
+                            results["javascript_actions_purged"] += 1
+
+                    try:
+                        for w in list(p.widgets()):
+                            wxref = w.xref
+                            if wxref > 0:
+                                if doc.xref_get_key(wxref, "AA")[0] not in ("null", ""):
+                                    doc.xref_set_key(wxref, "AA", "null")
+                                    results["javascript_actions_purged"] += 1
+                                a_key = doc.xref_get_key(wxref, "A")
+                                if a_key[0] not in ("null", ""):
+                                    w_val = doc.xref_object(wxref)
+                                    if any(k in w_val for k in ("/JavaScript", "/Launch", "/SubmitForm", "/ImportData")):
+                                        doc.xref_set_key(wxref, "A", "null")
+                                        results["javascript_actions_purged"] += 1
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"Warning: error purging JavaScript actions: {e}")
+
+        # 9. Scrub and randomize Document ID (/ID trailer)
+        if scrub_document_id:
+            try:
+                new_id1 = hashlib.md5(uuid.uuid4().bytes).hexdigest()
+                new_id2 = hashlib.md5(uuid.uuid4().bytes).hexdigest()
+                doc.xref_set_key(-1, "ID", f"[<{new_id1}> <{new_id2}>]")
+                results["document_id_scrubbed"] = True
+            except Exception as e:
+                print(f"Warning: error scrubbing document ID: {e}")
+
         # Invalidate Cairo and document cache
         invalidate_page_cache(doc)
 
@@ -4507,6 +4603,42 @@ def verify_document_sanitization(doc) -> dict:
     if comment_count > 0:
         is_clean = False
         details["comments_count"] = comment_count
+
+    # Check Thumbnails
+    thumb_count = 0
+    try:
+        for p in doc:
+            if doc.xref_get_key(p.xref, "Thumb")[0] not in ("null", ""):
+                thumb_count += 1
+    except Exception:
+        pass
+    if thumb_count > 0:
+        is_clean = False
+        details["thumbnails_count"] = thumb_count
+
+    # Check JavaScript / Actions
+    try:
+        cat = doc.pdf_catalog()
+        has_js = False
+        if doc.xref_get_key(cat, "OpenAction")[0] not in ("null", ""):
+            has_js = True
+        if doc.xref_get_key(cat, "AA")[0] not in ("null", ""):
+            has_js = True
+        if doc.xref_get_key(cat, "JavaScript")[0] not in ("null", ""):
+            has_js = True
+        names_key = doc.xref_get_key(cat, "Names")
+        if names_key[0] == "xref":
+            names_xref = int(names_key[1].split()[0])
+            if doc.xref_get_key(names_xref, "JavaScript")[0] not in ("null", ""):
+                has_js = True
+        for p in doc:
+            if doc.xref_get_key(p.xref, "AA")[0] not in ("null", ""):
+                has_js = True
+        if has_js:
+            is_clean = False
+            details["has_javascript_or_actions"] = True
+    except Exception:
+        pass
 
     return {"is_clean": is_clean, "details": details}
 

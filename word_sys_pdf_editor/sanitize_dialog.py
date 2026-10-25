@@ -155,6 +155,42 @@ class SanitizeDialog(Adw.Window):
         self.strip_bookmarks_row.set_activatable_widget(self.strip_bookmarks_switch)
         options_group.add(self.strip_bookmarks_row)
 
+        # 8. Page Thumbnails switch
+        self.thumbnails_switch = Gtk.Switch()
+        self.thumbnails_switch.set_valign(Gtk.Align.CENTER)
+        self.thumbnails_switch.set_active(True)
+        self.thumbnails_row = Adw.ActionRow(
+            title=_safe_markup(_("sanitize_opt_thumbnails")),
+            subtitle=_safe_markup(_("sanitize_opt_thumbnails_desc")),
+        )
+        self.thumbnails_row.add_suffix(self.thumbnails_switch)
+        self.thumbnails_row.set_activatable_widget(self.thumbnails_switch)
+        options_group.add(self.thumbnails_row)
+
+        # 9. JavaScript & Interactive Actions switch
+        self.javascript_switch = Gtk.Switch()
+        self.javascript_switch.set_valign(Gtk.Align.CENTER)
+        self.javascript_switch.set_active(True)
+        self.javascript_row = Adw.ActionRow(
+            title=_safe_markup(_("sanitize_opt_javascript")),
+            subtitle=_safe_markup(_("sanitize_opt_javascript_desc")),
+        )
+        self.javascript_row.add_suffix(self.javascript_switch)
+        self.javascript_row.set_activatable_widget(self.javascript_switch)
+        options_group.add(self.javascript_row)
+
+        # 10. Randomize Document ID switch
+        self.document_id_switch = Gtk.Switch()
+        self.document_id_switch.set_valign(Gtk.Align.CENTER)
+        self.document_id_switch.set_active(True)
+        self.document_id_row = Adw.ActionRow(
+            title=_safe_markup(_("sanitize_opt_document_id")),
+            subtitle=_safe_markup(_("sanitize_opt_document_id_desc")),
+        )
+        self.document_id_row.add_suffix(self.document_id_switch)
+        self.document_id_row.set_activatable_widget(self.document_id_switch)
+        options_group.add(self.document_id_row)
+
     def _on_confirm_clicked(self, _button):
         options = {
             "strip_metadata": bool(self.metadata_switch.get_active()),
@@ -164,6 +200,9 @@ class SanitizeDialog(Adw.Window):
             "purge_comments": bool(self.comments_switch.get_active()),
             "purge_orphaned_toc": bool(self.orphaned_toc_switch.get_active()),
             "strip_bookmarks": bool(self.strip_bookmarks_switch.get_active()),
+            "purge_thumbnails": bool(self.thumbnails_switch.get_active()),
+            "purge_javascript": bool(self.javascript_switch.get_active()),
+            "scrub_document_id": bool(self.document_id_switch.get_active()),
         }
         if self.on_confirm_callback:
             self.on_confirm_callback(options)

@@ -9660,6 +9660,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 res.get("comments_purged", 0),
                 res.get("hidden_layers_purged", 0),
                 res.get("toc_items_purged", 0),
+                res.get("thumbnails_purged", 0),
+                res.get("javascript_actions_purged", 0),
             )
             show_info_dialog(self, msg, _("sanitize_summary_title"))
 

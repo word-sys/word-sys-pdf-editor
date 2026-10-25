@@ -334,10 +334,130 @@ def test_sanitize_dialog_rows_and_markup():
         dlg.comments_row,
         dlg.orphaned_toc_row,
         dlg.strip_bookmarks_row,
+        dlg.thumbnails_row,
+        dlg.javascript_row,
+        dlg.document_id_row,
     ]
     for row in rows:
         title = row.get_title()
         subtitle = row.get_subtitle()
         assert title and len(title) > 0, f"Row title is empty for row {row}!"
         assert subtitle and len(subtitle) > 0, f"Row subtitle is empty for row {row}!"
+
+
+def test_sanitize_page_thumbnails():
+    """Verify embedded page thumbnails (/Thumb) in page dictionaries are cleanly purged."""
+    doc = fitz.open()
+    doc.new_page(width=300, height=300)
+    doc.new_page(width=300, height=300)
+    p0 = doc[0]
+    p1 = doc[1]
+
+    # Attach dummy /Thumb references to pages
+    doc.xref_set_key(p0.xref, "Thumb", "1 0 R")
+    doc.xref_set_key(p1.xref, "Thumb", "2 0 R")
+
+    hygiene_before = pdf_handler.verify_document_sanitization(doc)
+    assert hygiene_before["is_clean"] is False
+    assert hygiene_before["details"].get("thumbnails_count") == 2
+
+    res = pdf_handler.sanitize_document(
+        doc,
+        strip_metadata=False,
+        purge_xmp=False,
+        purge_attachments=False,
+        purge_comments=False,
+        purge_hidden_layers=False,
+        purge_orphaned_toc=False,
+        purge_thumbnails=True,
+    )
+
+    assert res["success"] is True
+    assert res["thumbnails_purged"] == 2
+    assert doc.xref_get_key(p0.xref, "Thumb")[0] == "null"
+    assert doc.xref_get_key(p1.xref, "Thumb")[0] == "null"
+
+    hygiene_after = pdf_handler.verify_document_sanitization(doc)
+    assert hygiene_after["is_clean"] is True
+
+
+def test_sanitize_javascript_and_actions():
+    """Verify OpenAction, AA dictionaries, Names/JavaScript, and widget actions are purged."""
+    doc = fitz.open()
+    page = doc.new_page(width=300, height=300)
+    cat = doc.pdf_catalog()
+
+    # Add OpenAction with JS
+    doc.xref_set_key(cat, "OpenAction", "<< /S /JavaScript /JS (app.alert('malicious');) >>")
+    # Add Catalog /AA
+    doc.xref_set_key(cat, "AA", "<< /WS << /S /JavaScript /JS (app.alert('close');) >> >>")
+    # Add Page /AA
+    doc.xref_set_key(page.xref, "AA", "<< /O << /S /JavaScript /JS (app.alert('open');) >> >>")
+    # Add a widget with /AA
+    w = fitz.Widget()
+    w.rect = fitz.Rect(10, 10, 100, 30)
+    w.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+    w.field_name = "SecureField"
+    page.add_widget(w)
+    for widget in page.widgets():
+        doc.xref_set_key(widget.xref, "AA", "<< /K << /S /JavaScript /JS (app.alert('key');) >> >>")
+
+    hygiene_before = pdf_handler.verify_document_sanitization(doc)
+    assert hygiene_before["is_clean"] is False
+    assert hygiene_before["details"].get("has_javascript_or_actions") is True
+
+    res = pdf_handler.sanitize_document(
+        doc,
+        strip_metadata=False,
+        purge_xmp=False,
+        purge_attachments=False,
+        purge_comments=False,
+        purge_hidden_layers=False,
+        purge_orphaned_toc=False,
+        purge_thumbnails=False,
+        purge_javascript=True,
+    )
+
+    assert res["success"] is True
+    assert res["javascript_actions_purged"] >= 4
+    assert doc.xref_get_key(cat, "OpenAction")[0] == "null"
+    assert doc.xref_get_key(cat, "AA")[0] == "null"
+    assert doc.xref_get_key(page.xref, "AA")[0] == "null"
+    for widget in page.widgets():
+        assert doc.xref_get_key(widget.xref, "AA")[0] == "null"
+
+    hygiene_after = pdf_handler.verify_document_sanitization(doc)
+    assert hygiene_after["is_clean"] is True
+
+
+def test_sanitize_scrub_and_randomize_document_id(tmp_path):
+    """Verify document ID (/ID trailer) is anonymized and randomized."""
+    orig_path = str(tmp_path / "doc.pdf")
+    doc = fitz.open()
+    doc.new_page(width=300, height=300)
+    doc.save(orig_path)
+    doc.close()
+
+    doc2 = fitz.open(orig_path)
+    old_id = doc2.xref_get_key(-1, "ID")[1]
+    assert old_id != "null"
+
+    res = pdf_handler.sanitize_document(
+        doc2,
+        strip_metadata=False,
+        purge_xmp=False,
+        purge_attachments=False,
+        purge_comments=False,
+        purge_hidden_layers=False,
+        purge_orphaned_toc=False,
+        scrub_document_id=True,
+    )
+
+    assert res["success"] is True
+    assert res["document_id_scrubbed"] is True
+    new_id = doc2.xref_get_key(-1, "ID")[1]
+    assert new_id != "null"
+    assert new_id != old_id
+    doc2.close()
+
 
