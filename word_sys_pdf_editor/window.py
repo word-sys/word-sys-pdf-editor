@@ -33,7 +33,7 @@ from .welcome_view import WelcomeView
 from .models import (
     PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke,
     DocumentSession, AcroFormField, ScaleCalibration, PRESET_SCALES, MeasurementObject,
-    StickyNoteObject, PatchObject, RedactionMark
+    StickyNoteObject, PatchObject, RedactionMark, measure_text_width
 )
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_info_dialog, show_confirm_dialog,
@@ -10711,7 +10711,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._update_ui_state()
             return
 
-    def on_text_format_changed(self, widget, *args):
+    def on_text_format_changed(self, widget=None, *args):
         """Apply typography updates (font family, size, style, color, alignment) to selected text."""
         if self.font_scan_in_progress:
             return
@@ -10722,7 +10722,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._last_font_size = self.font_size_spin.get_value()
         self._last_is_bold = self.bold_button.get_active() if self.bold_button else False
         self._last_is_italic = self.italic_button.get_active() if self.italic_button else False
-        self._last_is_strikethrough = getattr(self, 'strikethrough_button', None).get_active() if hasattr(self, 'strikethrough_button') else False
+        self._last_is_strikethrough = self.strikethrough_button.get_active() if getattr(self, 'strikethrough_button', None) else False
         rgba = self.color_button.get_rgba()
         self._last_color = (rgba.red, rgba.green, rgba.blue)
         
@@ -10731,11 +10731,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         color = self._last_color
         is_bold = self._last_is_bold
         is_italic = self._last_is_italic
-        is_underline = getattr(self, 'underline_button', None).get_active() if hasattr(self, 'underline_button') else False
-        is_strikethrough = getattr(self, 'strikethrough_button', None).get_active() if hasattr(self, 'strikethrough_button') else False
-        align_btns = [getattr(self, 'align_left_button', None), getattr(self, 'align_center_button', None),
-                      getattr(self, 'align_right_button', None), getattr(self, 'align_justify_button', None)]
-        if widget in align_btns and not widget.get_active():
+        is_underline = self.underline_button.get_active() if getattr(self, 'underline_button', None) else False
+        is_strikethrough = self.strikethrough_button.get_active() if getattr(self, 'strikethrough_button', None) else False
+        align_btns = [b for b in (getattr(self, 'align_left_button', None), getattr(self, 'align_center_button', None),
+                                   getattr(self, 'align_right_button', None), getattr(self, 'align_justify_button', None)) if b is not None]
+        if widget and widget in align_btns and not widget.get_active():
             def check_restore_active(deactivated_btn):
                 if all(b and not b.get_active() for b in align_btns if b):
                     deactivated_btn.handler_block_by_func(self.on_text_format_changed)
@@ -10745,7 +10745,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             GLib.idle_add(check_restore_active, widget)
             return
 
-        if widget in align_btns and widget.get_active():
+        if widget and widget in align_btns and widget.get_active():
             for b in align_btns:
                 if b and b != widget and b.get_active():
                     b.handler_block_by_func(self.on_text_format_changed)
@@ -10791,7 +10791,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     mid_span.is_strikethrough = is_strikethrough
                     mid_span.alignment = alignment
                     
-                    from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand
                     target_page_num = getattr(target_obj, 'page_number', self.current_page_index)
                     commands = [DeleteObjectCommand(self, target_obj)]
                     for span in spans:
@@ -10815,13 +10814,108 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             start_char = self.selected_word_start_char
             end_char = self.selected_word_end_char
             target_obj = self.selected_text
+
+            # Prevent pending format change tracking from firing an unwanted EditObjectCommand on target_obj
+            if getattr(self, 'pending_format_change_obj', None) is target_obj:
+                self.pending_format_change_obj = None
+                self.before_format_change_state = None
+
+            if start_char == 0 and end_char == len(target_obj.text):
+                # Target is already an isolated word span
+                old_props = copy.deepcopy(target_obj.__dict__)
+                new_props = copy.deepcopy(target_obj.__dict__)
+                if font_family_key:
+                    new_props['font_family_base'] = font_family_key
+                elif getattr(self, '_last_font_family', None):
+                    new_props['font_family_base'] = self._last_font_family
+                new_props['font_size'] = font_size
+                new_props['is_bold'] = is_bold
+                new_props['is_italic'] = is_italic
+                new_props['is_underline'] = is_underline
+                new_props['is_strikethrough'] = is_strikethrough
+                new_props['alignment'] = alignment
+                new_props['color'] = color
+
+                new_w = measure_text_width(
+                    target_obj.text, new_props['font_family_base'], new_props['font_size'],
+                    new_props['is_bold'], new_props['is_italic'], target_obj
+                )
+                x0, y0, x1, y1 = target_obj.bbox
+                new_props['bbox'] = (x0, y0, x0 + new_w, y1)
+                dx = (x0 + new_w) - x1
+
+                orig_w = max(0.1, float(x1 - x0))
+                if target_obj.char_boxes and orig_w > 0:
+                    scale_x = new_w / orig_w
+                    new_cbs = []
+                    for cb in target_obj.char_boxes:
+                        ncb = dict(cb)
+                        cbx0, cby0, cbx1, cby1 = ncb["bbox"]
+                        ncb["bbox"] = (x0 + (cbx0 - x0) * scale_x, cby0, x0 + (cbx1 - x0) * scale_x, cby1)
+                        if "visual_bbox" in ncb:
+                            ncb["visual_bbox"] = ncb["bbox"]
+                        if "origin" in ncb:
+                            ncb["origin"] = (x0 + (ncb["origin"][0] - x0) * scale_x, ncb["origin"][1])
+                        new_cbs.append(ncb)
+                    new_props['char_boxes'] = new_cbs
+
+                commands = [EditObjectCommand(self, target_obj, old_props, new_props)]
+
+                if abs(dx) > 0.001:
+                    t_base = getattr(target_obj, 'baseline', y1)
+                    t_page = getattr(target_obj, 'page_number', self.current_page_index)
+                    for other in getattr(self, 'editable_texts', []):
+                        if other is target_obj or getattr(other, 'page_number', None) != t_page:
+                            continue
+                        o_base = getattr(other, 'baseline', other.bbox[3] if other.bbox else other.y)
+                        if abs(o_base - t_base) < 2.5 and other.bbox and other.bbox[0] >= x1 - 0.5:
+                            o_old = {'bbox': other.bbox}
+                            ox0, oy0, ox1, oy1 = other.bbox
+                            o_new = {'bbox': (ox0 + dx, oy0, ox1 + dx, oy1)}
+                            if getattr(other, 'char_boxes', None):
+                                o_old['char_boxes'] = [dict(cb) for cb in other.char_boxes]
+                                shifted_cbs = []
+                                for cb in other.char_boxes:
+                                    ncb = dict(cb)
+                                    cbx0, cby0, cbx1, cby1 = ncb["bbox"]
+                                    ncb["bbox"] = (cbx0 + dx, cby0, cbx1 + dx, cby1)
+                                    if "visual_bbox" in ncb:
+                                        ncb["visual_bbox"] = ncb["bbox"]
+                                    if "origin" in ncb:
+                                        ncb["origin"] = (ncb["origin"][0] + dx, ncb["origin"][1])
+                                    shifted_cbs.append(ncb)
+                                o_new['char_boxes'] = shifted_cbs
+                            commands.append(EditObjectCommand(self, other, o_old, o_new))
+
+                if len(commands) == 1:
+                    cmd = commands[0]
+                    cmd.execute()
+                    self.undo_manager.add_command(cmd)
+                else:
+                    batch_cmd = CompositeCommand(self, commands)
+                    batch_cmd.execute()
+                    self.undo_manager.add_command(batch_cmd)
+
+                self.pending_format_change_obj = target_obj
+                self.before_format_change_state = copy.deepcopy(target_obj.__dict__)
+                self.selected_word_bbox = target_obj.bbox
+                if hasattr(self, '_update_text_format_controls'):
+                    self._update_text_format_controls(target_obj)
+                if self.doc and self.current_page_index is not None:
+                    pdf_handler.invalidate_page_cache(self.doc, self.current_page_index)
+                self.pdf_view.queue_draw()
+                self._update_ui_state()
+                return
+
             spans = target_obj.split_at_range(start_char, end_char)
-            
             if len(spans) > 1:
                 mid_index = 0 if start_char == 0 else 1
                 mid_span = spans[mid_index]
-                if self._last_font_family: mid_span.font_family_base = self._last_font_family
-                mid_span.font_size = self._last_font_size
+                if font_family_key:
+                    mid_span.font_family_base = font_family_key
+                elif getattr(self, '_last_font_family', None):
+                    mid_span.font_family_base = self._last_font_family
+                mid_span.font_size = font_size
                 mid_span.is_bold = is_bold
                 mid_span.is_italic = is_italic
                 mid_span.is_underline = is_underline
@@ -10829,12 +10923,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 mid_span.alignment = alignment
                 mid_span.color = color
 
-                from .models import _measure_text_pango
-                new_mid_w = _measure_text_pango(mid_span.text, mid_span.font_family_base, mid_span.font_size, mid_span.is_bold, mid_span.is_italic)
+                new_mid_w = measure_text_width(
+                    mid_span.text, mid_span.font_family_base, mid_span.font_size,
+                    mid_span.is_bold, mid_span.is_italic, mid_span
+                )
                 mx0, my0, mx1, my1 = mid_span.bbox
+                orig_mid_w = max(0.1, float(mx1 - mx0))
                 mid_span.bbox = (mx0, my0, mx0 + new_mid_w, my1)
                 mid_span.original_bbox = mid_span.bbox
                 dx = (mx0 + new_mid_w) - mx1
+
+                if mid_span.char_boxes and orig_mid_w > 0:
+                    scale_x = new_mid_w / orig_mid_w
+                    for cb in mid_span.char_boxes:
+                        cbx0, cby0, cbx1, cby1 = cb["bbox"]
+                        cb["bbox"] = (mx0 + (cbx0 - mx0) * scale_x, cby0, mx0 + (cbx1 - mx0) * scale_x, cby1)
+                        if "visual_bbox" in cb:
+                            cb["visual_bbox"] = cb["bbox"]
+                        if "origin" in cb:
+                            cb["origin"] = (mx0 + (cb["origin"][0] - mx0) * scale_x, cb["origin"][1])
 
                 for s_idx in range(mid_index + 1, len(spans)):
                     post_span = spans[s_idx]
@@ -10846,8 +10953,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         for cb in post_span.char_boxes:
                             cbx0, cby0, cbx1, cby1 = cb["bbox"]
                             cb["bbox"] = (cbx0 + dx, cby0, cbx1 + dx, cby1)
+                            if "visual_bbox" in cb:
+                                cb["visual_bbox"] = cb["bbox"]
+                            if "origin" in cb:
+                                cb["origin"] = (cb["origin"][0] + dx, cb["origin"][1])
 
-                from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand
                 target_page_num = getattr(target_obj, 'page_number', self.current_page_index)
                 commands = [DeleteObjectCommand(self, target_obj)]
                 for span in spans:
@@ -10860,6 +10970,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 batch_cmd.execute()
                 self.undo_manager.add_command(batch_cmd)
 
+                self.pending_format_change_obj = None
+                self.before_format_change_state = None
                 self.selected_text = mid_span
                 self.pending_format_change_obj = mid_span
                 self.before_format_change_state = copy.deepcopy(mid_span.__dict__)
@@ -10942,22 +11054,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 obj = self.pending_format_change_obj
                 x1, y1, x2, y2 = obj.bbox
                 try:
-                    _surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
-                    _cr = cairo.Context(_surf)
-                    _layout = PangoCairo.create_layout(_cr)
-                    font_desc = Pango.FontDescription.from_string(obj.font_family_base)
-                    if obj.is_bold: font_desc.set_weight(Pango.Weight.BOLD)
-                    if obj.is_italic: font_desc.set_style(Pango.Style.ITALIC)
-                    font_desc.set_absolute_size(int(obj.font_size * Pango.SCALE))
-                    _layout.set_font_description(font_desc)
-                    _layout.set_text(obj.text if obj.text else "Ay", -1)
-                    _p_w, _p_h = _layout.get_size()
-                    _w = (_p_w / Pango.SCALE)
-                    _h = (_p_h / Pango.SCALE)
-                    if _w > 0 and _h > 0:
-                        old_w = x2 - x1
-                        final_w = max(_w, old_w) if getattr(obj, 'alignment', 'left') != 'left' else _w
-                        obj.bbox = (x1, y1, x1 + final_w, y1 + _h)
+                    new_w = measure_text_width(
+                        obj.text if obj.text else "Ay", obj.font_family_base, obj.font_size,
+                        obj.is_bold, obj.is_italic, obj
+                    )
+                    old_w = x2 - x1
+                    final_w = max(new_w, old_w) if getattr(obj, 'alignment', 'left') != 'left' else new_w
+                    new_h = max(y2 - y1, obj.font_size * 1.15)
+                    obj.bbox = (x1, y1, x1 + final_w, y1 + new_h)
                 except Exception as e:
                     print(f"DEBUG: Error recalculating text bbox on format change: {e}")
 
@@ -13208,17 +13312,49 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Record pending text/shape style modifications into undo history."""
         if hasattr(self, '_commit_pending_form_field_edit'):
             self._commit_pending_form_field_edit()
-        if self.pending_format_change_obj and self.before_format_change_state:
-            current_state = copy.deepcopy(self.pending_format_change_obj.__dict__)
-            
-            if self.before_format_change_state != current_state:
-                print(_("dbg_format_change_saved"))
-                command = EditObjectCommand(self, self.pending_format_change_obj, self.before_format_change_state, current_state)
-                command.execute()
-                self.undo_manager.add_command(command)
 
+        target_obj = getattr(self, 'pending_format_change_obj', None)
+        before_state = getattr(self, 'before_format_change_state', None)
         self.pending_format_change_obj = None
         self.before_format_change_state = None
+
+        if not target_obj or not before_state:
+            return
+
+        # An object that has been deleted or is not part of the active page collections
+        # must never trigger an EditObjectCommand.
+        active = False
+        for attr in ('editable_texts', 'editable_shapes', 'editable_images', 'editable_strokes'):
+            coll = getattr(self, attr, None)
+            if coll and target_obj in coll:
+                active = True
+                break
+        if not active:
+            return
+
+        current_state = copy.deepcopy(target_obj.__dict__)
+
+        # Ignore internal runtime/render state flags that do not represent user formatting changes
+        ignore_keys = {
+            '_ghost_redacted', 'is_baked', 'selected', 'editing', 'dragging',
+            '_cached_layout', '_orig_page_text', 'drag_start_x', 'drag_start_y',
+            'is_new', 'modified'
+        }
+
+        has_changed = False
+        all_keys = set(before_state.keys()).union(current_state.keys())
+        for k in all_keys:
+            if k in ignore_keys or k.startswith('_'):
+                continue
+            if before_state.get(k) != current_state.get(k):
+                has_changed = True
+                break
+
+        if has_changed:
+            print(_("dbg_format_change_saved"))
+            command = EditObjectCommand(self, target_obj, before_state, current_state)
+            command.execute()
+            self.undo_manager.add_command(command)
 
     def on_new_clicked(self, widget=None):
         """Prompt user for dimensions and initialize a new empty PDF document in a tab."""
@@ -13723,12 +13859,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     text = self.selected_text.text
                     start_c = getattr(self, 'selected_word_start_char', 0)
                     end_c = getattr(self, 'selected_word_end_char', len(text))
-                    from .models import _measure_text_pango
+                    from .models import measure_text_width
                     tx0, ty0, tx1, ty1 = self.selected_text.bbox
                     total_w = max(1.0, float(tx1 - tx0))
-                    w_pre = _measure_text_pango(text[:start_c], self.selected_text.font_family_base, self.selected_text.font_size, self.selected_text.is_bold, self.selected_text.is_italic)
-                    w_word = _measure_text_pango(text[start_c:end_c], self.selected_text.font_family_base, self.selected_text.font_size, self.selected_text.is_bold, self.selected_text.is_italic)
-                    w_total = _measure_text_pango(text, self.selected_text.font_family_base, self.selected_text.font_size, self.selected_text.is_bold, self.selected_text.is_italic)
+                    w_pre = measure_text_width(text[:start_c], self.selected_text.font_family_base, self.selected_text.font_size, self.selected_text.is_bold, self.selected_text.is_italic, self.selected_text)
+                    w_word = measure_text_width(text[start_c:end_c], self.selected_text.font_family_base, self.selected_text.font_size, self.selected_text.is_bold, self.selected_text.is_italic, self.selected_text)
+                    w_total = measure_text_width(text, self.selected_text.font_family_base, self.selected_text.font_size, self.selected_text.is_bold, self.selected_text.is_italic, self.selected_text)
                     scale = (total_w / w_total) if w_total > 0 else 1.0
                     word_bbox = (tx0 + (w_pre * scale), ty0, tx0 + ((w_pre + w_word) * scale), ty1)
                 return self.mark_object_for_redaction(self.selected_text, bbox=word_bbox)
@@ -13786,13 +13922,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._handle_delete_with_confirmation(text_obj, "delete_text_confirm")
             return
 
-        from .models import _measure_text_pango
-        from .undo_manager import EditObjectCommand
         old_state = copy.deepcopy(text_obj.__dict__)
         new_state = copy.deepcopy(text_obj.__dict__)
         new_state['text'] = new_text
 
-        new_w = _measure_text_pango(new_text, text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic)
+        new_w = measure_text_width(new_text, text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic, text_obj)
         x0, y0, x1, y1 = text_obj.bbox
         new_state['bbox'] = (x0, y0, x0 + new_w, y1)
 
@@ -14104,10 +14238,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if text_obj.bbox:
             tx0, ty0, tx1, ty1 = text_obj.bbox
             total_w = max(1.0, float(tx1 - tx0))
-            from .models import _measure_text_pango
-            w_pre = _measure_text_pango(text_obj.text[:start_c], text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic)
-            w_word = _measure_text_pango(text_obj.text[start_c:end_c], text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic)
-            w_total = _measure_text_pango(text_obj.text, text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic)
+            from .models import measure_text_width
+            w_pre = measure_text_width(text_obj.text[:start_c], text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic, text_obj)
+            w_word = measure_text_width(text_obj.text[start_c:end_c], text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic, text_obj)
+            w_total = measure_text_width(text_obj.text, text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic, text_obj)
             scale = (total_w / w_total) if w_total > 0 else 1.0
             x_start = tx0 + (w_pre * scale)
             x_end = tx0 + ((w_pre + w_word) * scale)
@@ -14124,18 +14258,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if start_char == -1 or end_char == -1 or start_char >= end_char:
             return
 
-        from .models import _measure_text_pango
-        from .undo_manager import DeleteObjectCommand, AddObjectCommand, CompositeCommand, EditObjectCommand
+        # Clear pending format change tracking for text_obj to prevent duplicate/ghost edit commands
+        if getattr(self, 'pending_format_change_obj', None) is text_obj:
+            self.pending_format_change_obj = None
+            self.before_format_change_state = None
 
         if start_char == 0 and end_char == len(text_obj.text):
-            old_props = {
-                'is_bold': text_obj.is_bold,
-                'is_italic': text_obj.is_italic,
-                'is_underline': getattr(text_obj, 'is_underline', False),
-                'is_strikethrough': getattr(text_obj, 'is_strikethrough', False),
-                'bbox': text_obj.bbox,
-            }
-            new_props = copy.deepcopy(old_props)
+            old_props = copy.deepcopy(text_obj.__dict__)
+            new_props = copy.deepcopy(text_obj.__dict__)
             if style_name == "bold":
                 new_props['is_bold'] = not text_obj.is_bold
             elif style_name == "italic":
@@ -14145,10 +14275,71 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             elif style_name == "strikethrough":
                 new_props['is_strikethrough'] = not getattr(text_obj, 'is_strikethrough', False)
 
-            cmd = EditObjectCommand(self, text_obj, old_props, new_props)
-            cmd.execute()
-            if self.undo_manager:
-                self.undo_manager.record(cmd)
+            new_w = measure_text_width(
+                text_obj.text, text_obj.font_family_base, text_obj.font_size,
+                new_props['is_bold'], new_props['is_italic'], text_obj
+            )
+            x0, y0, x1, y1 = text_obj.bbox
+            new_props['bbox'] = (x0, y0, x0 + new_w, y1)
+            dx = (x0 + new_w) - x1
+
+            orig_w = max(0.1, float(x1 - x0))
+            if text_obj.char_boxes and orig_w > 0:
+                scale_x = new_w / orig_w
+                new_cbs = []
+                for cb in text_obj.char_boxes:
+                    ncb = dict(cb)
+                    cbx0, cby0, cbx1, cby1 = ncb["bbox"]
+                    ncb["bbox"] = (x0 + (cbx0 - x0) * scale_x, cby0, x0 + (cbx1 - x0) * scale_x, cby1)
+                    if "visual_bbox" in ncb:
+                        ncb["visual_bbox"] = ncb["bbox"]
+                    if "origin" in ncb:
+                        ncb["origin"] = (x0 + (ncb["origin"][0] - x0) * scale_x, ncb["origin"][1])
+                    new_cbs.append(ncb)
+                new_props['char_boxes'] = new_cbs
+
+            commands = [EditObjectCommand(self, text_obj, old_props, new_props)]
+
+            if abs(dx) > 0.001:
+                t_base = getattr(text_obj, 'baseline', y1)
+                t_page = getattr(text_obj, 'page_number', self.current_page_index)
+                for other in getattr(self, 'editable_texts', []):
+                    if other is text_obj or getattr(other, 'page_number', None) != t_page:
+                        continue
+                    o_base = getattr(other, 'baseline', other.bbox[3] if other.bbox else other.y)
+                    if abs(o_base - t_base) < 2.5 and other.bbox and other.bbox[0] >= x1 - 0.5:
+                        o_old = {'bbox': other.bbox}
+                        ox0, oy0, ox1, oy1 = other.bbox
+                        o_new = {'bbox': (ox0 + dx, oy0, ox1 + dx, oy1)}
+                        if getattr(other, 'char_boxes', None):
+                            o_old['char_boxes'] = [dict(cb) for cb in other.char_boxes]
+                            shifted_cbs = []
+                            for cb in other.char_boxes:
+                                ncb = dict(cb)
+                                cbx0, cby0, cbx1, cby1 = ncb["bbox"]
+                                ncb["bbox"] = (cbx0 + dx, cby0, cbx1 + dx, cby1)
+                                if "visual_bbox" in ncb:
+                                    ncb["visual_bbox"] = ncb["bbox"]
+                                if "origin" in ncb:
+                                    ncb["origin"] = (ncb["origin"][0] + dx, ncb["origin"][1])
+                                shifted_cbs.append(ncb)
+                            o_new['char_boxes'] = shifted_cbs
+                        commands.append(EditObjectCommand(self, other, o_old, o_new))
+
+            if len(commands) == 1:
+                cmd = commands[0]
+                cmd.execute()
+                if self.undo_manager:
+                    self.undo_manager.record(cmd)
+            else:
+                batch_cmd = CompositeCommand(self, commands)
+                batch_cmd.execute()
+                if self.undo_manager:
+                    self.undo_manager.record(batch_cmd)
+
+            self.pending_format_change_obj = text_obj
+            self.before_format_change_state = copy.deepcopy(text_obj.__dict__)
+            self.selected_word_bbox = text_obj.bbox
             if hasattr(self, '_update_text_format_controls'):
                 self._update_text_format_controls(text_obj)
             if self.doc and self.current_page_index is not None:
@@ -14170,11 +14361,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             elif style_name == "strikethrough":
                 mid_span.is_strikethrough = not getattr(text_obj, 'is_strikethrough', False)
 
-            new_mid_w = _measure_text_pango(mid_span.text, mid_span.font_family_base, mid_span.font_size, mid_span.is_bold, mid_span.is_italic)
+            new_mid_w = measure_text_width(
+                mid_span.text, mid_span.font_family_base, mid_span.font_size,
+                mid_span.is_bold, mid_span.is_italic, mid_span
+            )
             mx0, my0, mx1, my1 = mid_span.bbox
+            orig_mid_w = max(0.1, float(mx1 - mx0))
             mid_span.bbox = (mx0, my0, mx0 + new_mid_w, my1)
             mid_span.original_bbox = mid_span.bbox
             dx = (mx0 + new_mid_w) - mx1
+
+            if mid_span.char_boxes and orig_mid_w > 0:
+                scale_x = new_mid_w / orig_mid_w
+                for cb in mid_span.char_boxes:
+                    cbx0, cby0, cbx1, cby1 = cb["bbox"]
+                    cb["bbox"] = (mx0 + (cbx0 - mx0) * scale_x, cby0, mx0 + (cbx1 - mx0) * scale_x, cby1)
+                    if "visual_bbox" in cb:
+                        cb["visual_bbox"] = cb["bbox"]
+                    if "origin" in cb:
+                        cb["origin"] = (mx0 + (cb["origin"][0] - mx0) * scale_x, cb["origin"][1])
 
             for s_idx in range(mid_index + 1, len(spans)):
                 post_span = spans[s_idx]
@@ -14186,6 +14391,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     for cb in post_span.char_boxes:
                         cbx0, cby0, cbx1, cby1 = cb["bbox"]
                         cb["bbox"] = (cbx0 + dx, cby0, cbx1 + dx, cby1)
+                        if "visual_bbox" in cb:
+                            cb["visual_bbox"] = cb["bbox"]
+                        if "origin" in cb:
+                            cb["origin"] = (cb["origin"][0] + dx, cb["origin"][1])
 
             target_page_num = getattr(text_obj, 'page_number', self.current_page_index)
             commands = [DeleteObjectCommand(self, text_obj)]
@@ -14199,6 +14408,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if self.undo_manager:
                 self.undo_manager.record(batch_cmd)
 
+            self.pending_format_change_obj = None
+            self.before_format_change_state = None
             self.selected_text = mid_span
             self.pending_format_change_obj = mid_span
             self.before_format_change_state = copy.deepcopy(mid_span.__dict__)
@@ -14284,9 +14495,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             cbs = clicked_text.char_boxes[found_idx:found_idx + len(w_text)]
                             cx = sum((cb["bbox"][0] + cb["bbox"][2]) / 2.0 for cb in cbs) / max(len(cbs), 1)
                         else:
-                            from .models import _measure_text_pango
-                            pre_w = _measure_text_pango(clicked_text.text[:found_idx], clicked_text.font_family_base, clicked_text.font_size)
-                            word_w = _measure_text_pango(w_text, clicked_text.font_family_base, clicked_text.font_size)
+                            from .models import measure_text_width
+                            pre_w = measure_text_width(clicked_text.text[:found_idx], clicked_text.font_family_base, clicked_text.font_size, clicked_text.is_bold, clicked_text.is_italic, clicked_text)
+                            word_w = measure_text_width(w_text, clicked_text.font_family_base, clicked_text.font_size, clicked_text.is_bold, clicked_text.is_italic, clicked_text)
                             cx = (clicked_text.bbox[0] if clicked_text.bbox else clicked_text.x) + pre_w + word_w / 2.0
                         dist = abs(unrot_x - cx)
                         if dist < best_dist:

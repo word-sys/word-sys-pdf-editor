@@ -208,6 +208,44 @@ def _measure_text_pango(text_str: str, font_family: str, font_size: float, is_bo
         return max(1.0, len(text_str) * font_size * 0.55)
 
 
+def measure_text_width(
+    text_str: str,
+    font_family: str,
+    font_size: float,
+    is_bold: bool = False,
+    is_italic: bool = False,
+    text_obj: Optional['EditableText'] = None
+) -> float:
+    """Measure exact sub-pixel rendered width of text matching PDF page stream insertion."""
+    if not text_str:
+        return 0.0
+    try:
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
+        from . import pdf_handler
+        base_family = font_family or (text_obj.font_family_base if text_obj else "Liberation Sans")
+        font_to_embed = pdf_handler.find_specific_font_variant(base_family, is_bold, is_italic)
+        if font_to_embed:
+            try:
+                f = fitz.Font(fontfile=font_to_embed)
+                return max(0.5, float(f.text_length(text_str, fontsize=font_size)))
+            except Exception:
+                pass
+
+        base_name = getattr(text_obj, 'pdf_fontname_base14', 'helv') if text_obj else 'helv'
+        calc_font = pdf_handler._get_base14_font_variant(base_name, is_bold, is_italic)
+        return max(0.5, float(fitz.get_text_length(text_str, fontname=calc_font, fontsize=font_size)))
+    except Exception:
+        pass
+
+    try:
+        return _measure_text_pango(text_str, font_family, font_size, is_bold, is_italic)
+    except Exception:
+        return max(0.5, len(text_str) * font_size * 0.55)
+
+
 def extract_font_properties(font_name: str, flags: int = 0) -> Dict[str, Any]:
     """Extract and decompose font properties from a PDF font name and flags."""
     return decompose_font_name(font_name, flags)
@@ -455,13 +493,9 @@ class EditableText:
             return part
 
         orig_x0 = self.bbox[0] if self.bbox else self.x
-        total_w = self.width if self.bbox else 0.0
-        w_total = _measure_text_pango(text, self.font_family_base, self.font_size, self.is_bold, self.is_italic) if not has_cbs else 0.0
-        scale = (total_w / w_total) if (total_w > 0 and w_total > 0) else 1.0
-
-        pre_w = _measure_text_pango(text[:start_char], self.font_family_base, self.font_size, self.is_bold, self.is_italic) * scale if not has_cbs else 0.0
-        mid_w = _measure_text_pango(text[start_char:end_char], self.font_family_base, self.font_size, self.is_bold, self.is_italic) * scale if not has_cbs else 0.0
-        post_w = _measure_text_pango(text[end_char:], self.font_family_base, self.font_size, self.is_bold, self.is_italic) * scale if not has_cbs else 0.0
+        pre_w = measure_text_width(text[:start_char], self.font_family_base, self.font_size, self.is_bold, self.is_italic, self) if start_char > 0 else 0.0
+        mid_w = measure_text_width(text[start_char:end_char], self.font_family_base, self.font_size, self.is_bold, self.is_italic, self)
+        post_w = measure_text_width(text[end_char:], self.font_family_base, self.font_size, self.is_bold, self.is_italic, self) if end_char < len(text) else 0.0
 
         if start_char > 0:
             cbs = self.char_boxes[:start_char] if has_cbs else []
