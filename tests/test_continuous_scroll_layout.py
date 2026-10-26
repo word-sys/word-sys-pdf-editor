@@ -73,6 +73,8 @@ class MockContinuousScrollWindow:
 
     continuous_scroll = PdfEditorWindow.continuous_scroll
     _page_objects_cache = PdfEditorWindow._page_objects_cache
+    _fast_get_page_dimension = PdfEditorWindow._fast_get_page_dimension
+    _invalidate_continuous_layout = PdfEditorWindow._invalidate_continuous_layout
     _recompute_continuous_layout = PdfEditorWindow._recompute_continuous_layout
     _update_canvas_content_size = PdfEditorWindow._update_canvas_content_size
     get_page_canvas_rect = PdfEditorWindow.get_page_canvas_rect

@@ -46,6 +46,7 @@ class TestContentStreamReplacement(unittest.TestCase):
 
         self.win = PdfEditorWindow(application=self.app)
         self.win.font_scan_in_progress = False
+        self.win.continuous_scroll = False
 
         loaded, err = pdf_handler.load_pdf_document(self.sample_pdf_path)
         self.assertIsNone(err)

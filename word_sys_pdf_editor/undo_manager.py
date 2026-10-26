@@ -954,6 +954,8 @@ class RotatePageCommand(Command):
         if sess is not None:
             sess.document_modified = True
         self.window.document_modified = True
+        if hasattr(self.window, '_invalidate_continuous_layout'):
+            self.window._invalidate_continuous_layout()
         if self._is_session_active():
             if hasattr(self.window, '_refresh_thumbnail'):
                 self.window._refresh_thumbnail(self.page_index)

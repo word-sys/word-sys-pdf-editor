@@ -53,6 +53,60 @@ from .protect_dialog import ProtectDocumentDialog, DocumentUnlockDialog
 from .signature_dialog import DigitalSignatureDialog, SignatureDetailsDialog
 
 
+class UniformPageOffsets(list):
+    """Virtual zero-allocation sequence of page offset tuples for uniform-dimension documents."""
+    def __init__(self, count: int, gap: float, pw: float, ph: float):
+        super().__init__()
+        self._count = int(count)
+        self.gap = float(gap)
+        self.pw = float(pw)
+        self.ph = float(ph)
+        self.stride = self.ph + self.gap
+
+    def __len__(self) -> int:
+        return self._count
+
+    def __bool__(self) -> bool:
+        return self._count > 0
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            return [self[i] for i in range(*idx.indices(self._count))]
+        if isinstance(idx, int):
+            if idx < 0:
+                idx += self._count
+            if not (0 <= idx < self._count):
+                raise IndexError("list index out of range")
+            return (0.0, self.gap + idx * self.stride, self.pw, self.ph)
+        raise TypeError(f"list indices must be integers or slices, not {type(idx).__name__}")
+
+    def __iter__(self):
+        for i in range(self._count):
+            yield (0.0, self.gap + i * self.stride, self.pw, self.ph)
+
+    def __eq__(self, other):
+        if not hasattr(other, "__len__") or len(self) != len(other):
+            return False
+        for a, b in zip(self, other):
+            if a != b:
+                return False
+        return True
+
+    def __contains__(self, item) -> bool:
+        if not isinstance(item, (tuple, list)) or len(item) != 4:
+            return False
+        if abs(item[0] - 0.0) > 0.001 or abs(item[2] - self.pw) > 0.001 or abs(item[3] - self.ph) > 0.001:
+            return False
+        idx_f = (item[1] - self.gap) / max(self.stride, 0.001)
+        idx_round = round(idx_f)
+        if 0 <= idx_round < self._count and abs(idx_f - idx_round) < 0.001:
+            return True
+        return False
+
+    def copy(self):
+        return list(self)
+
+
 class StickyNotePopover(Gtk.Popover):
     """Floating comment and sticky note editor popover."""
     def __init__(self, editor_window, note, on_close_callback=None):
@@ -3630,6 +3684,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             self._record_recent_file(filepath)
             self.set_active_session(sess)
+            self._invalidate_continuous_layout()
 
             self.target_page_after_load = target_page
             self._load_page(target_page, reload_objects=True)
@@ -3811,25 +3866,89 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         GLib.idle_add(_feed_bg_chunk, priority=GLib.PRIORITY_LOW)
 
-    def _recompute_continuous_layout(self):
-        """Compute cumulative vertical offsets and dimensions for all pages."""
+    def _invalidate_continuous_layout(self):
+        """Invalidate continuous layout geometry cache upon page structure or orientation change."""
+        self._doc_page_sizes_cache = None
+        self._is_geometry_uniform = None
+        self._uniform_page_size = None
         self.continuous_page_offsets = []
+        if getattr(self, 'continuous_scroll', False):
+            self._update_canvas_content_size()
+
+    def _fast_get_page_dimension(self, page_index: int) -> Tuple[float, float]:
+        """Query page dimensions via fast PyMuPDF page_cropbox and Rotate metadata without parsing content streams."""
+        try:
+            box = self.doc.page_cropbox(page_index)
+            rot = 0
+            try:
+                type_str, val_str = self.doc.xref_get_key(self.doc.page_xref(page_index), "Rotate")
+                if type_str == "int":
+                    rot = int(val_str)
+            except Exception:
+                pass
+            if (rot % 360) in (90, 270):
+                return (float(box.height), float(box.width))
+            return (float(box.width), float(box.height))
+        except Exception:
+            try:
+                page = self.doc.load_page(page_index)
+                return (float(page.rect.width), float(page.rect.height))
+            except Exception:
+                return (float(getattr(self, 'current_pdf_page_width', 595)), float(getattr(self, 'current_pdf_page_height', 842)))
+
+    def _recompute_continuous_layout(self):
+        """Compute cumulative vertical offsets and dimensions for all pages using fast metadata and O(1) uniform indexing."""
         if not self.doc or len(self.doc) == 0:
+            self.continuous_page_offsets = []
             self.continuous_total_height = 0.0
             self.continuous_max_width = 0.0
             return
 
-        current_y = float(self.page_gap)
+        num_pages = len(self.doc)
+        gap = float(self.page_gap)
+        zoom = float(getattr(self, 'zoom_level', 1.0))
+
+        # Check / build dimension metadata cache
+        if not hasattr(self, '_doc_page_sizes_cache') or self._doc_page_sizes_cache is None or len(self._doc_page_sizes_cache) != num_pages:
+            self._doc_page_sizes_cache = {}
+            is_uniform = True
+            first_dim = None
+
+            for i in range(num_pages):
+                dim = self._fast_get_page_dimension(i)
+                self._doc_page_sizes_cache[i] = dim
+                if first_dim is None:
+                    first_dim = dim
+                elif is_uniform and (abs(dim[0] - first_dim[0]) > 0.001 or abs(dim[1] - first_dim[1]) > 0.001):
+                    is_uniform = False
+
+            self._is_geometry_uniform = is_uniform
+            self._uniform_page_size = first_dim
+
+        if getattr(self, '_is_geometry_uniform', False) and self._uniform_page_size is not None:
+            base_w, base_h = self._uniform_page_size
+            pw = float(base_w * zoom)
+            ph = float(base_h * zoom)
+            stride = ph + gap
+            self.continuous_page_offsets = UniformPageOffsets(num_pages, gap, pw, ph)
+            self.continuous_total_height = gap + num_pages * stride
+            self.continuous_max_width = pw
+            return
+
+        # Non-uniform document fallback (fast cached dimensions, no fitz re-parsing)
+        offsets = []
+        current_y = gap
         max_w = 0.0
-        for i in range(len(self.doc)):
-            page = self.doc.load_page(i)
-            pw = float(page.rect.width * self.zoom_level)
-            ph = float(page.rect.height * self.zoom_level)
+        for i in range(num_pages):
+            base_w, base_h = self._doc_page_sizes_cache.get(i) or self._fast_get_page_dimension(i)
+            pw = float(base_w * zoom)
+            ph = float(base_h * zoom)
             if pw > max_w:
                 max_w = pw
-            self.continuous_page_offsets.append((0.0, current_y, pw, ph))
-            current_y += ph + float(self.page_gap)
+            offsets.append((0.0, current_y, pw, ph))
+            current_y += ph + gap
 
+        self.continuous_page_offsets = offsets
         self.continuous_total_height = current_y
         self.continuous_max_width = max_w
 
@@ -4067,20 +4186,52 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
             self._recompute_continuous_layout()
 
+        num_pages = len(self.doc)
         _, scroll_y, _, vp_h = self.get_visible_viewport_rect()
 
         if prefetch_margin is None:
-            avg_h = (self.continuous_total_height / max(len(self.doc), 1)) if getattr(self, 'continuous_total_height', 0) > 0 else 800.0
-            prefetch_margin = max(float(vp_h), float(avg_h))
+            avg_h = (self.continuous_total_height / max(num_pages, 1)) if getattr(self, 'continuous_total_height', 0) > 0 else 800.0
+            prefetch_margin = min(float(vp_h), float(avg_h) * 1.0)
 
         cull_top = scroll_y - prefetch_margin
         cull_bottom = scroll_y + vp_h + prefetch_margin
 
+        # Fast O(1) algebraic path for uniform geometry
+        if getattr(self, '_is_geometry_uniform', False) and hasattr(self.continuous_page_offsets, 'stride'):
+            stride = self.continuous_page_offsets.stride
+            gap = self.continuous_page_offsets.gap
+            ph = self.continuous_page_offsets.ph
+            min_i = max(0, int(math.floor((cull_top - gap - ph) / stride) + 1))
+            max_i = min(num_pages - 1, int(math.floor((cull_bottom - gap) / stride)))
+            if min_i <= max_i:
+                return list(range(min_i, max_i + 1))
+            return []
+
+        if num_pages <= 32:
+            visible = []
+            for p_idx in range(num_pages):
+                px, py, pw, ph = self.get_page_canvas_rect(p_idx)
+                if (py + ph >= cull_top) and (py <= cull_bottom):
+                    visible.append(p_idx)
+            return visible
+
+        # Binary search O(log N) for first visible page in large non-uniform documents
+        lo, hi = 0, num_pages - 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            _, py, _, ph = self.continuous_page_offsets[mid]
+            if py + ph >= cull_top:
+                hi = mid
+            else:
+                lo = mid + 1
+        first_idx = lo
+
         visible = []
-        for p_idx in range(len(self.doc)):
-            px, py, pw, ph = self.get_page_canvas_rect(p_idx)
-            if (py + ph >= cull_top) and (py <= cull_bottom):
-                visible.append(p_idx)
+        for p_idx in range(first_idx, num_pages):
+            _, py, _, ph = self.continuous_page_offsets[p_idx]
+            if py > cull_bottom:
+                break
+            visible.append(p_idx)
         return visible
 
     def get_dominant_visible_page_index(self) -> int:
@@ -4098,10 +4249,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         vp_top = scroll_y
         vp_bottom = scroll_y + vp_h
 
+        # Fast O(1): only inspect candidate pages currently in viewport (prefetch_margin=0.0)
+        candidate_pages = self.get_visible_page_indices(prefetch_margin=0.0)
+        if not candidate_pages:
+            candidate_pages = [max(0, min(len(self.doc) - 1, self.current_page_index))]
+
         max_vis_height = -1.0
         dominant_page = self.current_page_index
 
-        for p_idx in range(len(self.doc)):
+        for p_idx in candidate_pages:
             px, py, pw, ph = self.get_page_canvas_rect(p_idx)
             p_top = py
             p_bottom = py + ph
@@ -4117,7 +4273,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if max_vis_height <= 0.0:
             focal_y = vp_top + (vp_h * 0.4)
             closest_dist = float('inf')
-            for p_idx in range(len(self.doc)):
+            for p_idx in candidate_pages:
                 _, py, _, ph = self.get_page_canvas_rect(p_idx)
                 center_y = py + ph / 2.0
                 dist = abs(center_y - focal_y)
@@ -4330,12 +4486,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif canvas_y >= self.continuous_page_offsets[-1][1] + self.continuous_page_offsets[-1][3]:
             target_page = num_pages - 1
         else:
-            for idx in range(num_pages):
-                _, py, _, ph = self.continuous_page_offsets[idx]
-                gap_boundary = py + ph + (self.page_gap / 2.0)
-                if canvas_y < gap_boundary:
-                    target_page = idx
-                    break
+            if getattr(self, '_is_geometry_uniform', False) and hasattr(self.continuous_page_offsets, 'stride'):
+                stride = self.continuous_page_offsets.stride
+                gap = self.continuous_page_offsets.gap
+                target_page = int(math.floor((canvas_y - gap / 2.0) / max(stride, 1.0)))
+                target_page = max(0, min(num_pages - 1, target_page))
+            elif num_pages <= 32:
+                for idx in range(num_pages):
+                    _, py, _, ph = self.continuous_page_offsets[idx]
+                    gap_boundary = py + ph + (self.page_gap / 2.0)
+                    if canvas_y < gap_boundary:
+                        target_page = idx
+                        break
+            else:
+                lo, hi = 0, num_pages - 1
+                half_gap = self.page_gap / 2.0
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    _, py, _, ph = self.continuous_page_offsets[mid]
+                    if canvas_y < py + ph + half_gap:
+                        hi = mid
+                    else:
+                        lo = mid + 1
+                target_page = lo
 
         px, py, _, _ = self.get_page_canvas_rect(target_page)
         page_x = (canvas_x - px) / max(self.zoom_level, 0.001)
@@ -4622,9 +4795,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.hide_text_editor()
         self._clear_form_field_overlays()
         self._page_objects_cache.clear()
-        self.continuous_page_offsets = []
-        self.continuous_total_height = 0.0
-        self.continuous_max_width = 0.0
+        self._invalidate_continuous_layout()
         self.pdf_view.set_content_width(1)
         self.pdf_view.set_content_height(1)
         self.pdf_view.queue_draw()
@@ -9012,6 +9183,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             self.document_modified = True
             self.status_label.set_text(message)
+            self._invalidate_continuous_layout()
             self._load_page(insert_position)
             self._load_thumbnails(target_page=insert_position)
             self._update_ui_state()
@@ -10350,6 +10522,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             self.document_modified = True
             self.status_label.set_text(message)
+            self._invalidate_continuous_layout()
             self._load_page(insert_position)
             self._load_thumbnails(target_page=insert_position)
             self._update_ui_state()
@@ -10402,6 +10575,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             self.document_modified = True
             self.status_label.set_text(message)
+            self._invalidate_continuous_layout()
             new_page_count = pdf_handler.get_page_count(self.doc)
             new_page_index = min(page_to_delete, new_page_count - 1)
             self._load_page(new_page_index)
