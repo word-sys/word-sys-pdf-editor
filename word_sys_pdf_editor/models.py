@@ -1565,7 +1565,7 @@ class DocumentSession:
     scroll_y: float = 0.0
 
     # Modification & Undo
-    is_modified: bool = False
+    _is_modified: bool = field(default=False, repr=False)
     allow_incremental_save: bool = True
     is_repaired_file: bool = False
     undo_manager: Any = None
@@ -1634,6 +1634,24 @@ class DocumentSession:
                 self.pages_model = Gio.ListStore(item_type=PdfPage)
             except Exception:
                 self.pages_model = None
+        if self.doc is not None:
+            try:
+                self.doc._is_modified = self._is_modified
+            except Exception:
+                pass
+
+    @property
+    def is_modified(self) -> bool:
+        return self._is_modified
+
+    @is_modified.setter
+    def is_modified(self, val: bool):
+        self._is_modified = bool(val)
+        if self.doc is not None:
+            try:
+                self.doc._is_modified = bool(val)
+            except Exception:
+                pass
 
     @property
     def acroform_fields(self) -> List[Any]:

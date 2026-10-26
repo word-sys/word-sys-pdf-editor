@@ -63,6 +63,7 @@ class BoundedLRUCache(dict):
     """LRU Cache bounded by maximum item count and maximum total memory byte ceiling."""
     def __init__(self, max_items: int = 6, max_bytes: int = 120 * 1024 * 1024):
         super().__init__()
+        self._lock = threading.RLock()
         self.max_items = int(max_items)
         self.max_bytes = int(max_bytes)
         self.current_bytes = 0
@@ -82,64 +83,77 @@ class BoundedLRUCache(dict):
         return 1024
 
     def __getitem__(self, key):
-        val = super().__getitem__(key)
-        super().__delitem__(key)
-        super().__setitem__(key, val)
-        return val
+        with self._lock:
+            val = super().__getitem__(key)
+            super().__delitem__(key)
+            super().__setitem__(key, val)
+            return val
 
     def get(self, key, default=None):
-        if key in self:
-            return self[key]
-        return default
+        with self._lock:
+            if key in self:
+                return self[key]
+            return default
 
     def __setitem__(self, key, value):
-        new_size = self._estimate_size(value)
-        if key in self:
-            old_size = self._item_sizes.get(key, 0)
-            self.current_bytes -= old_size
-            super().__delitem__(key)
-        super().__setitem__(key, value)
-        self._item_sizes[key] = new_size
-        self.current_bytes += new_size
-        self._evict_as_needed()
+        with self._lock:
+            new_size = self._estimate_size(value)
+            if key in self:
+                old_size = self._item_sizes.get(key, 0)
+                self.current_bytes -= old_size
+                super().__delitem__(key)
+            super().__setitem__(key, value)
+            self._item_sizes[key] = new_size
+            self.current_bytes += new_size
+            self._evict_as_needed()
 
     def _evict_as_needed(self):
-        while len(self) > 1 and (len(self) > self.max_items or self.current_bytes > self.max_bytes):
-            oldest_key = next(iter(self))
-            self.pop(oldest_key, None)
+        with self._lock:
+            while len(self) > 1 and (len(self) > self.max_items or self.current_bytes > self.max_bytes):
+                oldest_key = next(iter(self))
+                self.pop(oldest_key, None)
 
     def set_limits(self, max_items: int, max_bytes: int):
         """Update cache item count and memory byte limits dynamically, evicting excess items."""
-        self.max_items = max(1, int(max_items))
-        self.max_bytes = max(1024 * 1024, int(max_bytes))
-        self._evict_as_needed()
+        with self._lock:
+            self.max_items = max(1, int(max_items))
+            self.max_bytes = max(1024 * 1024, int(max_bytes))
+            self._evict_as_needed()
 
     def pop(self, key, *args):
-        if key in self:
-            size = self._item_sizes.pop(key, 0)
-            self.current_bytes = max(0, self.current_bytes - size)
-            val = super().__getitem__(key)
-            super().__delitem__(key)
-            return val
-        if args:
-            return args[0]
-        raise KeyError(key)
+        with self._lock:
+            if key in self:
+                size = self._item_sizes.pop(key, 0)
+                self.current_bytes = max(0, self.current_bytes - size)
+                val = super().__getitem__(key)
+                super().__delitem__(key)
+                return val
+            if args:
+                return args[0]
+            raise KeyError(key)
 
     def __delitem__(self, key):
-        self.pop(key)
+        with self._lock:
+            self.pop(key)
 
     def clear(self):
-        self._item_sizes.clear()
-        self.current_bytes = 0
-        super().clear()
+        with self._lock:
+            self._item_sizes.clear()
+            self.current_bytes = 0
+            super().clear()
 
     def set_budget(self, max_items: Optional[int] = None, max_bytes: Optional[int] = None):
         """Update cache boundaries dynamically."""
-        if max_items is not None:
-            self.max_items = max(1, int(max_items))
-        if max_bytes is not None:
-            self.max_bytes = max(1024 * 1024, int(max_bytes))
-        self._evict_as_needed()
+        with self._lock:
+            if max_items is not None:
+                self.max_items = max(1, int(max_items))
+            if max_bytes is not None:
+                self.max_bytes = max(1024 * 1024, int(max_bytes))
+            self._evict_as_needed()
+
+    def __contains__(self, key):
+        with self._lock:
+            return super().__contains__(key)
 
 
 class CompressedSnapshotStore(dict):
@@ -192,18 +206,28 @@ class CompressedSnapshotStore(dict):
 
 
 _cairo_page_cache = BoundedLRUCache(max_items=6, max_bytes=120 * 1024 * 1024)
+_page_rasterizer_pool = None
 
 def configure_memory_limits(is_eco_mode: bool):
     """Dynamically adjust internal page cache budget based on Eco / Low-Spec mode."""
-    global _cairo_page_cache
+    global _cairo_page_cache, _page_rasterizer_pool
     if is_eco_mode:
         _cairo_page_cache.set_limits(max_items=3, max_bytes=40 * 1024 * 1024)
     else:
         _cairo_page_cache.set_limits(max_items=6, max_bytes=120 * 1024 * 1024)
+    if _page_rasterizer_pool is not None:
+        _page_rasterizer_pool.set_eco_mode(is_eco_mode)
 
 def invalidate_page_cache(doc=None, page_index=None):
     """Invalidate cached Cairo page surfaces and internal document page cache."""
-    global _cairo_page_cache
+    global _cairo_page_cache, _page_rasterizer_pool
+    if _page_rasterizer_pool is not None:
+        if doc is None:
+            _page_rasterizer_pool.bump_generation()
+            _page_rasterizer_pool.cancel_all()
+        else:
+            _page_rasterizer_pool.bump_generation(id(doc))
+            _page_rasterizer_pool.cancel_all(doc)
     if doc is None:
         _cairo_page_cache.clear()
         return
@@ -213,12 +237,13 @@ def invalidate_page_cache(doc=None, page_index=None):
         else:
             doc._page_cache.pop(page_index, None)
     doc_id = id(doc)
-    if page_index is None:
-        keys_to_del = [k for k in _cairo_page_cache if k[0] == doc_id]
-    else:
-        keys_to_del = [k for k in _cairo_page_cache if k[0] == doc_id and k[1] == page_index]
-    for k in keys_to_del:
-        _cairo_page_cache.pop(k, None)
+    with getattr(_cairo_page_cache, '_lock', threading.Lock()):
+        if page_index is None:
+            keys_to_del = [k for k in list(_cairo_page_cache.keys()) if k[0] == doc_id]
+        else:
+            keys_to_del = [k for k in list(_cairo_page_cache.keys()) if k[0] == doc_id and k[1] == page_index]
+        for k in keys_to_del:
+            _cairo_page_cache.pop(k, None)
 
 def rotate_point(x, y, cx, cy, angle_degrees):
     """Rotate point (x, y) around pivot (cx, cy) by angle_degrees clockwise."""
@@ -421,6 +446,202 @@ def update_page_cairo_surface_rect(doc, page_index, zoom_level, rect):
     except Exception as e:
         print(f"Error updating cached sub-rectangle for page {page_index}: {e}")
         return False
+
+class PageRasterizerPool:
+    """Dedicated worker pool for asynchronous background Cairo page surface rendering."""
+
+    def __init__(self, max_workers: int = 2):
+        self.max_workers = max_workers
+        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="page-rasterizer")
+        try:
+            barrier = threading.Barrier(max_workers + 1)
+            for _ in range(max_workers):
+                self._executor.submit(barrier.wait)
+            barrier.wait(timeout=1.0)
+        except Exception:
+            pass
+        self._lock = threading.RLock()
+        self._pending_callbacks: Dict[Tuple[int, int, float], List[Any]] = {}
+        self._doc_generations: Dict[int, int] = {}
+        self._active_futures: Dict[Tuple[int, int, float], Any] = {}
+        self._latest_requested_zoom: Dict[Tuple[int, int], float] = {}
+        self._is_eco_mode: bool = False
+
+    def set_eco_mode(self, is_eco: bool):
+        with self._lock:
+            self._is_eco_mode = bool(is_eco)
+
+    def get_generation(self, doc_id: int) -> int:
+        with self._lock:
+            return self._doc_generations.get(doc_id, 0)
+
+    def bump_generation(self, doc_id: Optional[int] = None):
+        with self._lock:
+            if doc_id is None:
+                for k in list(self._doc_generations.keys()):
+                    self._doc_generations[k] += 1
+                self._pending_callbacks.clear()
+            else:
+                self._doc_generations[doc_id] = self._doc_generations.get(doc_id, 0) + 1
+                keys_to_del = [k for k in self._pending_callbacks if k[0] == doc_id]
+                for k in keys_to_del:
+                    self._pending_callbacks.pop(k, None)
+
+    def peek_surface(self, doc, page_index: int, zoom_level: float) -> Optional[cairo.ImageSurface]:
+        """Return cached surface if immediately available in LRU cache, otherwise None."""
+        if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
+            return None
+        cache_key = (id(doc), page_index, round(float(zoom_level), 4))
+        global _cairo_page_cache
+        if cache_key in _cairo_page_cache:
+            surf = _cairo_page_cache.get(cache_key)
+            if (
+                surf is not None
+                and getattr(surf, 'get_width', lambda: 0)() > 0
+                and getattr(surf, 'get_height', lambda: 0)() > 0
+            ):
+                return surf
+        return None
+
+    def find_best_cached_surface(self, doc, page_index: int, target_zoom: float = 1.0) -> Optional[Tuple[cairo.ImageSurface, float]]:
+        """Find an already-rendered Cairo surface for the given page at any zoom level, prioritizing closest zoom."""
+        if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
+            return None
+        doc_id = id(doc)
+        global _cairo_page_cache
+        candidates = []
+        with getattr(_cairo_page_cache, '_lock', threading.Lock()):
+            for k in list(_cairo_page_cache.keys()):
+                if k[0] == doc_id and k[1] == page_index:
+                    surf = _cairo_page_cache.get(k)
+                    if (
+                        surf is not None
+                        and getattr(surf, 'get_width', lambda: 0)() > 0
+                        and getattr(surf, 'get_height', lambda: 0)() > 0
+                    ):
+                        candidates.append((surf, float(k[2])))
+
+        if not candidates:
+            return None
+
+        best_surf, best_zoom = min(candidates, key=lambda item: abs(item[1] - target_zoom))
+        return best_surf, best_zoom
+
+    def request_surface(self, doc, page_index: int, zoom_level: float, callback: Optional[Any] = None, defer: bool = True):
+        """Submit background rasterization request. Dispatches callback(page_index, zoom_level, surf) via GLib.idle_add upon completion."""
+        if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
+            return
+
+        doc_id = id(doc)
+        zoom_rounded = round(float(zoom_level), 4)
+        task_key = (doc_id, page_index, zoom_rounded)
+
+        # Check if already in cache
+        cached = self.peek_surface(doc, page_index, zoom_level)
+        if cached is not None:
+            if callback:
+                def _dispatch_cached():
+                    try:
+                        callback(page_index, zoom_level, cached)
+                    except Exception:
+                        pass
+                    return False
+                GLib.idle_add(_dispatch_cached)
+            return
+
+        with self._lock:
+            self._latest_requested_zoom[(doc_id, page_index)] = zoom_rounded
+            gen = self._doc_generations.get(doc_id, 0)
+            if task_key in self._pending_callbacks:
+                if callback:
+                    self._pending_callbacks[task_key].append(callback)
+                return
+
+            self._pending_callbacks[task_key] = [callback] if callback else []
+
+        def _render_worker(d, p_idx, z_val, t_key, expected_gen):
+            try:
+                if getattr(d, 'is_closed', False):
+                    return
+                surf = get_page_cairo_surface(d, p_idx, z_val)
+            except Exception:
+                surf = None
+
+            with self._lock:
+                callbacks = self._pending_callbacks.pop(t_key, [])
+                self._active_futures.pop(t_key, None)
+                cur_gen = self._doc_generations.get(doc_id, 0)
+                if cur_gen != expected_gen or getattr(d, 'is_closed', False):
+                    return
+
+            if callbacks and surf is not None:
+                def _dispatch_all():
+                    for cb in callbacks:
+                        try:
+                            cb(p_idx, z_val, surf)
+                        except Exception:
+                            pass
+                    return False
+                GLib.idle_add(_dispatch_all)
+
+        def _do_submit():
+            with self._lock:
+                if task_key not in self._pending_callbacks:
+                    return False
+                future = self._executor.submit(_render_worker, doc, page_index, zoom_level, task_key, gen)
+                self._active_futures[task_key] = future
+            return False
+
+        if defer:
+            GLib.idle_add(_do_submit)
+        else:
+            _do_submit()
+
+    def wait_for_surface(self, doc, page_index: int, zoom_level: float, timeout: float = 5.0) -> Optional[cairo.ImageSurface]:
+        """Wait synchronously for a requested surface (useful for tests and headless verification)."""
+        cached = self.peek_surface(doc, page_index, zoom_level)
+        if cached is not None:
+            return cached
+        event = threading.Event()
+        result = [None]
+        def _on_ready(p, z, surf):
+            result[0] = surf
+            event.set()
+        self.request_surface(doc, page_index, zoom_level, callback=_on_ready, defer=False)
+        event.wait(timeout=timeout)
+        return result[0] or self.peek_surface(doc, page_index, zoom_level)
+
+    def cancel_all(self, doc=None):
+        """Cancel pending callbacks for document or all documents."""
+        with self._lock:
+            if doc is None:
+                self._pending_callbacks.clear()
+                self._active_futures.clear()
+            else:
+                doc_id = id(doc)
+                keys_to_del = [k for k in self._pending_callbacks if k[0] == doc_id]
+                for k in keys_to_del:
+                    self._pending_callbacks.pop(k, None)
+                    fut = self._active_futures.pop(k, None)
+                    if fut and not fut.running():
+                        fut.cancel()
+
+    def shutdown(self, wait: bool = False):
+        self.cancel_all()
+        self._executor.shutdown(wait=wait)
+
+
+def get_page_rasterizer_pool() -> PageRasterizerPool:
+    global _page_rasterizer_pool
+    if _page_rasterizer_pool is None:
+        _page_rasterizer_pool = PageRasterizerPool(max_workers=2)
+    return _page_rasterizer_pool
+
+def peek_page_cairo_surface(doc, page_index, zoom_level):
+    return get_page_rasterizer_pool().peek_surface(doc, page_index, zoom_level)
+
+def request_page_cairo_surface(doc, page_index, zoom_level, callback=None, defer: bool = True):
+    return get_page_rasterizer_pool().request_surface(doc, page_index, zoom_level, callback=callback, defer=defer)
 
 def _get_font_args_for_pymupdf(text_obj):
     """Get the font args for pymupdf."""
@@ -768,8 +989,14 @@ class DiskThumbnailCache:
         except Exception:
             return None
 
-    def store_thumbnail(self, doc, page_index: int, target_width: int, pix_or_pixbuf: Any, filepath: Optional[str] = None) -> bool:
-        """Store rendered thumbnail directly to disk cache."""
+    def store_thumbnail(self, doc, page_index: int, target_width: int, pix_or_pixbuf: Any, filepath: Optional[str] = None, force: bool = False) -> bool:
+        """Store rendered thumbnail directly to disk cache.
+        
+        Refuses to store dirty/unsaved document modifications to disk cache unless force=True.
+        """
+        if not force:
+            if getattr(doc, '_is_modified', False):
+                return False
         fp = self.get_document_fingerprint(doc, filepath)
         if not fp:
             return False
@@ -917,8 +1144,8 @@ def get_disk_thumbnail_cache() -> DiskThumbnailCache:
 
 class ThumbnailTask:
     """Encapsulates a pending thumbnail generation job."""
-    __slots__ = ('generation_id', 'doc', 'page_index', 'target_width', 'priority', 'callback', 'cancelled', 'filepath')
-    def __init__(self, generation_id, doc, page_index, target_width, priority, callback, filepath=None):
+    __slots__ = ('generation_id', 'doc', 'page_index', 'target_width', 'priority', 'callback', 'cancelled', 'filepath', 'save_to_disk')
+    def __init__(self, generation_id, doc, page_index, target_width, priority, callback, filepath=None, save_to_disk=None):
         self.generation_id = generation_id
         self.doc = doc
         self.page_index = page_index
@@ -927,6 +1154,7 @@ class ThumbnailTask:
         self.callback = callback
         self.cancelled = False
         self.filepath = filepath or getattr(doc, '_file_path', None) or getattr(doc, 'name', None)
+        self.save_to_disk = save_to_disk
 
     def cancel(self):
         self.cancelled = True
@@ -943,7 +1171,7 @@ class ThumbnailPipeline:
         self._active_workers = 0
         self._shutdown = False
 
-    def request(self, generation_id, doc, page_index, target_width=150, priority=PRIORITY_VISIBLE, callback=None, filepath=None):
+    def request(self, generation_id, doc, page_index, target_width=150, priority=PRIORITY_VISIBLE, callback=None, filepath=None, save_to_disk=None):
         """Enqueue a thumbnail render request with priority scheduling."""
         if self._shutdown or doc is None or getattr(doc, 'is_closed', False):
             return None
@@ -955,7 +1183,7 @@ class ThumbnailPipeline:
                     return existing
                 existing.cancel()
 
-            task = ThumbnailTask(generation_id, doc, page_index, target_width, priority, callback, filepath=filepath)
+            task = ThumbnailTask(generation_id, doc, page_index, target_width, priority, callback, filepath=filepath, save_to_disk=save_to_disk)
             self._tasks[key] = task
             count = next(self._counter)
             self._queue.put((priority, count, task))
@@ -1015,9 +1243,13 @@ class ThumbnailPipeline:
 
             thumb = None
             try:
+                is_modified = getattr(doc, '_is_modified', False)
+                allow_disk = task.save_to_disk if task.save_to_disk is not None else (not is_modified)
+
                 # 1. Tier 2 Disk Cache Lookup (Non-blocking, zero doc lock contention)
-                disk_cache = get_disk_thumbnail_cache()
-                thumb = disk_cache.get_thumbnail(doc, task.page_index, target_width=task.target_width, filepath=task.filepath)
+                if allow_disk and not is_modified:
+                    disk_cache = get_disk_thumbnail_cache()
+                    thumb = disk_cache.get_thumbnail(doc, task.page_index, target_width=task.target_width, filepath=task.filepath)
 
                 # 2. If not cached on disk, render via PyMuPDF with doc lock
                 if thumb is None:
@@ -1025,10 +1257,16 @@ class ThumbnailPipeline:
                     if lock:
                         with lock:
                             if not task.cancelled and not getattr(doc, 'is_closed', False):
-                                thumb = generate_thumbnail(doc, task.page_index, target_width=task.target_width, filepath=task.filepath)
+                                thumb = generate_thumbnail(
+                                    doc, task.page_index, target_width=task.target_width,
+                                    filepath=task.filepath, save_to_disk=allow_disk
+                                )
                     else:
                         if not task.cancelled and not getattr(doc, 'is_closed', False):
-                            thumb = generate_thumbnail(doc, task.page_index, target_width=task.target_width, filepath=task.filepath)
+                            thumb = generate_thumbnail(
+                                doc, task.page_index, target_width=task.target_width,
+                                filepath=task.filepath, save_to_disk=allow_disk
+                            )
             except Exception:
                 thumb = None
 
@@ -1059,10 +1297,10 @@ def get_thumbnail_pipeline():
             _THUMBNAIL_PIPELINE = ThumbnailPipeline(max_workers=2)
         return _THUMBNAIL_PIPELINE
 
-def request_thumbnail_async(generation_id, doc, page_index, target_width=150, priority=PRIORITY_VISIBLE, callback=None, filepath=None):
+def request_thumbnail_async(generation_id, doc, page_index, target_width=150, priority=PRIORITY_VISIBLE, callback=None, filepath=None, save_to_disk=None):
     """Submit asynchronous thumbnail generation request to pipeline."""
     pipeline = get_thumbnail_pipeline()
-    return pipeline.request(generation_id, doc, page_index, target_width, priority, callback, filepath=filepath)
+    return pipeline.request(generation_id, doc, page_index, target_width, priority, callback, filepath=filepath, save_to_disk=save_to_disk)
 
 def cancel_thumbnail_async(generation_id, page_index):
     """Cancel pending asynchronous thumbnail generation for page."""
@@ -1083,16 +1321,26 @@ def shutdown_thumbnail_pipeline(wait=False):
             _THUMBNAIL_PIPELINE = None
 
 
-def generate_thumbnail(doc, page_index, target_width=150, filepath=None):
-    """Generate thumbnail, consulting persistent disk cache first."""
+def generate_thumbnail(doc, page_index, target_width=150, filepath=None, save_to_disk=None):
+    """Generate thumbnail, consulting persistent disk cache first.
+    
+    Thumbnails are only stored to disk cache when the document is clean (newly opened
+    or explicitly saved). Unsaved in-memory changes are never written to disk cache.
+    """
     if not doc or not (0 <= page_index < doc.page_count):
         return None
 
+    is_modified = getattr(doc, '_is_modified', False)
+    explicit_save = (save_to_disk is True)
+    if save_to_disk is None:
+        save_to_disk = not is_modified
+
     # Tier 2 Persistent Disk Cache Check
-    disk_cache = get_disk_thumbnail_cache()
-    cached_pb = disk_cache.get_thumbnail(doc, page_index, target_width, filepath=filepath)
-    if cached_pb is not None:
-        return cached_pb
+    if save_to_disk and not is_modified:
+        disk_cache = get_disk_thumbnail_cache()
+        cached_pb = disk_cache.get_thumbnail(doc, page_index, target_width, filepath=filepath)
+        if cached_pb is not None:
+            return cached_pb
 
     try:
         lock = get_doc_lock(doc)
@@ -1115,7 +1363,9 @@ def generate_thumbnail(doc, page_index, target_width=150, filepath=None):
             pix = page.get_pixmap(matrix=matrix, alpha=False)
 
         # Store to disk cache
-        disk_cache.store_thumbnail(doc, page_index, target_width, pix, filepath=filepath)
+        if save_to_disk and (not is_modified or explicit_save):
+            disk_cache = get_disk_thumbnail_cache()
+            disk_cache.store_thumbnail(doc, page_index, target_width, pix, filepath=filepath, force=explicit_save)
 
         gdk_pixbuf = GdkPixbuf.Pixbuf.new_from_data(
             pix.samples, GdkPixbuf.Colorspace.RGB, False, 8,
@@ -1123,10 +1373,6 @@ def generate_thumbnail(doc, page_index, target_width=150, filepath=None):
         )
         return gdk_pixbuf
     except Exception as thumb_error:
-        print(f"Warning: Could not generate thumbnail for page {page_index+1}: {thumb_error}")
-        placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, target_width, int(target_width * 1.414))
-        placeholder_pixbuf.fill(0xaaaaaaFF)
-        return placeholder_pixbuf
         print(f"Warning: Could not generate thumbnail for page {page_index+1}: {thumb_error}")
         placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, target_width, int(target_width * 1.414))
         placeholder_pixbuf.fill(0xaaaaaaFF)

@@ -481,6 +481,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._continuous_scroll_fallback = is_cont
         self.is_eco_mode = is_eco_mode_enabled()
         pdf_handler.configure_memory_limits(self.is_eco_mode)
+        self.async_page_rendering = True
 
         self.sessions = []
         self._active_session = DocumentSession(undo_manager=UndoManager(self))
@@ -1437,6 +1438,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def document_modified(self, val):
         if self._active_session:
             self._active_session.is_modified = val
+            if self._active_session.doc is not None:
+                try:
+                    self._active_session.doc._is_modified = bool(val)
+                except Exception:
+                    pass
             self._update_tab_title(self._active_session)
             if val and hasattr(self, 'get_title'):
                 title = self.get_title()
@@ -3741,6 +3747,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         gen_id = getattr(self, '_thumb_generation_id', 1)
         prio = pdf_handler.PRIORITY_VISIBLE if priority is None else priority
         thumb_w = 100 if getattr(self, 'is_eco_mode', False) else 150
+        is_mod = (
+            getattr(sess, 'is_modified', False)
+            or getattr(self, 'document_modified', False)
+            or getattr(sess.doc, '_is_modified', False)
+        )
+        allow_disk = not is_mod
         pdf_handler.request_thumbnail_async(
             gen_id,
             sess.doc,
@@ -3748,7 +3760,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             target_width=thumb_w,
             priority=prio,
             callback=self._on_thumbnail_rendered,
-            filepath=sess.pdf_path
+            filepath=sess.pdf_path,
+            save_to_disk=allow_disk
         )
 
         if prio == pdf_handler.PRIORITY_VISIBLE:
@@ -3764,7 +3777,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             target_width=thumb_w,
                             priority=pdf_handler.PRIORITY_PREFETCH,
                             callback=self._on_thumbnail_rendered,
-                            filepath=sess.pdf_path
+                            filepath=sess.pdf_path,
+                            save_to_disk=allow_disk
                         )
 
     def cancel_thumbnail_request(self, page_index):
@@ -3810,25 +3824,35 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._thumb_generation_id = (old_gen or 0) + 1
         current_gen = self._thumb_generation_id
 
+        # Check if document has unsaved in-memory changes
+        is_mod = (
+            getattr(sess, 'is_modified', False)
+            or getattr(self, 'document_modified', False)
+            or getattr(target_doc, '_is_modified', False)
+        )
+        allow_disk = not is_mod
+
         # Generate thumbnail for active page
         active_target = target_page if target_page is not None else getattr(self, 'current_page_index', 0)
         active_thumb = None
         thumb_w = 100 if getattr(self, 'is_eco_mode', False) else 150
         if 0 <= active_target < page_count:
             try:
-                active_thumb = pdf_handler.generate_thumbnail(target_doc, active_target, target_width=thumb_w, filepath=sess.pdf_path)
+                active_thumb = pdf_handler.generate_thumbnail(
+                    target_doc, active_target, target_width=thumb_w, filepath=sess.pdf_path, save_to_disk=allow_disk
+                )
             except Exception:
                 pass
 
-        # Progressive model population: populate initial visible slice (up to 30) with disk cache
+        # Progressive model population: populate initial visible slice (up to 30) with disk cache if clean
         init_slice_size = min(page_count, 30)
-        disk_cache = pdf_handler.get_disk_thumbnail_cache()
+        disk_cache = pdf_handler.get_disk_thumbnail_cache() if allow_disk else None
         init_items = []
         for i in range(init_slice_size):
             if i == active_target and active_thumb:
                 init_items.append(PdfPage(index=i, thumbnail=active_thumb))
             else:
-                disk_thumb = disk_cache.get_thumbnail(target_doc, i, target_width=thumb_w, filepath=sess.pdf_path)
+                disk_thumb = disk_cache.get_thumbnail(target_doc, i, target_width=thumb_w, filepath=sess.pdf_path) if disk_cache else None
                 init_items.append(PdfPage(index=i, thumbnail=disk_thumb))
 
         target_model.splice(0, old_count, init_items)
@@ -3849,7 +3873,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     if i == active_target and active_thumb:
                         chunk_items.append(PdfPage(index=i, thumbnail=active_thumb))
                     else:
-                        disk_thumb = disk_cache.get_thumbnail(target_doc, i, target_width=thumb_w, filepath=sess.pdf_path)
+                        disk_thumb = disk_cache.get_thumbnail(target_doc, i, target_width=thumb_w, filepath=sess.pdf_path) if disk_cache else None
                         chunk_items.append(PdfPage(index=i, thumbnail=disk_thumb))
                 target_model.splice(rem_iter[0], 0, chunk_items)
                 rem_iter[0] = chunk_end
@@ -3914,7 +3938,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             idx,
                             target_width=150,
                             priority=pdf_handler.PRIORITY_BACKGROUND,
-                            callback=self._on_thumbnail_rendered
+                            callback=self._on_thumbnail_rendered,
+                            filepath=sess.pdf_path,
+                            save_to_disk=allow_disk
                         )
             bg_iter[0] = chunk_end
             if bg_iter[0] < page_count:
@@ -4838,6 +4864,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.set_content_height(self.current_pdf_page_height)
 
         self.pdf_view.queue_draw()
+        if getattr(self, 'async_page_rendering', True) and self.doc and not getattr(self.doc, 'is_closed', False):
+            pdf_handler.request_page_cairo_surface(self.doc, page_index, self.zoom_level)
+            if not getattr(self, 'is_eco_mode', False):
+                if page_index + 1 < pdf_handler.get_page_count(self.doc):
+                    pdf_handler.request_page_cairo_surface(self.doc, page_index + 1, self.zoom_level)
+                if page_index - 1 >= 0:
+                    pdf_handler.request_page_cairo_surface(self.doc, page_index - 1, self.zoom_level)
         
         if preserve_scroll:
             self._is_programmatic_scrolling = True
@@ -5023,10 +5056,28 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             print(_("dbg_save_success", save_path))
             self.document_modified = False 
             if self._active_session:
+                self._active_session.is_modified = False
                 self._active_session.pdf_path = save_path
                 self._active_session.original_file_path = save_path
                 self._update_tab_title(self._active_session)
                 self.set_title(f"{constants.APP_NAME} - {self._active_session.display_title}")
+            if self.doc:
+                self.doc._is_modified = False
+
+            # File is now actually saved on disk; write thumbnail for the saved file to disk cache
+            try:
+                thumb_w = 100 if getattr(self, 'is_eco_mode', False) else 150
+                if self.doc and 0 <= page_to_restore < pdf_handler.get_page_count(self.doc):
+                    pdf_handler.generate_thumbnail(
+                        self.doc, page_to_restore, target_width=thumb_w, filepath=save_path, save_to_disk=True
+                    )
+                    if thumb_w != 150:
+                        pdf_handler.generate_thumbnail(
+                            self.doc, page_to_restore, target_width=150, filepath=save_path, save_to_disk=True
+                        )
+            except Exception as e:
+                print(f"Warning caching thumbnail on save: {e}")
+
             self.load_document(save_path, target_page=page_to_restore, in_new_tab=False)
             self.status_label.set_text(_("saved").format(os.path.basename(save_path)))
         else:
@@ -5117,7 +5168,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.rectangle(dirty_rect[0] * self.zoom_level, dirty_rect[1] * self.zoom_level,
                          dirty_rect[2] * self.zoom_level, dirty_rect[3] * self.zoom_level)
             cr.clip()
-        cached_surf = pdf_handler.get_page_cairo_surface(self.doc, page_index, self.zoom_level)
+
+        use_async = getattr(self, 'async_page_rendering', True)
+        cached_surf = None
+        if use_async:
+            cached_surf = pdf_handler.peek_page_cairo_surface(self.doc, page_index, self.zoom_level)
+        else:
+            cached_surf = pdf_handler.get_page_cairo_surface(self.doc, page_index, self.zoom_level)
+
         if (
             cached_surf is not None
             and getattr(cached_surf, 'get_width', lambda: 0)() > 0
@@ -5126,7 +5184,48 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.set_source_surface(cached_surf, 0, 0)
             cr.paint()
         else:
-            pdf_handler.draw_page_to_cairo(cr, self.doc, page_index, self.zoom_level)
+            if use_async and self.doc and not getattr(self.doc, 'is_closed', False):
+                def _on_async_page_ready(p_idx, z_val, surf):
+                    if not self.doc or getattr(self.doc, 'is_closed', False):
+                        return
+                    if getattr(self, '_active_session', None) is None:
+                        return
+                    is_visible = False
+                    if getattr(self, 'continuous_scroll', False):
+                        is_visible = (p_idx in self.get_visible_page_indices())
+                    else:
+                        is_visible = (p_idx == self.current_page_index)
+                    if is_visible and abs(self.zoom_level - z_val) < 0.001:
+                        if hasattr(self, 'pdf_view') and self.pdf_view:
+                            self.pdf_view.queue_draw()
+
+                pdf_handler.request_page_cairo_surface(self.doc, page_index, self.zoom_level, callback=_on_async_page_ready)
+
+                rendered_fallback = False
+                best_match = pdf_handler.get_page_rasterizer_pool().find_best_cached_surface(self.doc, page_index, self.zoom_level)
+                if best_match is not None:
+                    alt_surf, alt_zoom = best_match
+                    if alt_zoom > 0:
+                        scale_factor = self.zoom_level / alt_zoom
+                        cr.save()
+                        cr.scale(scale_factor, scale_factor)
+                        cr.set_source_surface(alt_surf, 0, 0)
+                        cr.paint()
+                        cr.restore()
+                        rendered_fallback = True
+
+                if not rendered_fallback:
+                    cr.save()
+                    cr.set_source_rgb(1.0, 1.0, 1.0)
+                    cr.rectangle(0, 0, page_w, page_h)
+                    cr.fill()
+                    cr.set_source_rgb(0.85, 0.85, 0.85)
+                    cr.set_line_width(1.0)
+                    cr.rectangle(0, 0, page_w, page_h)
+                    cr.stroke()
+                    cr.restore()
+            else:
+                pdf_handler.draw_page_to_cairo(cr, self.doc, page_index, self.zoom_level)
         cr.restore()
 
         page = self.doc[page_index]
@@ -9411,7 +9510,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._page_objects_cache.update(new_cache)
 
             self.document_modified = True
-            pdf_handler.get_disk_thumbnail_cache().invalidate_doc(self.doc, filepath=getattr(self._active_session, 'pdf_path', None))
             self.status_label.set_text(message)
             self._invalidate_continuous_layout()
             self._load_page(insert_position)
@@ -10803,7 +10901,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._page_objects_cache.update(new_cache)
 
             self.document_modified = True
-            pdf_handler.get_disk_thumbnail_cache().invalidate_doc(self.doc, filepath=getattr(self._active_session, 'pdf_path', None))
             self.status_label.set_text(message)
             self._invalidate_continuous_layout()
             self._load_page(insert_position)
@@ -10857,7 +10954,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._page_objects_cache.update(new_cache)
 
             self.document_modified = True
-            pdf_handler.get_disk_thumbnail_cache().invalidate_doc(self.doc, filepath=getattr(self._active_session, 'pdf_path', None))
             self.status_label.set_text(message)
             self._invalidate_continuous_layout()
             new_page_count = pdf_handler.get_page_count(self.doc)
@@ -14104,7 +14200,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.lookup_action("redo").set_enabled(can_redo)
 
     def _refresh_thumbnail(self, page_index):
-        """Regenerate and replace the thumbnail pixbuf for a modified page."""
+        """Regenerate and replace the thumbnail pixbuf for a modified page.
+        
+        Unsaved in-memory changes are rendered for immediate UI preview without
+        corrupting or overwriting the clean on-disk thumbnail cache.
+        """
         if not self.doc or not (0 <= page_index < pdf_handler.get_page_count(self.doc)):
             return
         try:
@@ -14112,14 +14212,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if gen_id is not None:
                 pdf_handler.cancel_thumbnail_async(gen_id, page_index)
 
-            # Invalidate disk thumbnail cache for this page so it re-renders fresh
-            pdf_handler.get_disk_thumbnail_cache().invalidate_page(
-                self.doc, page_index, filepath=getattr(self._active_session, 'pdf_path', None)
-            )
-
             thumb_w = 100 if getattr(self, 'is_eco_mode', False) else 150
             thumb = pdf_handler.generate_thumbnail(
-                self.doc, page_index, target_width=thumb_w, filepath=getattr(self._active_session, 'pdf_path', None)
+                self.doc, page_index, target_width=thumb_w,
+                filepath=getattr(self._active_session, 'pdf_path', None),
+                save_to_disk=False
             )
             if thumb and self.pages_model:
                 n = self.pages_model.get_n_items()

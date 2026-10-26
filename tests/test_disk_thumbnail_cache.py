@@ -33,6 +33,7 @@ class TestDiskThumbnailCache(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.cache_dir = os.path.join(self.temp_dir.name, "cache")
         self.disk_cache = DiskThumbnailCache(cache_dir=self.cache_dir, max_disk_bytes=50 * 1024 * 1024)
+        pdf_handler._DISK_THUMBNAIL_CACHE = self.disk_cache
 
         # Create a sample multi-page PDF
         self.pdf_path = os.path.join(self.temp_dir.name, "sample.pdf")
@@ -44,6 +45,7 @@ class TestDiskThumbnailCache(unittest.TestCase):
         doc.close()
 
     def tearDown(self):
+        pdf_handler._DISK_THUMBNAIL_CACHE = None
         if hasattr(self, 'win') and self.win:
             try:
                 self.win.close_document()
@@ -208,6 +210,111 @@ class TestDiskThumbnailCache(unittest.TestCase):
         self.assertIsNotNone(item0.thumbnail, "Page 0 thumbnail must be pre-populated from disk on reopen")
         item1 = model.get_item(1)
         self.assertIsNotNone(item1.thumbnail, "Page 1 thumbnail must be pre-populated from disk on reopen")
+
+    def test_store_thumbnail_rejects_dirty_doc_without_force(self):
+        """store_thumbnail must refuse to write when document has unsaved in-memory changes."""
+        doc = fitz.open(self.pdf_path)
+        page0 = doc.load_page(0)
+        pix = page0.get_pixmap(matrix=fitz.Matrix(0.2, 0.2))
+
+        doc._is_modified = True
+        stored = self.disk_cache.store_thumbnail(doc, 0, 150, pix, filepath=self.pdf_path)
+        self.assertFalse(stored, "store_thumbnail must reject dirty document without force=True")
+
+        stored_forced = self.disk_cache.store_thumbnail(doc, 0, 150, pix, filepath=self.pdf_path, force=True)
+        self.assertTrue(stored_forced, "store_thumbnail must succeed when force=True is provided")
+        doc.close()
+
+    def test_dirty_thumbnail_not_written_to_disk_cache(self):
+        """In-memory edits must update the UI preview without corrupting the on-disk thumbnail cache."""
+        self.win = PdfEditorWindow(application=self.app)
+        self.win.font_scan_in_progress = False
+
+        loaded, err = pdf_handler.load_pdf_document(self.pdf_path)
+        self.win._finish_loading(loaded, None, self.pdf_path, 0, self.win._active_session)
+
+        # 1. Clean thumbnail is generated and cached to disk
+        clean_thumb = pdf_handler.generate_thumbnail(self.win.doc, 0, target_width=150, filepath=self.pdf_path)
+        self.assertIsNotNone(clean_thumb)
+
+        fp = self.disk_cache.get_document_fingerprint(self.win.doc, filepath=self.pdf_path)
+        thumb_on_disk = Path(self.disk_cache.cache_dir) / fp / "0_150.png"
+        self.assertTrue(thumb_on_disk.is_file(), "Clean thumbnail must exist on disk")
+        disk_mtime_before = thumb_on_disk.stat().st_mtime_ns
+
+        # 2. Rotate page 90 degrees in memory (dirty change)
+        time.sleep(0.02)
+        self.win.rotate_current_page(90)
+        self.assertTrue(self.win.document_modified)
+        self.assertTrue(self.win._active_session.is_modified)
+
+        # 3. Sidebar thumbnail in memory reflects the rotated page
+        item0 = self.win._active_session.pages_model.get_item(0)
+        self.assertIsNotNone(item0.thumbnail)
+        # 595x842 rotated 90 is 842x595 (aspect ratio flips)
+        self.assertNotEqual(item0.thumbnail.get_height(), clean_thumb.get_height())
+
+        # 4. Critical: On-disk thumbnail file was NOT overwritten by the dirty in-memory change!
+        self.assertTrue(thumb_on_disk.is_file())
+        disk_mtime_after = thumb_on_disk.stat().st_mtime_ns
+        self.assertEqual(disk_mtime_before, disk_mtime_after, "On-disk thumbnail must NOT be overwritten by unsaved changes")
+
+    def test_exit_without_saving_preserves_clean_disk_cache(self):
+        """Closing the window without saving must keep the clean on-disk thumbnail intact."""
+        self.win = PdfEditorWindow(application=self.app)
+        self.win.font_scan_in_progress = False
+
+        loaded, err = pdf_handler.load_pdf_document(self.pdf_path)
+        self.win._finish_loading(loaded, None, self.pdf_path, 0, self.win._active_session)
+
+        # Cache clean thumbnail
+        clean_thumb = pdf_handler.generate_thumbnail(self.win.doc, 0, target_width=150, filepath=self.pdf_path)
+        clean_h = clean_thumb.get_height()
+
+        # Modify page 0 in memory
+        self.win.rotate_current_page(90)
+        self.assertTrue(self.win.document_modified)
+
+        # Simulate exiting without saving (closing session)
+        self.win.close_document()
+
+        # Reopen document fresh from disk
+        reloaded, err = pdf_handler.load_pdf_document(self.pdf_path)
+        self.win._finish_loading(reloaded, None, self.pdf_path, 0, self.win._active_session)
+
+        # The thumbnail retrieved from disk cache must be the clean un-rotated thumbnail
+        cached_thumb = pdf_handler.get_disk_thumbnail_cache().get_thumbnail(reloaded, 0, target_width=150, filepath=self.pdf_path)
+        self.assertIsNotNone(cached_thumb)
+        self.assertEqual(cached_thumb.get_height(), clean_h, "Disk cache must retain original un-rotated thumbnail on exit without saving")
+
+    def test_saving_document_updates_disk_thumbnail_cache(self):
+        """Saving document writes changes to disk and updates the on-disk thumbnail cache."""
+        self.win = PdfEditorWindow(application=self.app)
+        self.win.font_scan_in_progress = False
+
+        loaded, err = pdf_handler.load_pdf_document(self.pdf_path)
+        self.win._finish_loading(loaded, None, self.pdf_path, 0, self.win._active_session)
+
+        clean_thumb = pdf_handler.generate_thumbnail(self.win.doc, 0, target_width=150, filepath=self.pdf_path)
+        clean_h = clean_thumb.get_height()
+
+        # Rotate page 0 in memory
+        self.win.rotate_current_page(90)
+        rotated_h = self.win._active_session.pages_model.get_item(0).thumbnail.get_height()
+        self.assertNotEqual(clean_h, rotated_h)
+
+        # Save document
+        time.sleep(0.02)
+        self.win.save_document(self.pdf_path)
+
+        # Verify disk cache now contains thumbnail matching the saved rotated state
+        reloaded_doc = fitz.open(self.pdf_path)
+        saved_disk_thumb = pdf_handler.get_disk_thumbnail_cache().get_thumbnail(reloaded_doc, 0, target_width=150, filepath=self.pdf_path)
+        self.assertIsNotNone(saved_disk_thumb, "Saved document must have cached thumbnail on disk")
+        self.assertNotEqual(saved_disk_thumb.get_height(), clean_h, "Disk thumbnail must reflect rotated page, not clean un-rotated state")
+        # Rotated page (842x595) scaled to 150px width has height 106px (vs clean un-rotated 212px)
+        self.assertEqual(saved_disk_thumb.get_height(), round(150 / 842 * 595))
+        reloaded_doc.close()
 
 
 if __name__ == "__main__":
