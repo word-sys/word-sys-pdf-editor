@@ -53,6 +53,7 @@ from .stamp_manager import (
 from .search_engine import DocumentSearchEngine, SearchMatch
 from .protect_dialog import ProtectDocumentDialog, DocumentUnlockDialog
 from .signature_dialog import DigitalSignatureDialog, SignatureDetailsDialog
+from .hardware import is_eco_mode_enabled, set_eco_mode_enabled, detect_hardware_spec
 
 
 class UniformPageOffsets(list):
@@ -478,6 +479,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         saved_view_mode = get_setting("view_mode", "single")
         is_cont = (saved_view_mode == "continuous")
         self._continuous_scroll_fallback = is_cont
+        self.is_eco_mode = is_eco_mode_enabled()
+        pdf_handler.configure_memory_limits(self.is_eco_mode)
 
         self.sessions = []
         self._active_session = DocumentSession(undo_manager=UndoManager(self))
@@ -1817,6 +1820,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         pref_section = Gio.Menu()
         pref_section.append(_("menu_toggle_continuous_scroll"), "win.toggle_continuous_scroll")
+        pref_section.append(_("menu_toggle_eco_mode"), "win.toggle_eco_mode")
         pref_section.append(_("menu_reveal_ocr_text"), "win.toggle_ocr_overlay")
         pref_section.append(_("menu_toggle_annotations"), "win.toggle_annotations")
         pref_section.append(_("menu_confirm_delete"), "win.confirm_delete")
@@ -2924,6 +2928,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_toggle_ocr_overlay.connect('activate', on_toggle_ocr_overlay_activate)
         self.add_action(action_toggle_ocr_overlay)
 
+        action_toggle_eco = Gio.SimpleAction.new_stateful(
+            'toggle_eco_mode',
+            None,
+            GLib.Variant.new_boolean(getattr(self, 'is_eco_mode', False))
+        )
+        def on_toggle_eco_activate(action, value):
+            new_val = not action.get_state().get_boolean()
+            self.set_eco_mode(new_val)
+        action_toggle_eco.connect('activate', on_toggle_eco_activate)
+        self.add_action(action_toggle_eco)
+
         action_go_to_page = Gio.SimpleAction.new('go_to_page', None)
         action_go_to_page.connect('activate', lambda a, p: self.show_go_to_page_dialog())
         self.add_action(action_go_to_page)
@@ -3725,11 +3740,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         gen_id = getattr(self, '_thumb_generation_id', 1)
         prio = pdf_handler.PRIORITY_VISIBLE if priority is None else priority
+        thumb_w = 100 if getattr(self, 'is_eco_mode', False) else 150
         pdf_handler.request_thumbnail_async(
             gen_id,
             sess.doc,
             page_index,
-            target_width=150,
+            target_width=thumb_w,
             priority=prio,
             callback=self._on_thumbnail_rendered
         )
@@ -3744,7 +3760,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             gen_id,
                             sess.doc,
                             adj,
-                            target_width=150,
+                            target_width=thumb_w,
                             priority=pdf_handler.PRIORITY_PREFETCH,
                             callback=self._on_thumbnail_rendered
                         )
@@ -3795,9 +3811,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         # Generate thumbnail for active page
         active_target = target_page if target_page is not None else getattr(self, 'current_page_index', 0)
         active_thumb = None
+        thumb_w = 100 if getattr(self, 'is_eco_mode', False) else 150
         if 0 <= active_target < page_count:
             try:
-                active_thumb = pdf_handler.generate_thumbnail(target_doc, active_target, target_width=150)
+                active_thumb = pdf_handler.generate_thumbnail(target_doc, active_target, target_width=thumb_w)
             except Exception:
                 pass
 
@@ -4226,8 +4243,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         _, scroll_y, _, vp_h = self.get_visible_viewport_rect()
 
         if prefetch_margin is None:
-            avg_h = (self.continuous_total_height / max(num_pages, 1)) if getattr(self, 'continuous_total_height', 0) > 0 else 800.0
-            prefetch_margin = min(float(vp_h), float(avg_h) * 1.0)
+            if getattr(self, 'is_eco_mode', False):
+                prefetch_margin = 0.0
+            else:
+                avg_h = (self.continuous_total_height / max(num_pages, 1)) if getattr(self, 'continuous_total_height', 0) > 0 else 800.0
+                prefetch_margin = min(float(vp_h), float(avg_h) * 1.0)
 
         cull_top = scroll_y - prefetch_margin
         cull_bottom = scroll_y + vp_h + prefetch_margin
@@ -4402,6 +4422,31 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action = self.lookup_action("toggle_ocr_overlay")
         if action and action.get_state().get_boolean() != self.show_ocr_overlay:
             action.set_state(GLib.Variant.new_boolean(self.show_ocr_overlay))
+
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+
+    def set_eco_mode(self, enabled: bool):
+        """Enable or disable hardware-adaptive Eco / Low-Spec Mode."""
+        self.is_eco_mode = bool(enabled)
+        set_eco_mode_enabled(self.is_eco_mode)
+        pdf_handler.configure_memory_limits(self.is_eco_mode)
+
+        action = self.lookup_action("toggle_eco_mode")
+        if action and action.get_state().get_boolean() != self.is_eco_mode:
+            action.set_state(GLib.Variant.new_boolean(self.is_eco_mode))
+
+        # Clamp zoom if exceeding eco DPI ceiling (150 DPI = 150/72 = 2.0833x)
+        if self.is_eco_mode and getattr(self, 'zoom_level', 1.0) > (150.0 / 72.0):
+            self._set_zoom(150.0 / 72.0)
+
+        # Evict cache surfaces down to eco budget
+        if hasattr(pdf_handler, '_cairo_page_cache'):
+            pdf_handler._cairo_page_cache._evict_as_needed()
+        gc.collect(1)
+
+        if getattr(self, 'continuous_scroll', False):
+            self._invalidate_continuous_layout()
 
         if hasattr(self, 'pdf_view') and self.pdf_view:
             self.pdf_view.queue_draw()
@@ -5062,7 +5107,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          dirty_rect[2] * self.zoom_level, dirty_rect[3] * self.zoom_level)
             cr.clip()
         cached_surf = pdf_handler.get_page_cairo_surface(self.doc, page_index, self.zoom_level)
-        if cached_surf and cached_surf.get_width() > 0 and cached_surf.get_height() > 0:
+        if (
+            cached_surf is not None
+            and getattr(cached_surf, 'get_width', lambda: 0)() > 0
+            and getattr(cached_surf, 'get_height', lambda: 0)() > 0
+        ):
             cr.set_source_surface(cached_surf, 0, 0)
             cr.paint()
         else:
@@ -10589,7 +10638,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not self.doc or not (0 <= self.current_page_index < pdf_handler.get_page_count(self.doc)):
             return
 
-        clamped_zoom = max(0.1, min(8.0, new_zoom))
+        max_zoom = (150.0 / 72.0) if getattr(self, 'is_eco_mode', False) else 8.0
+        clamped_zoom = max(0.1, min(max_zoom, new_zoom))
         if abs(clamped_zoom - self.zoom_level) < 0.001:
             return
 

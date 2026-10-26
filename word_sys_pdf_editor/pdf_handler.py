@@ -108,6 +108,12 @@ class BoundedLRUCache(dict):
             oldest_key = next(iter(self))
             self.pop(oldest_key, None)
 
+    def set_limits(self, max_items: int, max_bytes: int):
+        """Update cache item count and memory byte limits dynamically, evicting excess items."""
+        self.max_items = max(1, int(max_items))
+        self.max_bytes = max(1024 * 1024, int(max_bytes))
+        self._evict_as_needed()
+
     def pop(self, key, *args):
         if key in self:
             size = self._item_sizes.pop(key, 0)
@@ -186,6 +192,14 @@ class CompressedSnapshotStore(dict):
 
 
 _cairo_page_cache = BoundedLRUCache(max_items=6, max_bytes=120 * 1024 * 1024)
+
+def configure_memory_limits(is_eco_mode: bool):
+    """Dynamically adjust internal page cache budget based on Eco / Low-Spec mode."""
+    global _cairo_page_cache
+    if is_eco_mode:
+        _cairo_page_cache.set_limits(max_items=3, max_bytes=40 * 1024 * 1024)
+    else:
+        _cairo_page_cache.set_limits(max_items=6, max_bytes=120 * 1024 * 1024)
 
 def invalidate_page_cache(doc=None, page_index=None):
     """Invalidate cached Cairo page surfaces and internal document page cache."""
@@ -900,7 +914,11 @@ def generate_thumbnail(doc, page_index, target_width=150):
 def draw_page_to_cairo(cr, doc, page_index, zoom_level, dirty_rect=None):
     """Draw page to cairo using the cached surface."""
     surf = get_page_cairo_surface(doc, page_index, zoom_level)
-    if surf:
+    if (
+        surf is not None
+        and getattr(surf, 'get_width', lambda: 0)() > 0
+        and getattr(surf, 'get_height', lambda: 0)() > 0
+    ):
         if dirty_rect is not None:
             cr.save()
             cr.rectangle(*dirty_rect)
@@ -913,8 +931,10 @@ def draw_page_to_cairo(cr, doc, page_index, zoom_level, dirty_rect=None):
             cr.paint()
         return True, None
     else:
-        cr.set_source_rgb(0.7, 0.7, 0.7)
+        cr.save()
+        cr.set_source_rgb(0.95, 0.95, 0.95)
         cr.paint()
+        cr.restore()
         return False, "Failed to render page."
 
 

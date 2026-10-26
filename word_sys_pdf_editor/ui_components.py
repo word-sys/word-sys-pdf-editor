@@ -156,13 +156,17 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         label.set_text(_("page_info").format(pdf_page.index + 1))
         self._cleanup_notification(box)
 
+        is_eco = getattr(self.editor_window, 'is_eco_mode', False) if self.editor_window else False
+        thumb_w = 100 if is_eco else 150
+        thumb_h = 133 if is_eco else 200
+
         if getattr(pdf_page, 'thumbnail', None):
-            picture.set_size_request(150, -1)
+            picture.set_size_request(thumb_w, -1)
             texture = Gdk.Texture.new_for_pixbuf(pdf_page.thumbnail)
             picture.set_paintable(texture)
             picture.set_visible(True)
         else:
-            picture.set_size_request(150, 200)
+            picture.set_size_request(thumb_w, thumb_h)
             placeholder = get_thumbnail_placeholder_texture()
             picture.set_paintable(placeholder)
             picture.set_visible(True)
@@ -171,13 +175,16 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
 
         def on_thumb_notify(obj, pspec):
             if list_item.get_item() == obj:
+                cur_eco = getattr(self.editor_window, 'is_eco_mode', False) if self.editor_window else False
+                w = 100 if cur_eco else 150
+                h = 133 if cur_eco else 200
                 if getattr(obj, 'thumbnail', None):
-                    picture.set_size_request(150, -1)
+                    picture.set_size_request(w, -1)
                     texture = Gdk.Texture.new_for_pixbuf(obj.thumbnail)
                     picture.set_paintable(texture)
                     picture.set_visible(True)
                 else:
-                    picture.set_size_request(150, 200)
+                    picture.set_size_request(w, h)
                     placeholder = get_thumbnail_placeholder_texture()
                     picture.set_paintable(placeholder)
                     picture.set_visible(True)

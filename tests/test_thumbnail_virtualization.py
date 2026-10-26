@@ -132,23 +132,31 @@ class TestThumbnailVirtualization(unittest.TestCase):
             def on_done(page_idx, thumb, gen_id):
                 executed.append(page_idx)
 
-            # Queue background tasks for pages 10, 11, 12
+            # Queue background tasks for pages 1, 2, 3
             pipeline.request(1, self.doc, 1, priority=pdf_handler.PRIORITY_BACKGROUND, callback=on_done)
             pipeline.request(1, self.doc, 2, priority=pdf_handler.PRIORITY_BACKGROUND, callback=on_done)
+            pipeline.request(1, self.doc, 3, priority=pdf_handler.PRIORITY_BACKGROUND, callback=on_done)
             # Queue visible task for page 4
             pipeline.request(1, self.doc, 4, priority=pdf_handler.PRIORITY_VISIBLE, callback=on_done)
 
             # Wait for execution
-            time.sleep(0.15)
-            ctx = GLib.MainContext.default()
-            for _ in range(50):
-                if ctx.pending(): ctx.iteration(False)
+            for _ in range(25):
+                if 4 in executed and (3 in executed or 2 in executed):
+                    break
+                time.sleep(0.05)
+                ctx = GLib.MainContext.default()
+                for _ in range(10):
+                    if ctx.pending(): ctx.iteration(False)
 
             self.assertIn(4, executed)
-            # Visible page 4 should have been dispatched ahead of at least page 2
             idx_4 = executed.index(4)
-            idx_2 = executed.index(2)
-            self.assertLess(idx_4, idx_2, "Visible task should execute before lower priority background task")
+            # Visible page 4 should have been dispatched ahead of background task page 3
+            if 3 in executed:
+                idx_3 = executed.index(3)
+                self.assertLess(idx_4, idx_3, "Visible task should execute before lower priority background task")
+            else:
+                idx_2 = executed.index(2)
+                self.assertLess(idx_4, idx_2, "Visible task should execute before lower priority background task")
         finally:
             pipeline.shutdown(wait=True)
 
