@@ -386,6 +386,9 @@ class AnnotationsSidebar(Gtk.Box):
         """Reload all annotations and objects from the active document session."""
         if not self.editor_window:
             return
+        if hasattr(self, "get_visible") and not self.get_visible():
+            self._needs_refresh = True
+            return
 
         doc = getattr(self.editor_window, "doc", None)
         session = getattr(self.editor_window, "_active_session", None)
@@ -451,25 +454,26 @@ class AnnotationsSidebar(Gtk.Box):
             # If no session editable images for page p, scan embedded PDF images
             if not page_has_session_images:
                 try:
-                    page = doc.load_page(p)
-                    img_infos = page.get_image_info(xrefs=True)
-                    for idx, info in enumerate(img_infos):
-                        bx = info.get("bbox", (0, 0, 0, 0))
-                        w = info.get("width", abs(bx[2] - bx[0]))
-                        h = info.get("height", abs(bx[3] - bx[1]))
-                        items.append(
-                            AnnotationListItem(
-                                item_id=f"doc_img_{p}_{idx}",
-                                item_type="image",
-                                category=self.CATEGORY_IMAGES,
-                                title=f"Image ({int(w)}×{int(h)} pt)",
-                                subtitle=_("badge_page_fmt").format(p + 1),
-                                page_number=p,
-                                icon_name="insert-image-symbolic",
-                                target_obj=None,
-                                bbox=tuple(bx),
+                    if doc.get_page_images(p):
+                        page = doc.load_page(p)
+                        img_infos = page.get_image_info(xrefs=True)
+                        for idx, info in enumerate(img_infos):
+                            bx = info.get("bbox", (0, 0, 0, 0))
+                            w = info.get("width", abs(bx[2] - bx[0]))
+                            h = info.get("height", abs(bx[3] - bx[1]))
+                            items.append(
+                                AnnotationListItem(
+                                    item_id=f"doc_img_{p}_{idx}",
+                                    item_type="image",
+                                    category=self.CATEGORY_IMAGES,
+                                    title=f"Image ({int(w)}×{int(h)} pt)",
+                                    subtitle=_("badge_page_fmt").format(p + 1),
+                                    page_number=p,
+                                    icon_name="insert-image-symbolic",
+                                    target_obj=None,
+                                    bbox=tuple(bx),
+                                )
                             )
-                        )
                 except Exception:
                     pass
 

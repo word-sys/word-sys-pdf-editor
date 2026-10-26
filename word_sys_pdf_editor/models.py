@@ -6,6 +6,7 @@ from typing import Optional, List, Dict, Any, Tuple
 import os
 import uuid
 import math
+import collections
 from .utils import normalize_color
 import re
 import copy
@@ -1434,6 +1435,102 @@ class RedactionMark:
             is_applied=data.get("is_applied", False),
             z_index=data.get("z_index", 0),
         )
+
+
+class SpatialGridIndex:
+    """Lightweight 2D spatial hash grid for accelerating canvas hit-testing."""
+
+    def __init__(self, cell_size: float = 64.0):
+        self.cell_size = float(max(16.0, cell_size))
+        self.cells: Dict[Tuple[int, int], List[Any]] = collections.defaultdict(list)
+        self.all_items: List[Any] = []
+
+    def clear(self):
+        """Reset all cells and indexed items."""
+        self.cells.clear()
+        self.all_items.clear()
+
+    def insert(self, obj: Any, bbox: Optional[Tuple[float, float, float, float]] = None):
+        """Insert object into the spatial grid cells matching its bounding box."""
+        if bbox is None:
+            bbox = getattr(obj, "bbox", None)
+        if not bbox or len(bbox) != 4:
+            self.all_items.append(obj)
+            return
+
+        x0, y0, x1, y1 = bbox
+        min_x = min(x0, x1)
+        max_x = max(x0, x1)
+        min_y = min(y0, y1)
+        max_y = max(y0, y1)
+
+        c_x0 = int(math.floor(min_x / self.cell_size))
+        c_x1 = int(math.floor(max_x / self.cell_size))
+        c_y0 = int(math.floor(min_y / self.cell_size))
+        c_y1 = int(math.floor(max_y / self.cell_size))
+
+        self.all_items.append(obj)
+        for cx in range(c_x0, c_x1 + 1):
+            for cy in range(c_y0, c_y1 + 1):
+                self.cells[(cx, cy)].append(obj)
+
+    def query_point(self, x: float, y: float, tolerance: float = 0.0) -> List[Any]:
+        """Return unique candidate objects in cells intersecting (x, y) with optional tolerance."""
+        if not self.cells:
+            return list(self.all_items)
+
+        if tolerance <= 0.0:
+            cx = int(math.floor(x / self.cell_size))
+            cy = int(math.floor(y / self.cell_size))
+            return list(self.cells.get((cx, cy), []))
+
+        c_x0 = int(math.floor((x - tolerance) / self.cell_size))
+        c_x1 = int(math.floor((x + tolerance) / self.cell_size))
+        c_y0 = int(math.floor((y - tolerance) / self.cell_size))
+        c_y1 = int(math.floor((y + tolerance) / self.cell_size))
+
+        if c_x0 == c_x1 and c_y0 == c_y1:
+            return list(self.cells.get((c_x0, c_y0), []))
+
+        seen = set()
+        candidates = []
+        for cx in range(c_x0, c_x1 + 1):
+            for cy in range(c_y0, c_y1 + 1):
+                cell_objs = self.cells.get((cx, cy))
+                if cell_objs:
+                    for obj in cell_objs:
+                        obj_id = id(obj)
+                        if obj_id not in seen:
+                            seen.add(obj_id)
+                            candidates.append(obj)
+        return candidates
+
+    def query_rect(self, rect: Tuple[float, float, float, float]) -> List[Any]:
+        """Return unique candidate objects intersecting given bounding box."""
+        if not self.cells:
+            return list(self.all_items)
+
+        x0, y0, x1, y1 = rect
+        c_x0 = int(math.floor(min(x0, x1) / self.cell_size))
+        c_x1 = int(math.floor(max(x0, x1) / self.cell_size))
+        c_y0 = int(math.floor(min(y0, y1) / self.cell_size))
+        c_y1 = int(math.floor(max(y0, y1) / self.cell_size))
+
+        if c_x0 == c_x1 and c_y0 == c_y1:
+            return list(self.cells.get((c_x0, c_y0), []))
+
+        seen = set()
+        candidates = []
+        for cx in range(c_x0, c_x1 + 1):
+            for cy in range(c_y0, c_y1 + 1):
+                cell_objs = self.cells.get((cx, cy))
+                if cell_objs:
+                    for obj in cell_objs:
+                        obj_id = id(obj)
+                        if obj_id not in seen:
+                            seen.add(obj_id)
+                            candidates.append(obj)
+        return candidates
 
 
 class PdfPage(GObject.GObject):

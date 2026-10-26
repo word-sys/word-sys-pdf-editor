@@ -13,6 +13,7 @@ from .i18n import _, get_language, set_language, get_supported_languages, get_se
 import gi
 import os
 import gc
+import time
 from pathlib import Path
 import cairo
 import threading
@@ -638,6 +639,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.inline_editor_text_obj = None
 
         self.search_engine = DocumentSearchEngine()
+        self._spatial_indices = {}
+        self._cached_page_links = {}
+        self._last_pointer_motion_time = 0.0
         self.search_bar = None
         self.search_button = None
         self.search_entry = None
@@ -3690,7 +3694,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             self.target_page_after_load = target_page
             self._load_page(target_page, reload_objects=True)
-            if hasattr(self, 'annotations_sidebar'):
+            if hasattr(self, 'annotations_sidebar') and self.annotations_sidebar.get_visible():
                 self.annotations_sidebar.refresh()
             self._load_thumbnails(sess)
 
@@ -3781,19 +3785,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         page_count = pdf_handler.get_page_count(target_doc)
         old_count = target_model.get_n_items()
 
-        # Build virtualized PdfPage items with thumbnail=None
-        new_items = [PdfPage(index=i, thumbnail=None) for i in range(page_count)]
-
-        # Immediately generate thumbnail for the active target page
-        active_target = target_page if target_page is not None else getattr(self, 'current_page_index', 0)
-        if 0 <= active_target < page_count:
-            try:
-                active_thumb = pdf_handler.generate_thumbnail(target_doc, active_target, target_width=150)
-                if active_thumb:
-                    new_items[active_target].thumbnail = active_thumb
-            except Exception:
-                pass
-
         # Cancel any previous thumbnail generation tasks for previous documents
         old_gen = getattr(self, '_thumb_generation_id', None)
         if old_gen is not None:
@@ -3801,8 +3792,44 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._thumb_generation_id = (old_gen or 0) + 1
         current_gen = self._thumb_generation_id
 
-        # Atomic model splice: O(1) memory and instant population
-        target_model.splice(0, old_count, new_items)
+        # Generate thumbnail for active page
+        active_target = target_page if target_page is not None else getattr(self, 'current_page_index', 0)
+        active_thumb = None
+        if 0 <= active_target < page_count:
+            try:
+                active_thumb = pdf_handler.generate_thumbnail(target_doc, active_target, target_width=150)
+            except Exception:
+                pass
+
+        # Progressive model population: populate initial visible slice (up to 30) instantly (< 1ms)
+        init_slice_size = min(page_count, 30)
+        init_items = [PdfPage(index=i, thumbnail=None) for i in range(init_slice_size)]
+        if 0 <= active_target < init_slice_size and active_thumb:
+            init_items[active_target].thumbnail = active_thumb
+
+        target_model.splice(0, old_count, init_items)
+
+        if page_count > init_slice_size:
+            rem_iter = [init_slice_size]
+            def _feed_model_chunk():
+                if getattr(self, '_thumb_generation_id', None) != current_gen:
+                    return GLib.SOURCE_REMOVE
+                if sess.doc != target_doc:
+                    return GLib.SOURCE_REMOVE
+                if rem_iter[0] >= page_count:
+                    return GLib.SOURCE_REMOVE
+
+                chunk_end = min(page_count, rem_iter[0] + 50)
+                chunk_items = [PdfPage(index=i, thumbnail=None) for i in range(rem_iter[0], chunk_end)]
+                if rem_iter[0] <= active_target < chunk_end and active_thumb:
+                    chunk_items[active_target - rem_iter[0]].thumbnail = active_thumb
+                target_model.splice(rem_iter[0], 0, chunk_items)
+                rem_iter[0] = chunk_end
+                if rem_iter[0] < page_count:
+                    return GLib.SOURCE_CONTINUE
+                return GLib.SOURCE_REMOVE
+
+            GLib.idle_add(_feed_model_chunk, priority=GLib.PRIORITY_LOW)
 
         # Update document title and status immediately without waiting for off-screen pages
         if self._active_session == sess:
@@ -3874,6 +3901,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._is_geometry_uniform = None
         self._uniform_page_size = None
         self.continuous_page_offsets = []
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index()
         if getattr(self, 'continuous_scroll', False):
             self._update_canvas_content_size()
 
@@ -3965,6 +3994,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             h = max(int(self.continuous_total_height), 1)
             self.pdf_view.set_content_width(w)
             self.pdf_view.set_content_height(h)
+            v_adj = self.pdf_scroll.get_vadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+            if v_adj and v_adj.get_upper() < h:
+                v_adj.set_upper(float(h))
+                if v_adj.get_page_size() <= 0:
+                    v_adj.set_page_size(800.0)
         else:
             self.pdf_view.set_content_width(max(self.current_pdf_page_width, 1))
             self.pdf_view.set_content_height(max(self.current_pdf_page_height, 1))
@@ -4529,7 +4563,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         px, py, pw, ph = self.get_page_canvas_rect(page_index)
         return (px <= canvas_x < px + pw) and (py <= canvas_y < py + ph)
 
-    def _get_page_objects(self, page_index: int) -> Dict[str, Any]:
+    def _get_page_objects(self, page_index: int, extract_if_missing: bool = False) -> Dict[str, Any]:
         """Retrieve editable objects for a page, using cache if available."""
         if not self.doc or not (0 <= page_index < len(self.doc)):
             return {'texts': [], 'images': [], 'shapes': [], 'strokes': [], 'form_fields': []}
@@ -4543,6 +4577,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             }
         if page_index in self._page_objects_cache:
             return self._page_objects_cache[page_index]
+
+        if not extract_if_missing:
+            return {'texts': [], 'images': [], 'shapes': [], 'strokes': [], 'form_fields': []}
 
         texts, _ = pdf_handler.extract_editable_text(self.doc, page_index)
         images, _ = pdf_handler.extract_editable_images(self.doc, page_index)
@@ -4601,6 +4638,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 'strokes': self.editable_strokes,
                 'form_fields': self.form_fields,
             }
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index(page_index)
 
     def _switch_active_page(self, page_index: int):
         """Switch active page without resetting entire canvas layout in continuous mode."""
@@ -4729,6 +4768,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         else:
             self._restore_page_objects(page_index)
 
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index(page_index)
+
         page = self.doc.load_page(page_index)
         self.current_pdf_page_width = int(page.rect.width * self.zoom_level)
         self.current_pdf_page_height = int(page.rect.height * self.zoom_level)
@@ -4798,9 +4840,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._active_session.pages_model.remove_all()
         self.temp_stroke = None
         self.selected_form_field = None
+        if hasattr(self, 'search_engine') and self.search_engine:
+            self.search_engine.cancel_async_search()
+            self.search_engine.clear()
         self.hide_text_editor()
         self._clear_form_field_overlays()
         self._page_objects_cache.clear()
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index()
         self._invalidate_continuous_layout()
         self.pdf_view.set_content_width(1)
         self.pdf_view.set_content_height(1)
@@ -4956,8 +5003,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             dirty_rect = self._dirty_clip_rect
             self._dirty_clip_rect = None
 
-        cr.set_source_rgb(0.42, 0.42, 0.42)
-        cr.paint()
+        if getattr(self, 'continuous_scroll', False):
+            vx, vy, vw, vh = self.get_visible_viewport_rect()
+            cr.save()
+            cr.rectangle(max(0.0, vx - 20.0), max(0.0, vy - 20.0), vw + 40.0, vh + 40.0)
+            cr.clip()
+            cr.set_source_rgb(0.42, 0.42, 0.42)
+            cr.paint()
+            cr.restore()
+        else:
+            cr.set_source_rgb(0.42, 0.42, 0.42)
+            cr.paint()
 
         if not self.continuous_scroll:
             if self.current_pdf_page_width <= 0:
@@ -5006,7 +5062,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          dirty_rect[2] * self.zoom_level, dirty_rect[3] * self.zoom_level)
             cr.clip()
         cached_surf = pdf_handler.get_page_cairo_surface(self.doc, page_index, self.zoom_level)
-        if cached_surf:
+        if cached_surf and cached_surf.get_width() > 0 and cached_surf.get_height() > 0:
             cr.set_source_surface(cached_surf, 0, 0)
             cr.paint()
         else:
@@ -6621,6 +6677,82 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         p1 = fitz.Point(dx, dy) * inv_mat
         return p1.x - p0.x, p1.y - p0.y
 
+    def _invalidate_spatial_index(self, page_index: Optional[int] = None):
+        """Invalidate spatial hash grid acceleration index for specified page or entire document."""
+        if not hasattr(self, '_spatial_indices'):
+            self._spatial_indices = {}
+        if not hasattr(self, '_cached_page_links'):
+            self._cached_page_links = {}
+
+        if page_index is None:
+            self._spatial_indices.clear()
+            self._cached_page_links.clear()
+        else:
+            keys_to_del = [k for k in self._spatial_indices if k[0] == page_index]
+            for k in keys_to_del:
+                self._spatial_indices.pop(k, None)
+            self._cached_page_links.pop(page_index, None)
+
+    def _get_page_spatial_index(self, page_index: int, category: str = "text"):
+        """Retrieve or construct on-demand 2D spatial grid index for page objects."""
+        if not hasattr(self, '_spatial_indices') or not isinstance(getattr(self, '_spatial_indices', None), dict):
+            self._spatial_indices = {}
+
+        key = (page_index, category)
+        grid = self._spatial_indices.get(key)
+        if grid is not None:
+            return grid
+
+        from .models import SpatialGridIndex
+        grid = SpatialGridIndex(cell_size=64.0)
+
+        def _get_obj_aabb(obj):
+            box = getattr(obj, 'bbox', None)
+            if not box:
+                return None
+            rot = getattr(obj, 'rotation', 0.0) % 360.0
+            if rot == 0.0:
+                return box
+            x0, y0, x1, y1 = box
+            cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+            corners = [
+                pdf_handler.rotate_point(x0, y0, cx, cy, rot),
+                pdf_handler.rotate_point(x1, y0, cx, cy, rot),
+                pdf_handler.rotate_point(x1, y1, cx, cy, rot),
+                pdf_handler.rotate_point(x0, y1, cx, cy, rot),
+            ]
+            xs = [c[0] for c in corners]
+            ys = [c[1] for c in corners]
+            return (min(xs), min(ys), max(xs), max(ys))
+
+        if category == "text":
+            for t in getattr(self, 'editable_texts', []):
+                if getattr(t, 'page_number', None) == page_index:
+                    box = _get_obj_aabb(t)
+                    if box:
+                        grid.insert(t, box)
+        elif category == "image":
+            for img in getattr(self, 'editable_images', []):
+                if getattr(img, 'page_number', None) == page_index:
+                    box = _get_obj_aabb(img)
+                    if box:
+                        grid.insert(img, box)
+        elif category == "shape":
+            for s in getattr(self, 'editable_shapes', []):
+                if getattr(s, 'page_number', None) == page_index:
+                    box = _get_obj_aabb(s)
+                    if box:
+                        grid.insert(s, box)
+        elif category == "stroke":
+            for st in getattr(self, 'editable_strokes', []):
+                if getattr(st, 'page_number', None) == page_index:
+                    box = _get_obj_aabb(st)
+                    if box:
+                        grid.insert(st, box)
+
+        self._spatial_indices[key] = grid
+        return grid
+
     def _find_text_at_pos(self, page_x, page_y):
         """Find text at pos."""
         try:
@@ -6629,7 +6761,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 page_x, page_y = coords
         except Exception:
             pass
-        for text_obj in reversed(self.editable_texts):
+        tolerance = 2 / max(self.zoom_level, 0.001)
+        if hasattr(self, '_get_page_spatial_index') and hasattr(self, '_spatial_indices') and isinstance(getattr(self, '_spatial_indices', None), dict):
+            grid = self._get_page_spatial_index(self.current_page_index, "text")
+            candidates = grid.query_point(page_x, page_y, tolerance=tolerance)
+        else:
+            candidates = getattr(self, 'editable_texts', [])
+        if not candidates:
+            return None
+        for text_obj in reversed(candidates):
             if getattr(text_obj, 'page_number', self.current_page_index) != self.current_page_index:
                 continue
             if not text_obj.bbox: continue
@@ -6640,7 +6780,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cx = (x1 + x2) / 2.0
                 cy = (y1 + y2) / 2.0
                 px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
-            tolerance = 2 / self.zoom_level
             if (x1 - tolerance) <= px <= (x2 + tolerance) and \
                (y1 - tolerance) <= py <= (y2 + tolerance):
                 return text_obj
@@ -6675,7 +6814,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 page_x, page_y = coords
         except Exception:
             pass
-        for img_obj in reversed(self.editable_images):
+        tolerance = 2 / max(self.zoom_level, 0.001)
+        if hasattr(self, '_get_page_spatial_index') and hasattr(self, '_spatial_indices') and isinstance(getattr(self, '_spatial_indices', None), dict):
+            grid = self._get_page_spatial_index(self.current_page_index, "image")
+            candidates = grid.query_point(page_x, page_y, tolerance=tolerance)
+        else:
+            candidates = getattr(self, 'editable_images', [])
+        if not candidates:
+            return None
+        for img_obj in reversed(candidates):
             if getattr(img_obj, 'page_number', self.current_page_index) != self.current_page_index:
                 continue
             if not img_obj.bbox: continue
@@ -6686,7 +6833,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cx = (x1 + x2) / 2.0
                 cy = (y1 + y2) / 2.0
                 px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
-            if x1 <= px <= x2 and y1 <= py <= y2:
+            if (x1 - tolerance) <= px <= (x2 + tolerance) and (y1 - tolerance) <= py <= (y2 + tolerance):
                 return img_obj
         return None
 
@@ -6698,7 +6845,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 page_x, page_y = coords
         except Exception:
             pass
-        for shape_obj in reversed(self.editable_shapes):
+        tolerance = 3 / max(self.zoom_level, 0.001)
+        if hasattr(self, '_get_page_spatial_index') and hasattr(self, '_spatial_indices') and isinstance(getattr(self, '_spatial_indices', None), dict):
+            grid = self._get_page_spatial_index(self.current_page_index, "shape")
+            candidates = grid.query_point(page_x, page_y, tolerance=tolerance)
+        else:
+            candidates = getattr(self, 'editable_shapes', [])
+        if not candidates:
+            return None
+        for shape_obj in reversed(candidates):
             if shape_obj.page_number != self.current_page_index:
                 continue
             if not shape_obj.bbox: 
@@ -6710,7 +6865,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cx = (x1 + x2) / 2.0
                 cy = (y1 + y2) / 2.0
                 px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
-            tolerance = 3 / self.zoom_level
             if (x1 - tolerance) <= px <= (x2 + tolerance) and \
                (y1 - tolerance) <= py <= (y2 + tolerance):
                 return shape_obj
@@ -6724,7 +6878,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 page_x, page_y = coords
         except Exception:
             pass
-        for stroke in reversed(getattr(self, 'editable_strokes', [])):
+        tolerance = 8.0 / max(self.zoom_level, 0.001)
+        if hasattr(self, '_get_page_spatial_index') and hasattr(self, '_spatial_indices') and isinstance(getattr(self, '_spatial_indices', None), dict):
+            grid = self._get_page_spatial_index(self.current_page_index, "stroke")
+            candidates = grid.query_point(page_x, page_y, tolerance=tolerance)
+        else:
+            candidates = getattr(self, 'editable_strokes', [])
+        if not candidates:
+            return None
+        for stroke in reversed(candidates):
             if stroke.page_number != self.current_page_index:
                 continue
             if not stroke.bbox:
@@ -6736,9 +6898,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cx = (x1 + x2) / 2.0
                 cy = (y1 + y2) / 2.0
                 px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
-            tolerance = max(stroke.stroke_width, 8.0) / self.zoom_level
-            if (x1 - tolerance) <= px <= (x2 + tolerance) and \
-               (y1 - tolerance) <= py <= (y2 + tolerance):
+            tol = max(stroke.stroke_width, 8.0) / max(self.zoom_level, 0.001)
+            if (x1 - tol) <= px <= (x2 + tol) and \
+               (y1 - tol) <= py <= (y2 + tol):
                 return stroke
         return None
 
@@ -9740,9 +9902,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
     def _execute_search_query(self, entry):
         query = entry.get_text() if entry else ""
         case_sensitive = self.search_case_btn.get_active() if hasattr(self, 'search_case_btn') and self.search_case_btn else False
-        whole_word = self.search_whole_word_btn.get_active() if hasattr(self, 'search_whole_word_btn') and self.search_whole_word_btn else False
+        whole_word = self.search_whole_word_btn.get_active() if hasattr(self, 'search_case_btn') and self.search_whole_word_btn else False
         if not self.doc or not query.strip():
             if hasattr(self, 'search_engine') and self.search_engine:
+                self.search_engine.cancel_async_search()
                 self.search_engine.clear()
             if hasattr(self, 'search_match_label') and self.search_match_label:
                 self.search_match_label.set_text(_("search_no_results"))
@@ -9757,30 +9920,70 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         from .search_engine import PII_PATTERNS
         target_pages = [self.current_page_index] if getattr(self, '_search_scope_current_page', False) is True else None
         pii_key = getattr(self, '_search_pii_key', None)
-        if isinstance(pii_key, str) and pii_key in PII_PATTERNS:
-            matches = self.search_engine.search_pii(self.doc, pii_key, page_indices=target_pages)
-        else:
-            matches = self.search_engine.search(self.doc, query, case_sensitive=case_sensitive, whole_word=whole_word, page_indices=target_pages)
+        actual_pii = pii_key if (isinstance(pii_key, str) and pii_key in PII_PATTERNS) else None
 
-        if matches:
-            self.search_engine.find_nearest_match(self.current_page_index)
-            curr = self.search_engine.current_index
-            if hasattr(self, 'search_match_label') and self.search_match_label:
-                self.search_match_label.set_text(f"{curr + 1}/{len(matches)}")
-            if hasattr(self, 'btn_search_redact_current') and self.btn_search_redact_current:
-                self.btn_search_redact_current.set_sensitive(True)
-            if hasattr(self, 'btn_search_redact_all') and self.btn_search_redact_all:
-                self.btn_search_redact_all.set_sensitive(True)
-            self._jump_to_current_search_match()
-        else:
-            if hasattr(self, 'search_match_label') and self.search_match_label:
-                self.search_match_label.set_text(_("search_no_results"))
-            if hasattr(self, 'btn_search_redact_current') and self.btn_search_redact_current:
-                self.btn_search_redact_current.set_sensitive(False)
-            if hasattr(self, 'btn_search_redact_all') and self.btn_search_redact_all:
-                self.btn_search_redact_all.set_sensitive(False)
-        if hasattr(self, 'pdf_view') and self.pdf_view:
-            self.pdf_view.queue_draw()
+        if hasattr(self, 'search_match_label') and self.search_match_label:
+            self.search_match_label.set_text("...")
+
+        first_jump_done = False
+
+        def on_chunk(new_hits, processed, total):
+            nonlocal first_jump_done
+            total_matches = len(self.search_engine.matches)
+            if total_matches > 0:
+                if not first_jump_done:
+                    first_jump_done = True
+                    self.search_engine.find_nearest_match(self.current_page_index)
+                    self._jump_to_current_search_match()
+                curr = self.search_engine.current_index
+                if hasattr(self, 'search_match_label') and self.search_match_label:
+                    self.search_match_label.set_text(f"{curr + 1}/{total_matches}...")
+                if hasattr(self, 'btn_search_redact_current') and self.btn_search_redact_current:
+                    self.btn_search_redact_current.set_sensitive(True)
+                if hasattr(self, 'btn_search_redact_all') and self.btn_search_redact_all:
+                    self.btn_search_redact_all.set_sensitive(True)
+            else:
+                if hasattr(self, 'search_match_label') and self.search_match_label:
+                    self.search_match_label.set_text(f"0 ({processed}/{total})")
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
+
+        def on_complete(all_matches):
+            if all_matches:
+                if not first_jump_done:
+                    self.search_engine.find_nearest_match(self.current_page_index)
+                    self._jump_to_current_search_match()
+                curr = self.search_engine.current_index
+                if hasattr(self, 'search_match_label') and self.search_match_label:
+                    self.search_match_label.set_text(f"{curr + 1}/{len(all_matches)}")
+                if hasattr(self, 'btn_search_redact_current') and self.btn_search_redact_current:
+                    self.btn_search_redact_current.set_sensitive(True)
+                if hasattr(self, 'btn_search_redact_all') and self.btn_search_redact_all:
+                    self.btn_search_redact_all.set_sensitive(True)
+            else:
+                if hasattr(self, 'search_match_label') and self.search_match_label:
+                    self.search_match_label.set_text(_("search_no_results"))
+                if hasattr(self, 'btn_search_redact_current') and self.btn_search_redact_current:
+                    self.btn_search_redact_current.set_sensitive(False)
+                if hasattr(self, 'btn_search_redact_all') and self.btn_search_redact_all:
+                    self.btn_search_redact_all.set_sensitive(False)
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
+
+        sync_mode = bool(getattr(self, '_force_sync_search', False) or len(self.doc) <= 3)
+
+        self.search_engine.start_async_search(
+            doc=self.doc,
+            query=query,
+            case_sensitive=case_sensitive,
+            whole_word=whole_word,
+            pii_key=actual_pii,
+            page_indices=target_pages,
+            chunk_size=10,
+            on_chunk=on_chunk,
+            on_complete=on_complete,
+            sync=sync_mode,
+        )
 
     def _on_search_entry_activate(self):
         """Handle Enter key in search entry: run search query immediately if pending, then jump next."""
@@ -10023,7 +10226,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             # Reload active page
             self._load_page(self.current_page_index, reload_objects=True)
 
-            if hasattr(self, 'annotations_sidebar'):
+            if hasattr(self, 'annotations_sidebar') and self.annotations_sidebar.get_visible():
                 self.annotations_sidebar.refresh()
 
             self._update_ui_state()
@@ -10273,6 +10476,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _on_pointer_motion(self, controller, x, y):
         """Track last pointer position on pdf_view for focal zoom and update handle cursor."""
+        now = time.monotonic()
+        last_t = getattr(self, '_last_pointer_motion_time', 0.0)
+        last_pos = getattr(self, '_last_pointer_pos', None)
+        if last_pos is not None:
+            dx = abs(x - last_pos[0])
+            dy = abs(y - last_pos[1])
+            if dx < 1.5 and dy < 1.5 and (now - last_t) < 0.010:
+                return
+
+        self._last_pointer_motion_time = now
         self._last_pointer_pos = (x, y)
         target_page, vis_x, vis_y = self.canvas_to_page_coords(x, y)
         unrot_x, unrot_y = self._visual_to_unrotated_page_coords(vis_x, vis_y, page_index=target_page)
@@ -14567,7 +14780,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             else:
                 self.pdf_view.queue_draw()
 
-            if hasattr(self, 'annotations_sidebar'):
+            if hasattr(self, 'annotations_sidebar') and self.annotations_sidebar.get_visible():
                 self.annotations_sidebar.refresh()
             self._update_ui_state()
             if hasattr(self, 'status_label') and self.status_label:
@@ -16135,7 +16348,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _get_link_url_at_pos(self, page_x, page_y):
         """Find destination URL at page coordinates from editable texts or PDF link annotations."""
-        for t in getattr(self, 'editable_texts', []):
+        if hasattr(self, '_get_page_spatial_index') and hasattr(self, '_spatial_indices') and isinstance(getattr(self, '_spatial_indices', None), dict):
+            grid = self._get_page_spatial_index(self.current_page_index, "text")
+            candidates = grid.query_point(page_x, page_y)
+        else:
+            candidates = getattr(self, 'editable_texts', [])
+        for t in candidates:
             if getattr(t, 'page_number', None) != self.current_page_index:
                 continue
             if getattr(t, 'bbox', None):
@@ -16147,9 +16365,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             return url
         if getattr(self, 'doc', None) and 0 <= self.current_page_index < len(self.doc):
             try:
-                page = self.doc[self.current_page_index]
+                if not hasattr(self, '_cached_page_links'):
+                    self._cached_page_links = {}
+                cache_key = (id(self.doc), self.current_page_index)
+                links = self._cached_page_links.get(cache_key)
+                if links is None:
+                    page = self.doc[self.current_page_index]
+                    links = list(page.get_links())
+                    self._cached_page_links[cache_key] = links
                 pt = fitz.Point(page_x, page_y)
-                for link in page.get_links():
+                for link in links:
                     if link.get('kind') == fitz.LINK_URI and link.get('uri'):
                         rect = link.get('from')
                         if rect and rect.contains(pt):

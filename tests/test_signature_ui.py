@@ -124,6 +124,7 @@ class TestSignatureUI(unittest.TestCase):
         win.current_pdf_page_height = 842.0
         win.zoom_level = 1.0
         win.view_mode = False
+        win.get_page_canvas_rect = MagicMock(return_value=(0.0, 0.0, 595.0, 842.0))
 
         win.on_tool_selected(None, "place_signature")
         self.assertEqual(win.tool_mode, "place_signature")

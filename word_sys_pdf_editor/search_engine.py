@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+import threading
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
+from gi.repository import GLib
 import pymupdf as fitz
 
 
@@ -70,15 +72,31 @@ class DocumentSearchEngine:
         self.matches: List[SearchMatch] = []
         self.current_match_index: int = -1
         self.last_wrapped: bool = False
+        self._async_search_id: int = 0
+        self._async_lock = threading.Lock()
+        self._is_searching: bool = False
+
+    def cancel_async_search(self):
+        """Cancel any running background search worker."""
+        with self._async_lock:
+            self._async_search_id += 1
+            self._is_searching = False
+
+    def is_searching(self) -> bool:
+        """Return True if an async search worker is actively scanning pages."""
+        with self._async_lock:
+            return self._is_searching
 
     def set_document(self, doc: Optional[fitz.Document]):
         """Bind search engine to a new or reloaded document session."""
         if self.doc != doc:
+            self.cancel_async_search()
             self.doc = doc
             self.clear()
 
     def clear(self):
         """Reset search query and clear all cached search hits."""
+        self.cancel_async_search()
         self.query = ""
         self.matches.clear()
         self.current_match_index = -1
@@ -92,6 +110,107 @@ class DocumentSearchEngine:
     def current_index(self) -> int:
         return self.current_match_index
 
+    def search_page(
+        self,
+        page_idx: int,
+        query: str,
+        case_sensitive: bool = False,
+        whole_word: bool = False,
+    ) -> List[SearchMatch]:
+        """Search a single page and return all match hits."""
+        if not self.doc or getattr(self.doc, "is_closed", False):
+            return []
+        if page_idx < 0 or page_idx >= len(self.doc):
+            return []
+        page_matches = []
+        try:
+            page = self.doc[page_idx]
+            hits = page.search_for(query)
+            accent_fallback_used = False
+            if not hits and not case_sensitive:
+                norm_query = _normalize_text_for_search(query).lower()
+                words = page.get_text("words")
+                for w in words:
+                    w_text = w[4]
+                    clean_w = w_text.strip(".,;:!?()[]{}\"'“”‘’—")
+                    norm_w = _normalize_text_for_search(clean_w).lower()
+                    if whole_word:
+                        matched = (norm_query == norm_w)
+                    else:
+                        matched = (norm_query in norm_w)
+                    if matched:
+                        hits.append(fitz.Rect(w[0], w[1], w[2], w[3]))
+                        accent_fallback_used = True
+
+            if not hits:
+                return []
+
+            for hit in hits:
+                if not accent_fallback_used:
+                    if case_sensitive:
+                        try:
+                            extracted = page.get_text("text", clip=hit).strip()
+                            if query not in extracted:
+                                continue
+                        except Exception:
+                            pass
+
+                    if whole_word:
+                        try:
+                            clip_rect = fitz.Rect(max(0.0, hit.x0 - 10.0), hit.y0 - 2.0, hit.x1 + 10.0, hit.y1 + 2.0)
+                            extracted = page.get_text("text", clip=clip_rect).strip()
+                            flags = 0 if case_sensitive else re.IGNORECASE
+                            pattern = r'(?<!\w)' + re.escape(query) + r'(?!\w)'
+                            if not re.search(pattern, extracted, flags):
+                                continue
+                        except Exception:
+                            pass
+
+                match = SearchMatch(
+                    page_index=page_idx,
+                    bbox=(hit.x0, hit.y0, hit.x1, hit.y1),
+                    text=query,
+                )
+                page_matches.append(match)
+        except Exception as err:
+            print(f"Warning: search failed on page {page_idx}: {err}")
+        return page_matches
+
+    def search_page_regex(
+        self,
+        page_idx: int,
+        compiled_regex: re.Pattern,
+    ) -> List[SearchMatch]:
+        """Search a single page using a compiled regular expression and return match hits."""
+        if not self.doc or getattr(self.doc, "is_closed", False):
+            return []
+        if page_idx < 0 or page_idx >= len(self.doc):
+            return []
+        page_matches = []
+        try:
+            page = self.doc[page_idx]
+            page_text = page.get_text("text")
+            if not page_text:
+                return []
+            seen_rects = set()
+            for match in compiled_regex.finditer(page_text):
+                m_text = match.group(0).strip()
+                if not m_text:
+                    continue
+                rects = page.search_for(m_text)
+                for r in rects:
+                    r_key = (round(r.x0, 1), round(r.y0, 1), round(r.x1, 1), round(r.y1, 1))
+                    if r_key not in seen_rects:
+                        seen_rects.add(r_key)
+                        page_matches.append(SearchMatch(
+                            page_index=page_idx,
+                            bbox=(r.x0, r.y0, r.x1, r.y1),
+                            text=m_text,
+                        ))
+        except Exception as err:
+            print(f"Warning: regex search failed on page {page_idx}: {err}")
+        return page_matches
+
     def search(
         self,
         doc_or_query: Any,
@@ -101,6 +220,7 @@ class DocumentSearchEngine:
         page_indices: Optional[List[int]] = None,
     ) -> List[SearchMatch]:
         """Search document across visible text and invisible OCR render mode 3 layers."""
+        self.cancel_async_search()
         if query is not None or not isinstance(doc_or_query, str):
             self.doc = doc_or_query
             actual_query = query or ""
@@ -119,58 +239,117 @@ class DocumentSearchEngine:
 
         target_pages = page_indices if page_indices is not None else list(range(len(self.doc)))
         for page_idx in target_pages:
-            try:
-                page = self.doc[page_idx]
-                hits = page.search_for(self.query)
-                accent_fallback_used = False
-                if not hits and not self.case_sensitive:
-                    norm_query = _normalize_text_for_search(self.query).lower()
-                    words = page.get_text("words")
-                    for w in words:
-                        w_text = w[4]
-                        clean_w = w_text.strip(".,;:!?()[]{}\"'“”‘’—")
-                        norm_w = _normalize_text_for_search(clean_w).lower()
-                        if self.whole_word:
-                            matched = (norm_query == norm_w)
-                        else:
-                            matched = (norm_query in norm_w)
-                        if matched:
-                            hits.append(fitz.Rect(w[0], w[1], w[2], w[3]))
-                            accent_fallback_used = True
+            self.matches.extend(self.search_page(page_idx, self.query, self.case_sensitive, self.whole_word))
 
-                if not hits:
-                    continue
+        if self.matches:
+            self.current_match_index = 0
 
-                for hit in hits:
-                    if not accent_fallback_used:
-                        if self.case_sensitive:
-                            try:
-                                extracted = page.get_text("text", clip=hit).strip()
-                                if self.query not in extracted:
-                                    continue
-                            except Exception:
-                                pass
+        return self.matches
 
-                        if self.whole_word:
-                            try:
-                                # Expand horizontal clip by 10 points to capture surrounding word boundaries
-                                clip_rect = fitz.Rect(max(0.0, hit.x0 - 10.0), hit.y0 - 2.0, hit.x1 + 10.0, hit.y1 + 2.0)
-                                extracted = page.get_text("text", clip=clip_rect).strip()
-                                flags = 0 if self.case_sensitive else re.IGNORECASE
-                                pattern = r'(?<!\w)' + re.escape(self.query) + r'(?!\w)'
-                                if not re.search(pattern, extracted, flags):
-                                    continue
-                            except Exception:
-                                pass
+    def start_async_search(
+        self,
+        doc: Optional[fitz.Document],
+        query: Optional[str] = None,
+        case_sensitive: bool = False,
+        whole_word: bool = False,
+        pii_key: Optional[str] = None,
+        page_indices: Optional[List[int]] = None,
+        chunk_size: int = 10,
+        on_chunk: Optional[Callable[[List[SearchMatch], int, int], None]] = None,
+        on_complete: Optional[Callable[[List[SearchMatch]], None]] = None,
+        sync: bool = False,
+    ) -> int:
+        """Start async progressive search scanning pages in chunks on a background worker thread."""
+        with self._async_lock:
+            self._async_search_id += 1
+            search_id = self._async_search_id
+            self._is_searching = True
 
-                    match = SearchMatch(
-                        page_index=page_idx,
-                        bbox=(hit.x0, hit.y0, hit.x1, hit.y1),
-                        text=self.query,
-                    )
-                    self.matches.append(match)
-            except Exception as err:
-                print(f"Warning: search failed on page {page_idx}: {err}")
+        self.doc = doc
+        self.query = query.strip() if query else ""
+        self.case_sensitive = case_sensitive
+        self.whole_word = whole_word
+        self.matches.clear()
+        self.current_match_index = -1
+        self.last_wrapped = False
+
+        if not self.doc or getattr(self.doc, "is_closed", False) or len(self.doc) == 0 or (not self.query and not pii_key):
+            with self._async_lock:
+                self._is_searching = False
+            if on_complete:
+                on_complete([])
+            return search_id
+
+        target_pages = list(page_indices) if page_indices is not None else list(range(len(self.doc)))
+        total_pages = len(target_pages)
+
+        compiled_regex = None
+        if pii_key:
+            preset = PII_PATTERNS.get(pii_key)
+            if preset:
+                compiled_regex = re.compile(preset["regex"], re.IGNORECASE)
+                self.query = preset["regex"]
+
+        def _execute_worker():
+            for i in range(0, total_pages, chunk_size):
+                with self._async_lock:
+                    if search_id != self._async_search_id:
+                        return
+                chunk_slice = target_pages[i:i + chunk_size]
+                chunk_hits = []
+                for p_idx in chunk_slice:
+                    with self._async_lock:
+                        if search_id != self._async_search_id:
+                            return
+                    if compiled_regex:
+                        hits = self.search_page_regex(p_idx, compiled_regex)
+                    else:
+                        hits = self.search_page(p_idx, self.query, self.case_sensitive, self.whole_word)
+                    chunk_hits.extend(hits)
+
+                processed = min(i + chunk_size, total_pages)
+
+                def _dispatch_chunk(c_hits=chunk_hits, p_count=processed, sid=search_id):
+                    with self._async_lock:
+                        if sid != self._async_search_id:
+                            return False
+                    self.matches.extend(c_hits)
+                    if self.current_match_index < 0 and self.matches:
+                        self.current_match_index = 0
+                    if on_chunk:
+                        on_chunk(c_hits, p_count, total_pages)
+                    return False
+
+                if sync:
+                    _dispatch_chunk()
+                else:
+                    GLib.idle_add(_dispatch_chunk)
+
+            def _dispatch_finish(sid=search_id):
+                with self._async_lock:
+                    if sid != self._async_search_id:
+                        return False
+                    self._is_searching = False
+                if on_complete:
+                    on_complete(self.matches)
+                return False
+
+            if sync:
+                _dispatch_finish()
+            else:
+                GLib.idle_add(_dispatch_finish)
+
+        if sync:
+            _execute_worker()
+        else:
+            worker_thread = threading.Thread(
+                target=_execute_worker,
+                daemon=True,
+                name=f"SearchWorker-{search_id}"
+            )
+            worker_thread.start()
+
+        return search_id
 
         if self.matches:
             self.current_match_index = 0
@@ -260,31 +439,7 @@ class DocumentSearchEngine:
         target_pages = page_indices if page_indices is not None else list(range(len(self.doc)))
 
         for page_idx in target_pages:
-            if page_idx < 0 or page_idx >= len(self.doc):
-                continue
-            try:
-                page = self.doc[page_idx]
-                page_text = page.get_text("text")
-                if not page_text:
-                    continue
-
-                seen_rects = set()
-                for match in compiled.finditer(page_text):
-                    m_text = match.group(0).strip()
-                    if not m_text:
-                        continue
-                    rects = page.search_for(m_text)
-                    for r in rects:
-                        r_key = (round(r.x0, 1), round(r.y0, 1), round(r.x1, 1), round(r.y1, 1))
-                        if r_key not in seen_rects:
-                            seen_rects.add(r_key)
-                            self.matches.append(SearchMatch(
-                                page_index=page_idx,
-                                bbox=(r.x0, r.y0, r.x1, r.y1),
-                                text=m_text
-                            ))
-            except Exception as err:
-                print(f"Warning: regex search failed on page {page_idx}: {err}")
+            self.matches.extend(self.search_page_regex(page_idx, compiled))
 
         if self.matches:
             self.current_match_index = 0

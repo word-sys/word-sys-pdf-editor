@@ -254,6 +254,8 @@ class SearchRedactDialog(Adw.Window):
         return False
 
     def _clear_canvas_preview(self):
+        if hasattr(self, 'search_engine') and self.search_engine:
+            self.search_engine.cancel_async_search()
         if self.parent_window and hasattr(self.parent_window, 'search_engine') and self.parent_window.search_engine:
             self.parent_window.search_engine.clear()
             if hasattr(self.parent_window, 'pdf_view') and self.parent_window.pdf_view:
@@ -280,8 +282,10 @@ class SearchRedactDialog(Adw.Window):
     def _on_preview_clicked(self, _button):
         self._update_matches()
 
-    def _update_matches(self):
+    def _update_matches(self, sync: bool = False):
         if not self.doc or len(self.doc) == 0:
+            if hasattr(self, 'search_engine') and self.search_engine:
+                self.search_engine.cancel_async_search()
             self.current_matches = []
             self._clear_canvas_preview()
             self._update_results_ui()
@@ -291,32 +295,64 @@ class SearchRedactDialog(Adw.Window):
         is_current_page_only = (self.scope_dropdown.get_selected() == 1)
         target_pages = [self.current_page_num] if is_current_page_only else list(range(len(self.doc)))
 
+        query = ""
+        pii_key = None
+        case_sensitive = False
+        whole_word = False
+
         if is_pattern:
             idx = self.pattern_dropdown.get_selected()
             if 0 <= idx < len(self.pii_keys):
-                pattern_key = self.pii_keys[idx]
-                self.current_matches = self.search_engine.search_pii(
-                    self.doc, pattern_key=pattern_key, page_indices=target_pages
-                )
+                pii_key = self.pii_keys[idx]
             else:
+                if hasattr(self, 'search_engine') and self.search_engine:
+                    self.search_engine.cancel_async_search()
                 self.current_matches = []
+                self._clear_canvas_preview()
+                self._update_results_ui()
+                return
         else:
             query = self.query_entry.get_text().strip()
             if not query:
+                if hasattr(self, 'search_engine') and self.search_engine:
+                    self.search_engine.cancel_async_search()
                 self.current_matches = []
-            else:
-                case_sensitive = self.case_switch.get_active()
-                whole_word = self.whole_word_switch.get_active()
-                all_hits = self.search_engine.search(
-                    self.doc, query=query, case_sensitive=case_sensitive, whole_word=whole_word
-                )
-                if is_current_page_only:
-                    self.current_matches = [m for m in all_hits if m.page_index == self.current_page_num]
-                else:
-                    self.current_matches = list(all_hits)
+                self._clear_canvas_preview()
+                self._update_results_ui()
+                return
+            case_sensitive = self.case_switch.get_active()
+            whole_word = self.whole_word_switch.get_active()
 
-        self._update_results_ui()
+        # If <= 3 pages or explicit sync, run synchronously
+        sync_run = sync or (len(self.doc) <= 3)
 
+        self.confirm_btn.set_sensitive(False)
+        self.results_row.set_title(_safe_markup("Searching..."))
+
+        def on_chunk(c_hits, processed, total):
+            self.current_matches = list(self.search_engine.matches)
+            self._update_results_ui(is_searching=(processed < total))
+            self._sync_canvas_preview()
+
+        def on_complete(all_matches):
+            self.current_matches = list(all_matches)
+            self._update_results_ui(is_searching=False)
+            self._sync_canvas_preview()
+
+        self.search_engine.start_async_search(
+            doc=self.doc,
+            query=query,
+            case_sensitive=case_sensitive,
+            whole_word=whole_word,
+            pii_key=pii_key,
+            page_indices=target_pages,
+            chunk_size=10,
+            on_chunk=on_chunk,
+            on_complete=on_complete,
+            sync=sync_run,
+        )
+
+    def _sync_canvas_preview(self):
         # Synchronize live search preview highlights on parent canvas
         if self.parent_window and hasattr(self.parent_window, 'search_engine') and self.parent_window.search_engine:
             self.parent_window.search_engine.doc = self.doc
@@ -330,7 +366,7 @@ class SearchRedactDialog(Adw.Window):
             if hasattr(self.parent_window, 'pdf_view') and self.parent_window.pdf_view:
                 self.parent_window.pdf_view.queue_draw()
 
-    def _update_results_ui(self):
+    def _update_results_ui(self, is_searching: bool = False):
         count = len(self.current_matches)
         if count > 0:
             curr_idx = -1
@@ -340,6 +376,8 @@ class SearchRedactDialog(Adw.Window):
             msg = _("search_redact_matches_found", count, pages)
             if curr_idx >= 0:
                 msg += f" • [{curr_idx + 1}/{count}]"
+            if is_searching:
+                msg += " (searching...)"
             self.results_row.set_title(_safe_markup(msg))
             self.confirm_btn.set_sensitive(True)
             if hasattr(self, 'prev_match_btn'):
@@ -347,7 +385,10 @@ class SearchRedactDialog(Adw.Window):
             if hasattr(self, 'next_match_btn'):
                 self.next_match_btn.set_sensitive(count > 1)
         else:
-            self.results_row.set_title(_safe_markup(_("search_redact_no_matches")))
+            if is_searching:
+                self.results_row.set_title(_safe_markup("Searching..."))
+            else:
+                self.results_row.set_title(_safe_markup(_("search_redact_no_matches")))
             self.confirm_btn.set_sensitive(False)
             if hasattr(self, 'prev_match_btn'):
                 self.prev_match_btn.set_sensitive(False)

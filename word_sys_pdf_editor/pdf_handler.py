@@ -250,7 +250,7 @@ def transform_bbox_page_rot(bbox, w: float, h: float, angle_delta: int):
     return (x1, y1, x2, y2)
 
 def pixmap_to_cairo_surface(pix):
-    """Convert PyMuPDF Pixmap directly to Cairo ImageSurface via zero-copy / single-pass NumPy transfer."""
+    """Convert PyMuPDF Pixmap directly to Cairo ImageSurface via direct memory transfer into Cairo-allocated buffer."""
     if pix is None or pix.width <= 0 or pix.height <= 0:
         return None, None
 
@@ -266,47 +266,51 @@ def pixmap_to_cairo_surface(pix):
         else:
             raw_arr = raw_arr.reshape((h, w))
 
-        cairo_stride = cairo.ImageSurface.format_stride_for_width(cairo.FORMAT_RGB24, w)
+        fmt = cairo.FORMAT_ARGB32 if pix.alpha else cairo.FORMAT_RGB24
+        surface = cairo.ImageSurface(fmt, w, h)
+        buf = surface.get_data()
+        cairo_stride = surface.get_stride()
+        dest_arr = np.frombuffer(buf, dtype=np.uint8)
+        if cairo_stride == w * 4:
+            dest_bgra = dest_arr.reshape((h, w, 4))
+        else:
+            dest_bgra = dest_arr.reshape((h, cairo_stride))[:, :w * 4].reshape((h, w, 4))
 
         if pix.alpha:
-            fmt = cairo.FORMAT_ARGB32
-            bgra = np.empty((h, w, 4), dtype=np.uint8)
             if n == 4:
                 # RGBA -> BGRA (PyMuPDF already premultiplies alpha)
-                bgra[..., 0] = raw_arr[..., 2] # Blue
-                bgra[..., 1] = raw_arr[..., 1] # Green
-                bgra[..., 2] = raw_arr[..., 0] # Red
-                bgra[..., 3] = raw_arr[..., 3] # Alpha
+                dest_bgra[..., 0] = raw_arr[..., 2] # Blue
+                dest_bgra[..., 1] = raw_arr[..., 1] # Green
+                dest_bgra[..., 2] = raw_arr[..., 0] # Red
+                dest_bgra[..., 3] = raw_arr[..., 3] # Alpha
             elif n == 2:
                 # Gray + Alpha -> BGRA
                 gray = raw_arr[..., 0]
-                bgra[..., 0] = gray
-                bgra[..., 1] = gray
-                bgra[..., 2] = gray
-                bgra[..., 3] = raw_arr[..., 1] # Alpha
+                dest_bgra[..., 0] = gray
+                dest_bgra[..., 1] = gray
+                dest_bgra[..., 2] = gray
+                dest_bgra[..., 3] = raw_arr[..., 1] # Alpha
             else:
                 return None, None
         else:
-            fmt = cairo.FORMAT_RGB24
-            bgra = np.empty((h, w, 4), dtype=np.uint8)
             if n == 3:
                 # RGB -> BGRX
-                bgra[..., 0] = raw_arr[..., 2] # Blue
-                bgra[..., 1] = raw_arr[..., 1] # Green
-                bgra[..., 2] = raw_arr[..., 0] # Red
-                bgra[..., 3] = 255            # X/Padding
+                dest_bgra[..., 0] = raw_arr[..., 2] # Blue
+                dest_bgra[..., 1] = raw_arr[..., 1] # Green
+                dest_bgra[..., 2] = raw_arr[..., 0] # Red
+                dest_bgra[..., 3] = 255            # X/Padding
             elif n == 1:
                 # Gray -> BGRX
                 gray = raw_arr if raw_arr.ndim == 2 else raw_arr[..., 0]
-                bgra[..., 0] = gray
-                bgra[..., 1] = gray
-                bgra[..., 2] = gray
-                bgra[..., 3] = 255            # X/Padding
+                dest_bgra[..., 0] = gray
+                dest_bgra[..., 1] = gray
+                dest_bgra[..., 2] = gray
+                dest_bgra[..., 3] = 255            # X/Padding
             else:
                 return None, None
 
-        surface = cairo.ImageSurface.create_for_data(bgra, fmt, w, h, cairo_stride)
-        return surface, bgra
+        surface.mark_dirty()
+        return surface, buf
 
     except Exception as e:
         print(f"Error creating Cairo surface from pixmap: {e}")
@@ -1209,7 +1213,6 @@ def extract_editable_text(doc, page_index):
                                     editable.is_strikethrough = True
                                     break
                         editable_texts.append(editable)
-                        print(f"DEBUG: Extracted text segment: '{combined_text}' font='{editable.font_family_base}' color={editable.color} bbox={editable.bbox}")
         
         # Attach existing PDF link annotations to corresponding text objects
         page_links = page.get_links() if hasattr(page, 'get_links') else []
@@ -1225,7 +1228,6 @@ def extract_editable_text(doc, page_index):
                         editable.original_link_url = editable.link_url
                         break
 
-        print(f"DEBUG: Total text objects extracted from page {page_index}: {len(editable_texts)}")
         return editable_texts, None
     except Exception as e:
         error_msg = f"Error extracting text from page {page_index}: {e}"
@@ -1939,7 +1941,6 @@ def extract_editable_images(doc, page_index):
         image_info_list = page.get_image_info(xrefs=True)
         
         if not image_info_list:
-            print(f"DEBUG: No images found via get_image_info on page {page_index}. Trying alternative method...")
             image_info_list = []
         
         for img_info in image_info_list:
@@ -1963,7 +1964,6 @@ def extract_editable_images(doc, page_index):
                 try:
                     image_bytes = get_image_rgba_bytes(doc, xref)
                     if not image_bytes:
-                        print(f"DEBUG: Could not extract image data for xref {xref}")
                         continue
                     
                     img_rot = 0.0
@@ -2007,15 +2007,13 @@ def extract_editable_images(doc, page_index):
                         rotation=img_rot
                     )
                     editable_images.append(image_obj)
-                except Exception as extract_error:
-                    print(f"DEBUG: Error extracting image bytes for xref {xref}: {extract_error}")
+                except Exception:
                     continue
                     
             except (ValueError, TypeError) as e:
                 print(_("warn_image_skipped", page_index+1, img_info.get('xref'), e))
                 continue
         
-        print(f"DEBUG: Extracted {len(editable_images)} images from page {page_index}")
         return editable_images, None
     except Exception as e:
         error_msg = _("err_image_extract_page", page_index+1, e)
@@ -2384,7 +2382,6 @@ def extract_editable_shapes(doc, page_index):
                 print(f"Warning: skipping shape drawing item: {item_err}")
                 continue
 
-        print(f"DEBUG: Extracted {len(editable_shapes)} shapes from page {page_index}")
         return editable_shapes, None
     except Exception as e:
         error_msg = f"Error extracting shapes from page {page_index}: {e}"
@@ -2470,7 +2467,6 @@ def extract_editable_strokes(doc, page_index):
                 print(f"Warning: skipping stroke drawing item: {item_err}")
                 continue
 
-        print(f"DEBUG: Extracted {len(editable_strokes)} strokes from page {page_index}")
         return editable_strokes, None
     except Exception as e:
         error_msg = f"Error extracting strokes from page {page_index}: {e}"
@@ -4260,12 +4256,19 @@ def extract_measurements(doc) -> Optional[list]:
 
 
 def extract_sticky_notes(doc) -> Dict[int, List[StickyNoteObject]]:
-    """Extract all text/sticky note annotations from document pages."""
+    """Extract all text/sticky note annotations from document pages using fast metadata check."""
     notes_by_page = {}
     if not doc:
         return notes_by_page
     for p in range(doc.page_count):
         try:
+            try:
+                type_str, val_str = doc.xref_get_key(doc.page_xref(p), "Annots")
+                if type_str == "null" or val_str == "null":
+                    continue
+            except Exception:
+                pass
+
             page = doc.load_page(p)
             page_notes = []
             annots = page.annots()
