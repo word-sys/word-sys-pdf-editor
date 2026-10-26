@@ -190,6 +190,11 @@ class WelcomeView(Adw.Bin):
 
         if len(valid_files) != len(recent_files):
             set_setting("recent_opened_files", valid_files)
+            try:
+                from .pdf_handler import get_disk_thumbnail_cache
+                get_disk_thumbnail_cache().prune_orphaned_thumbnails()
+            except Exception:
+                pass
 
         displayed_count = 0
         for file_path_str in valid_files[:15]:
@@ -257,8 +262,14 @@ class WelcomeView(Adw.Bin):
         """Handle recent file row activation."""
         if not self.parent_window:
             return
+        path = None
         if hasattr(row, '_file_path') and row._file_path:
-            self.parent_window.load_document(row._file_path)
+            path = row._file_path
         elif hasattr(row, '_uri') and row._uri:
             gfile = Gio.File.new_for_uri(row._uri)
-            self.parent_window.load_document(gfile.get_path())
+            path = gfile.get_path()
+        if path:
+            if not os.path.isfile(path):
+                self._populate_recent_files()
+                return
+            self.parent_window.load_document(path)

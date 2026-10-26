@@ -3747,7 +3747,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             page_index,
             target_width=thumb_w,
             priority=prio,
-            callback=self._on_thumbnail_rendered
+            callback=self._on_thumbnail_rendered,
+            filepath=sess.pdf_path
         )
 
         if prio == pdf_handler.PRIORITY_VISIBLE:
@@ -3762,7 +3763,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             adj,
                             target_width=thumb_w,
                             priority=pdf_handler.PRIORITY_PREFETCH,
-                            callback=self._on_thumbnail_rendered
+                            callback=self._on_thumbnail_rendered,
+                            filepath=sess.pdf_path
                         )
 
     def cancel_thumbnail_request(self, page_index):
@@ -3814,15 +3816,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         thumb_w = 100 if getattr(self, 'is_eco_mode', False) else 150
         if 0 <= active_target < page_count:
             try:
-                active_thumb = pdf_handler.generate_thumbnail(target_doc, active_target, target_width=thumb_w)
+                active_thumb = pdf_handler.generate_thumbnail(target_doc, active_target, target_width=thumb_w, filepath=sess.pdf_path)
             except Exception:
                 pass
 
-        # Progressive model population: populate initial visible slice (up to 30) instantly (< 1ms)
+        # Progressive model population: populate initial visible slice (up to 30) with disk cache
         init_slice_size = min(page_count, 30)
-        init_items = [PdfPage(index=i, thumbnail=None) for i in range(init_slice_size)]
-        if 0 <= active_target < init_slice_size and active_thumb:
-            init_items[active_target].thumbnail = active_thumb
+        disk_cache = pdf_handler.get_disk_thumbnail_cache()
+        init_items = []
+        for i in range(init_slice_size):
+            if i == active_target and active_thumb:
+                init_items.append(PdfPage(index=i, thumbnail=active_thumb))
+            else:
+                disk_thumb = disk_cache.get_thumbnail(target_doc, i, target_width=thumb_w, filepath=sess.pdf_path)
+                init_items.append(PdfPage(index=i, thumbnail=disk_thumb))
 
         target_model.splice(0, old_count, init_items)
 
@@ -3837,9 +3844,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     return GLib.SOURCE_REMOVE
 
                 chunk_end = min(page_count, rem_iter[0] + 50)
-                chunk_items = [PdfPage(index=i, thumbnail=None) for i in range(rem_iter[0], chunk_end)]
-                if rem_iter[0] <= active_target < chunk_end and active_thumb:
-                    chunk_items[active_target - rem_iter[0]].thumbnail = active_thumb
+                chunk_items = []
+                for i in range(rem_iter[0], chunk_end):
+                    if i == active_target and active_thumb:
+                        chunk_items.append(PdfPage(index=i, thumbnail=active_thumb))
+                    else:
+                        disk_thumb = disk_cache.get_thumbnail(target_doc, i, target_width=thumb_w, filepath=sess.pdf_path)
+                        chunk_items.append(PdfPage(index=i, thumbnail=disk_thumb))
                 target_model.splice(rem_iter[0], 0, chunk_items)
                 rem_iter[0] = chunk_end
                 if rem_iter[0] < page_count:
@@ -9400,6 +9411,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._page_objects_cache.update(new_cache)
 
             self.document_modified = True
+            pdf_handler.get_disk_thumbnail_cache().invalidate_doc(self.doc, filepath=getattr(self._active_session, 'pdf_path', None))
             self.status_label.set_text(message)
             self._invalidate_continuous_layout()
             self._load_page(insert_position)
@@ -10791,6 +10803,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._page_objects_cache.update(new_cache)
 
             self.document_modified = True
+            pdf_handler.get_disk_thumbnail_cache().invalidate_doc(self.doc, filepath=getattr(self._active_session, 'pdf_path', None))
             self.status_label.set_text(message)
             self._invalidate_continuous_layout()
             self._load_page(insert_position)
@@ -10844,6 +10857,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._page_objects_cache.update(new_cache)
 
             self.document_modified = True
+            pdf_handler.get_disk_thumbnail_cache().invalidate_doc(self.doc, filepath=getattr(self._active_session, 'pdf_path', None))
             self.status_label.set_text(message)
             self._invalidate_continuous_layout()
             new_page_count = pdf_handler.get_page_count(self.doc)
@@ -14098,7 +14112,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if gen_id is not None:
                 pdf_handler.cancel_thumbnail_async(gen_id, page_index)
 
-            thumb = pdf_handler.generate_thumbnail(self.doc, page_index, target_width=150)
+            # Invalidate disk thumbnail cache for this page so it re-renders fresh
+            pdf_handler.get_disk_thumbnail_cache().invalidate_page(
+                self.doc, page_index, filepath=getattr(self._active_session, 'pdf_path', None)
+            )
+
+            thumb_w = 100 if getattr(self, 'is_eco_mode', False) else 150
+            thumb = pdf_handler.generate_thumbnail(
+                self.doc, page_index, target_width=thumb_w, filepath=getattr(self._active_session, 'pdf_path', None)
+            )
             if thumb and self.pages_model:
                 n = self.pages_model.get_n_items()
                 if page_index < n:

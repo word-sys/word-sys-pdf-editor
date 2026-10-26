@@ -654,9 +654,11 @@ def load_pdf_document(filepath, password=None):
             doc._is_vault = True
             doc._vault_password = password
             doc._vault_path = filepath
+            doc._file_path = os.path.abspath(filepath)
             return doc, None
 
         doc = fitz.open(filepath)
+        doc._file_path = os.path.abspath(filepath)
         if doc.needs_pass:
             if password is None:
                 doc.close()
@@ -715,10 +717,208 @@ def release_doc_lock(doc):
     with _DOC_LOCKS_LOCK:
         _DOC_LOCKS.pop(doc_id, None)
 
+class DiskThumbnailCache:
+    """Persistent multi-level disk cache for rendered page thumbnails with LRU quota management."""
+
+    def __init__(self, cache_dir: Optional[str] = None, max_disk_bytes: int = 100 * 1024 * 1024):
+        if cache_dir is None:
+            xdg_cache = os.environ.get("XDG_CACHE_HOME")
+            base = Path(xdg_cache) if xdg_cache else (Path.home() / ".cache")
+            self.cache_dir = Path(base) / "word-sys-pdf-editor" / "thumbnails"
+        else:
+            self.cache_dir = Path(cache_dir)
+        self.max_disk_bytes = int(max_disk_bytes)
+        self._lock = threading.Lock()
+        self._ensure_dir()
+
+    def _ensure_dir(self):
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+    def get_document_fingerprint(self, doc, filepath: Optional[str] = None) -> Optional[str]:
+        """Compute stable document hash from realpath, modification time, and file size."""
+        target_path = filepath or getattr(doc, '_file_path', None) or getattr(doc, 'name', None)
+        if not target_path or not os.path.isfile(target_path):
+            return None
+        try:
+            stat = os.stat(target_path)
+            real_path = os.path.realpath(target_path)
+            key_str = f"{real_path}:{stat.st_mtime_ns}:{stat.st_size}"
+            return hashlib.sha256(key_str.encode('utf-8')).hexdigest()[:24]
+        except Exception:
+            return None
+
+    def get_thumbnail(self, doc, page_index: int, target_width: int = 150, filepath: Optional[str] = None) -> Optional[GdkPixbuf.Pixbuf]:
+        """Load pre-rendered thumbnail pixbuf directly from disk cache if valid."""
+        fp = self.get_document_fingerprint(doc, filepath)
+        if not fp:
+            return None
+        thumb_path = self.cache_dir / fp / f"{page_index}_{int(target_width)}.png"
+        if not thumb_path.is_file():
+            return None
+        try:
+            pb = GdkPixbuf.Pixbuf.new_from_file(str(thumb_path))
+            try:
+                os.utime(str(self.cache_dir / fp), None)
+            except Exception:
+                pass
+            return pb
+        except Exception:
+            return None
+
+    def store_thumbnail(self, doc, page_index: int, target_width: int, pix_or_pixbuf: Any, filepath: Optional[str] = None) -> bool:
+        """Store rendered thumbnail directly to disk cache."""
+        fp = self.get_document_fingerprint(doc, filepath)
+        if not fp:
+            return False
+        doc_dir = self.cache_dir / fp
+        temp_file = None
+        try:
+            doc_dir.mkdir(parents=True, exist_ok=True)
+            meta_path = doc_dir / "meta.json"
+            if not meta_path.is_file():
+                target_path = filepath or getattr(doc, '_file_path', None) or getattr(doc, 'name', None)
+                if target_path:
+                    try:
+                        with open(meta_path, "w", encoding="utf-8") as f:
+                            json.dump({"path": os.path.realpath(str(target_path))}, f)
+                    except Exception:
+                        pass
+
+            thumb_file = doc_dir / f"{page_index}_{int(target_width)}.png"
+            temp_file = doc_dir / f"{page_index}_{int(target_width)}_{os.getpid()}.tmp.png"
+
+            if hasattr(pix_or_pixbuf, 'save'):
+                pix_or_pixbuf.save(str(temp_file))
+                os.replace(str(temp_file), str(thumb_file))
+                return True
+            elif hasattr(pix_or_pixbuf, 'savev'):
+                pix_or_pixbuf.savev(str(temp_file), 'png', [], [])
+                os.replace(str(temp_file), str(thumb_file))
+                return True
+            return False
+        except Exception:
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception:
+                    pass
+            return False
+
+    def invalidate_page(self, doc, page_index: int, filepath: Optional[str] = None):
+        """Invalidate cached thumbnail files for a specific page."""
+        fp = self.get_document_fingerprint(doc, filepath)
+        if not fp:
+            return
+        doc_dir = self.cache_dir / fp
+        if not doc_dir.is_dir():
+            return
+        try:
+            for p in doc_dir.glob(f"{page_index}_*.png"):
+                p.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def invalidate_doc(self, doc=None, filepath: Optional[str] = None):
+        """Purge all cached thumbnails for a document."""
+        fp = self.get_document_fingerprint(doc, filepath) if (doc or filepath) else None
+        if fp:
+            doc_dir = self.cache_dir / fp
+            if doc_dir.is_dir():
+                shutil.rmtree(str(doc_dir), ignore_errors=True)
+                return
+
+        # If file was already deleted from disk, fp is None; scan meta.json to locate and purge by path
+        target_path = filepath or getattr(doc, '_file_path', None) or getattr(doc, 'name', None)
+        if target_path and self.cache_dir.is_dir():
+            target_real = os.path.realpath(str(target_path))
+            target_str = str(target_path)
+            for child in self.cache_dir.iterdir():
+                if child.is_dir():
+                    meta_path = child / "meta.json"
+                    if meta_path.is_file():
+                        try:
+                            with open(meta_path, "r", encoding="utf-8") as f:
+                                data = json.load(f)
+                            p = data.get("path")
+                            if p in (target_real, target_str):
+                                shutil.rmtree(str(child), ignore_errors=True)
+                        except Exception:
+                            pass
+
+    def prune_orphaned_thumbnails(self):
+        """Remove cached thumbnail directories whose source PDF no longer exists on disk."""
+        if not self.cache_dir.is_dir():
+            return
+        try:
+            for child in self.cache_dir.iterdir():
+                if child.is_dir():
+                    meta_path = child / "meta.json"
+                    if meta_path.is_file():
+                        try:
+                            with open(meta_path, "r", encoding="utf-8") as f:
+                                data = json.load(f)
+                            src_path = data.get("path")
+                            if src_path and not os.path.isfile(src_path):
+                                shutil.rmtree(str(child), ignore_errors=True)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    def prune(self, max_bytes: Optional[int] = None):
+        """Evict oldest document cache directories when total disk cache exceeds quota."""
+        self.prune_orphaned_thumbnails()
+        limit = int(max_bytes or self.max_disk_bytes)
+        if not self.cache_dir.is_dir():
+            return
+        try:
+            entries = []
+            total_bytes = 0
+            for child in self.cache_dir.iterdir():
+                if child.is_dir():
+                    dir_size = sum(f.stat().st_size for f in child.glob('*') if f.is_file())
+                    mtime = child.stat().st_mtime
+                    entries.append((mtime, dir_size, child))
+                    total_bytes += dir_size
+
+            if total_bytes <= limit:
+                return
+
+            entries.sort(key=lambda x: x[0])
+            for mtime, dir_size, child in entries:
+                if total_bytes <= limit:
+                    break
+                shutil.rmtree(str(child), ignore_errors=True)
+                total_bytes -= dir_size
+        except Exception:
+            pass
+
+    def clear(self):
+        """Purge all cached thumbnails on disk."""
+        if self.cache_dir.is_dir():
+            shutil.rmtree(str(self.cache_dir), ignore_errors=True)
+            self._ensure_dir()
+
+
+_DISK_THUMBNAIL_CACHE = None
+_DISK_THUMBNAIL_CACHE_LOCK = threading.Lock()
+
+def get_disk_thumbnail_cache() -> DiskThumbnailCache:
+    """Retrieve global DiskThumbnailCache singleton."""
+    global _DISK_THUMBNAIL_CACHE
+    with _DISK_THUMBNAIL_CACHE_LOCK:
+        if _DISK_THUMBNAIL_CACHE is None:
+            _DISK_THUMBNAIL_CACHE = DiskThumbnailCache()
+        return _DISK_THUMBNAIL_CACHE
+
+
 class ThumbnailTask:
     """Encapsulates a pending thumbnail generation job."""
-    __slots__ = ('generation_id', 'doc', 'page_index', 'target_width', 'priority', 'callback', 'cancelled')
-    def __init__(self, generation_id, doc, page_index, target_width, priority, callback):
+    __slots__ = ('generation_id', 'doc', 'page_index', 'target_width', 'priority', 'callback', 'cancelled', 'filepath')
+    def __init__(self, generation_id, doc, page_index, target_width, priority, callback, filepath=None):
         self.generation_id = generation_id
         self.doc = doc
         self.page_index = page_index
@@ -726,6 +926,7 @@ class ThumbnailTask:
         self.priority = priority
         self.callback = callback
         self.cancelled = False
+        self.filepath = filepath or getattr(doc, '_file_path', None) or getattr(doc, 'name', None)
 
     def cancel(self):
         self.cancelled = True
@@ -742,7 +943,7 @@ class ThumbnailPipeline:
         self._active_workers = 0
         self._shutdown = False
 
-    def request(self, generation_id, doc, page_index, target_width=150, priority=PRIORITY_VISIBLE, callback=None):
+    def request(self, generation_id, doc, page_index, target_width=150, priority=PRIORITY_VISIBLE, callback=None, filepath=None):
         """Enqueue a thumbnail render request with priority scheduling."""
         if self._shutdown or doc is None or getattr(doc, 'is_closed', False):
             return None
@@ -754,7 +955,7 @@ class ThumbnailPipeline:
                     return existing
                 existing.cancel()
 
-            task = ThumbnailTask(generation_id, doc, page_index, target_width, priority, callback)
+            task = ThumbnailTask(generation_id, doc, page_index, target_width, priority, callback, filepath=filepath)
             self._tasks[key] = task
             count = next(self._counter)
             self._queue.put((priority, count, task))
@@ -812,16 +1013,22 @@ class ThumbnailPipeline:
             if doc is None or getattr(doc, 'is_closed', False):
                 return
 
-            lock = get_doc_lock(doc)
             thumb = None
             try:
-                if lock:
-                    with lock:
+                # 1. Tier 2 Disk Cache Lookup (Non-blocking, zero doc lock contention)
+                disk_cache = get_disk_thumbnail_cache()
+                thumb = disk_cache.get_thumbnail(doc, task.page_index, target_width=task.target_width, filepath=task.filepath)
+
+                # 2. If not cached on disk, render via PyMuPDF with doc lock
+                if thumb is None:
+                    lock = get_doc_lock(doc)
+                    if lock:
+                        with lock:
+                            if not task.cancelled and not getattr(doc, 'is_closed', False):
+                                thumb = generate_thumbnail(doc, task.page_index, target_width=task.target_width, filepath=task.filepath)
+                    else:
                         if not task.cancelled and not getattr(doc, 'is_closed', False):
-                            thumb = generate_thumbnail(doc, task.page_index, target_width=task.target_width)
-                else:
-                    if not task.cancelled and not getattr(doc, 'is_closed', False):
-                        thumb = generate_thumbnail(doc, task.page_index, target_width=task.target_width)
+                            thumb = generate_thumbnail(doc, task.page_index, target_width=task.target_width, filepath=task.filepath)
             except Exception:
                 thumb = None
 
@@ -852,10 +1059,10 @@ def get_thumbnail_pipeline():
             _THUMBNAIL_PIPELINE = ThumbnailPipeline(max_workers=2)
         return _THUMBNAIL_PIPELINE
 
-def request_thumbnail_async(generation_id, doc, page_index, target_width=150, priority=PRIORITY_VISIBLE, callback=None):
+def request_thumbnail_async(generation_id, doc, page_index, target_width=150, priority=PRIORITY_VISIBLE, callback=None, filepath=None):
     """Submit asynchronous thumbnail generation request to pipeline."""
     pipeline = get_thumbnail_pipeline()
-    return pipeline.request(generation_id, doc, page_index, target_width, priority, callback)
+    return pipeline.request(generation_id, doc, page_index, target_width, priority, callback, filepath=filepath)
 
 def cancel_thumbnail_async(generation_id, page_index):
     """Cancel pending asynchronous thumbnail generation for page."""
@@ -876,10 +1083,17 @@ def shutdown_thumbnail_pipeline(wait=False):
             _THUMBNAIL_PIPELINE = None
 
 
-def generate_thumbnail(doc, page_index, target_width=150):
-    """Generate thumbnail."""
+def generate_thumbnail(doc, page_index, target_width=150, filepath=None):
+    """Generate thumbnail, consulting persistent disk cache first."""
     if not doc or not (0 <= page_index < doc.page_count):
         return None
+
+    # Tier 2 Persistent Disk Cache Check
+    disk_cache = get_disk_thumbnail_cache()
+    cached_pb = disk_cache.get_thumbnail(doc, page_index, target_width, filepath=filepath)
+    if cached_pb is not None:
+        return cached_pb
+
     try:
         lock = get_doc_lock(doc)
         if lock:
@@ -900,12 +1114,19 @@ def generate_thumbnail(doc, page_index, target_width=150):
             matrix = fitz.Matrix(zoom_factor, zoom_factor)
             pix = page.get_pixmap(matrix=matrix, alpha=False)
 
+        # Store to disk cache
+        disk_cache.store_thumbnail(doc, page_index, target_width, pix, filepath=filepath)
+
         gdk_pixbuf = GdkPixbuf.Pixbuf.new_from_data(
             pix.samples, GdkPixbuf.Colorspace.RGB, False, 8,
             pix.width, pix.height, pix.stride
         )
         return gdk_pixbuf
     except Exception as thumb_error:
+        print(f"Warning: Could not generate thumbnail for page {page_index+1}: {thumb_error}")
+        placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, target_width, int(target_width * 1.414))
+        placeholder_pixbuf.fill(0xaaaaaaFF)
+        return placeholder_pixbuf
         print(f"Warning: Could not generate thumbnail for page {page_index+1}: {thumb_error}")
         placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, target_width, int(target_width * 1.414))
         placeholder_pixbuf.fill(0xaaaaaaFF)

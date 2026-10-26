@@ -923,6 +923,29 @@ class TestRecentlyOpenedFilesHub(unittest.TestCase):
         welcome._on_recent_row_activated(welcome.recent_list_box, row)
         mock_win.load_document.assert_called_once_with(valid_pdf)
 
+    @unittest.skipIf(Gdk.Display.get_default() is None, "Screen display not available (headless build environment)")
+    def test_welcome_view_row_activation_prunes_if_file_deleted_on_disk(self):
+        """Test activating recent row for a deleted file prunes it and does not call load_document."""
+        from word_sys_pdf_editor.welcome_view import WelcomeView
+        from word_sys_pdf_editor.i18n import get_setting, set_setting
+
+        deleted_pdf = os.path.join(self.tmp_dir.name, "deleted_after_view.pdf")
+        with open(deleted_pdf, "w") as f:
+            f.write("pdf")
+
+        set_setting("recent_opened_files", [deleted_pdf])
+
+        mock_win = MagicMock()
+        welcome = WelcomeView(parent_window=mock_win)
+        row = welcome._create_recent_file_row(deleted_pdf)
+
+        # Now simulate user deleting file on disk
+        os.remove(deleted_pdf)
+
+        welcome._on_recent_row_activated(welcome.recent_list_box, row)
+        mock_win.load_document.assert_not_called()
+        self.assertNotIn(deleted_pdf, get_setting("recent_opened_files", []))
+
     def test_window_finish_loading_records_recent_file(self):
         """Test window._finish_loading automatically records recent file."""
         from word_sys_pdf_editor.window import PdfEditorWindow
