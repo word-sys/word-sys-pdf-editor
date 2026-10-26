@@ -498,6 +498,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.current_page_index = 0
         self.zoom_level = 1.0
         self._last_pointer_pos = None
+        self.is_zoom_gesture_active = False
+        self._zoom_debounce_timer = None
+        self._zoom_settle_delay_ms = 120
+        self._pinch_initial_zoom = 1.0
+        self._pinch_focal_point = None
         self.pages_model = Gio.ListStore(item_type=PdfPage)
         self.editable_texts = [] 
         self.editable_images = []
@@ -2759,6 +2764,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         scroll_controller.connect('scroll', self.on_scroll_zoom)
         self.pdf_view.add_controller(scroll_controller)
 
+        # Touchpad and touchscreen fluid pinch-to-zoom gesture
+        pinch_zoom = Gtk.GestureZoom.new()
+        pinch_zoom.connect("begin", self._on_pinch_zoom_begin)
+        pinch_zoom.connect("scale-changed", self._on_pinch_zoom_scale_changed)
+        pinch_zoom.connect("end", self._on_pinch_zoom_end)
+        pinch_zoom.connect("cancel", self._on_pinch_zoom_cancel)
+        self.pdf_view.add_controller(pinch_zoom)
+
         motion_controller = Gtk.EventControllerMotion.new()
         motion_controller.connect('motion', self._on_pointer_motion)
         self.pdf_view.add_controller(motion_controller)
@@ -4865,7 +4878,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.pdf_view.queue_draw()
         if getattr(self, 'async_page_rendering', True) and self.doc and not getattr(self.doc, 'is_closed', False):
-            pdf_handler.request_page_cairo_surface(self.doc, page_index, self.zoom_level)
+            pdf_handler.request_page_cairo_surface(self.doc, page_index, self.zoom_level, progressive=True)
             if not getattr(self, 'is_eco_mode', False):
                 if page_index + 1 < pdf_handler.get_page_count(self.doc):
                     pdf_handler.request_page_cairo_surface(self.doc, page_index + 1, self.zoom_level)
@@ -5185,21 +5198,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.paint()
         else:
             if use_async and self.doc and not getattr(self.doc, 'is_closed', False):
-                def _on_async_page_ready(p_idx, z_val, surf):
-                    if not self.doc or getattr(self.doc, 'is_closed', False):
-                        return
-                    if getattr(self, '_active_session', None) is None:
-                        return
-                    is_visible = False
-                    if getattr(self, 'continuous_scroll', False):
-                        is_visible = (p_idx in self.get_visible_page_indices())
-                    else:
-                        is_visible = (p_idx == self.current_page_index)
-                    if is_visible and abs(self.zoom_level - z_val) < 0.001:
-                        if hasattr(self, 'pdf_view') and self.pdf_view:
-                            self.pdf_view.queue_draw()
+                is_gesturing = getattr(self, 'is_zoom_gesture_active', False)
+                if not is_gesturing:
+                    def _on_async_page_ready(p_idx, z_val, surf):
+                        if not self.doc or getattr(self.doc, 'is_closed', False):
+                            return
+                        if getattr(self, '_active_session', None) is None:
+                            return
+                        is_visible = False
+                        if getattr(self, 'continuous_scroll', False):
+                            is_visible = (p_idx in self.get_visible_page_indices())
+                        else:
+                            is_visible = (p_idx == self.current_page_index)
+                        if is_visible:
+                            # Redraw if target zoom arrived or low-res preview arrived before target
+                            if abs(self.zoom_level - z_val) < 0.001 or pdf_handler.peek_page_cairo_surface(self.doc, p_idx, self.zoom_level) is None:
+                                if hasattr(self, 'pdf_view') and self.pdf_view:
+                                    self.pdf_view.queue_draw()
 
-                pdf_handler.request_page_cairo_surface(self.doc, page_index, self.zoom_level, callback=_on_async_page_ready)
+                    pdf_handler.request_page_cairo_surface(
+                        self.doc, page_index, self.zoom_level,
+                        callback=_on_async_page_ready,
+                        progressive=True
+                    )
 
                 rendered_fallback = False
                 best_match = pdf_handler.get_page_rasterizer_pool().find_best_cached_surface(self.doc, page_index, self.zoom_level)
@@ -5210,6 +5231,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         cr.save()
                         cr.scale(scale_factor, scale_factor)
                         cr.set_source_surface(alt_surf, 0, 0)
+                        pat = cr.get_source()
+                        if pat is not None:
+                            pat.set_filter(cairo.FILTER_BILINEAR)
                         cr.paint()
                         cr.restore()
                         rendered_fallback = True
@@ -10743,7 +10767,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         else:
             self.inline_editor_widget.set_size_request(ed_w, ed_h)
 
-    def _set_zoom(self, new_zoom, focal_point=None):
+    def _set_zoom(self, new_zoom, focal_point=None, is_gesture: bool = False):
         """Set zoom level smoothly with focal point anchoring, without reloading page."""
         if not self.doc or not (0 <= self.current_page_index < pdf_handler.get_page_count(self.doc)):
             return
@@ -10756,6 +10780,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         old_zoom = self.zoom_level
         self.zoom_level = clamped_zoom
         self.update_zoom_label()
+
+        if is_gesture:
+            self.is_zoom_gesture_active = True
+            self._schedule_zoom_settled(immediate=False)
+        else:
+            self.is_zoom_gesture_active = False
+            if getattr(self, '_zoom_debounce_timer', None) is not None:
+                try:
+                    GLib.source_remove(self._zoom_debounce_timer)
+                except Exception:
+                    pass
+                self._zoom_debounce_timer = None
 
         page = self.doc.load_page(self.current_page_index)
         new_page_w = int(page.rect.width * self.zoom_level)
@@ -10840,13 +10876,104 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.pdf_view.queue_draw()
 
+    def _on_pinch_zoom_begin(self, gesture, sequence):
+        """Handle start of touchpad or touchscreen pinch-to-zoom gesture."""
+        if not self.doc:
+            return
+        self.is_zoom_gesture_active = True
+        self._pinch_initial_zoom = self.zoom_level
+        success, x, y = gesture.get_bounding_box_center()
+        if success:
+            self._pinch_focal_point = (x, y)
+        else:
+            self._pinch_focal_point = getattr(self, '_last_pointer_pos', None)
+        if getattr(self, '_zoom_debounce_timer', None) is not None:
+            try:
+                GLib.source_remove(self._zoom_debounce_timer)
+            except Exception:
+                pass
+            self._zoom_debounce_timer = None
+
+    def _on_pinch_zoom_scale_changed(self, gesture, scale):
+        """Track continuous pinch-to-zoom scaling in real-time."""
+        if not self.doc or scale <= 0.0:
+            return
+        new_zoom = self._pinch_initial_zoom * scale
+        self._set_zoom(new_zoom, focal_point=self._pinch_focal_point, is_gesture=True)
+
+    def _on_pinch_zoom_end(self, gesture, sequence):
+        """Settle zoom level once pinch gesture completes."""
+        self._schedule_zoom_settled(immediate=False)
+
+    def _on_pinch_zoom_cancel(self, gesture, sequence):
+        """Cancel pinch gesture and settle zoom level immediately."""
+        self._schedule_zoom_settled(immediate=True)
+
+    def _schedule_zoom_settled(self, immediate: bool = False):
+        """Schedule or immediately trigger high-DPI rasterization after zoom gesture finishes."""
+        if getattr(self, '_zoom_debounce_timer', None) is not None:
+            try:
+                GLib.source_remove(self._zoom_debounce_timer)
+            except Exception:
+                pass
+            self._zoom_debounce_timer = None
+
+        if immediate:
+            self._on_zoom_settled()
+        else:
+            self._zoom_debounce_timer = GLib.timeout_add(self._zoom_settle_delay_ms, self._on_zoom_settled)
+
+    def _on_zoom_settled(self):
+        """Debounced callback fired when zoom gesture settles (default 120ms).
+        
+        Clears active gesture flag and triggers progressive high-DPI rasterization
+        for all visible pages.
+        """
+        self._zoom_debounce_timer = None
+        self.is_zoom_gesture_active = False
+        if not self.doc or getattr(self.doc, 'is_closed', False):
+            return False
+        if getattr(self, '_active_session', None) is None:
+            return False
+
+        if getattr(self, 'continuous_scroll', False):
+            visible_indices = self.get_visible_page_indices() or [self.current_page_index]
+        else:
+            visible_indices = [self.current_page_index]
+
+        target_zoom = self.zoom_level
+
+        def _make_ready_cb(expected_idx, expected_zoom):
+            def _on_ready(p, z, s):
+                if not self.doc or getattr(self.doc, 'is_closed', False):
+                    return
+                if getattr(self, '_active_session', None) is None:
+                    return
+                is_vis = (p in self.get_visible_page_indices()) if getattr(self, 'continuous_scroll', False) else (p == self.current_page_index)
+                if is_vis and abs(self.zoom_level - expected_zoom) < 0.001:
+                    if hasattr(self, 'pdf_view') and self.pdf_view:
+                        self.pdf_view.queue_draw()
+            return _on_ready
+
+        for p_idx in visible_indices:
+            if 0 <= p_idx < pdf_handler.get_page_count(self.doc):
+                pdf_handler.request_page_cairo_surface(
+                    self.doc, p_idx, target_zoom,
+                    callback=_make_ready_cb(p_idx, target_zoom),
+                    progressive=True
+                )
+
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+        return False
+
     def on_zoom_in(self, button=None, focal_point=None):
         if not self.doc: return
-        self._set_zoom(self.zoom_level * 1.2, focal_point=focal_point)
+        self._set_zoom(self.zoom_level * 1.2, focal_point=focal_point, is_gesture=True)
 
     def on_zoom_out(self, button=None, focal_point=None):
         if not self.doc: return
-        self._set_zoom(self.zoom_level / 1.2, focal_point=focal_point)
+        self._set_zoom(self.zoom_level / 1.2, focal_point=focal_point, is_gesture=True)
 
     def on_scroll_zoom(self, controller, dx, dy):
         """Zoom canvas in or out when Ctrl key is held during mouse scroll."""
@@ -14373,6 +14500,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def do_close_request(self):
         """Prompt to save unsaved changes in all open tabs before closing the window."""
+        if getattr(self, '_zoom_debounce_timer', None) is not None:
+            try:
+                GLib.source_remove(self._zoom_debounce_timer)
+            except Exception:
+                pass
+            self._zoom_debounce_timer = None
+
         if getattr(self, "_merge_dialog", None) is not None:
             try:
                 self._merge_dialog.cleanup()

@@ -527,8 +527,13 @@ class PageRasterizerPool:
         best_surf, best_zoom = min(candidates, key=lambda item: abs(item[1] - target_zoom))
         return best_surf, best_zoom
 
-    def request_surface(self, doc, page_index: int, zoom_level: float, callback: Optional[Any] = None, defer: bool = True):
-        """Submit background rasterization request. Dispatches callback(page_index, zoom_level, surf) via GLib.idle_add upon completion."""
+    def request_surface(self, doc, page_index: int, zoom_level: float, callback: Optional[Any] = None, defer: bool = True, progressive: bool = False):
+        """Submit background rasterization request.
+        
+        If progressive=True and no cached surface exists for this page at any zoom level,
+        dispatches a fast low-res preview (50 DPI) first, then refines to target zoom_level.
+        Dispatches callback(page_index, zoom_level, surf) via GLib.idle_add upon completion.
+        """
         if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
             return
 
@@ -542,12 +547,20 @@ class PageRasterizerPool:
             if callback:
                 def _dispatch_cached():
                     try:
-                        callback(page_index, zoom_level, cached)
+                        callback(page_index, zoom_rounded, cached)
                     except Exception:
                         pass
                     return False
                 GLib.idle_add(_dispatch_cached)
             return
+
+        # Progressive LOD: if no surface at any zoom exists in cache and target is higher than 50 DPI,
+        # request 50 DPI preview first for instant visual feedback (<5ms)
+        preview_zoom = round(50.0 / 72.0, 4)
+        if progressive and zoom_rounded > preview_zoom * 1.25:
+            best_cached = self.find_best_cached_surface(doc, page_index, zoom_level)
+            if best_cached is None:
+                self.request_surface(doc, page_index, preview_zoom, callback=callback, defer=defer, progressive=False)
 
         with self._lock:
             self._latest_requested_zoom[(doc_id, page_index)] = zoom_rounded
@@ -588,7 +601,7 @@ class PageRasterizerPool:
             with self._lock:
                 if task_key not in self._pending_callbacks:
                     return False
-                future = self._executor.submit(_render_worker, doc, page_index, zoom_level, task_key, gen)
+                future = self._executor.submit(_render_worker, doc, page_index, zoom_rounded, task_key, gen)
                 self._active_futures[task_key] = future
             return False
 
@@ -607,7 +620,7 @@ class PageRasterizerPool:
         def _on_ready(p, z, surf):
             result[0] = surf
             event.set()
-        self.request_surface(doc, page_index, zoom_level, callback=_on_ready, defer=False)
+        self.request_surface(doc, page_index, zoom_level, callback=_on_ready, defer=False, progressive=False)
         event.wait(timeout=timeout)
         return result[0] or self.peek_surface(doc, page_index, zoom_level)
 
@@ -640,8 +653,8 @@ def get_page_rasterizer_pool() -> PageRasterizerPool:
 def peek_page_cairo_surface(doc, page_index, zoom_level):
     return get_page_rasterizer_pool().peek_surface(doc, page_index, zoom_level)
 
-def request_page_cairo_surface(doc, page_index, zoom_level, callback=None, defer: bool = True):
-    return get_page_rasterizer_pool().request_surface(doc, page_index, zoom_level, callback=callback, defer=defer)
+def request_page_cairo_surface(doc, page_index, zoom_level, callback=None, defer: bool = True, progressive: bool = False):
+    return get_page_rasterizer_pool().request_surface(doc, page_index, zoom_level, callback=callback, defer=defer, progressive=progressive)
 
 def _get_font_args_for_pymupdf(text_obj):
     """Get the font args for pymupdf."""
