@@ -12,6 +12,7 @@ from .i18n import _, get_language, set_language, get_supported_languages, get_se
 
 import gi
 import os
+import gc
 from pathlib import Path
 import cairo
 import threading
@@ -1252,6 +1253,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 pass
 
         target_session.close()
+        gc.collect(1)
 
         if getattr(self, '_is_closing', False):
             return
@@ -4614,6 +4616,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         old_page = self.current_page_index
         if old_page is not None and (0 <= old_page < len(self.doc)):
             self._stash_page_objects(old_page)
+            if abs(page_index - old_page) > 2:
+                gc.collect(1)
 
         self.current_page_index = page_index
         self.selected_text = None
@@ -4664,6 +4668,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if reload_objects:
                     pdf_handler.save_page_snapshot(self.doc, old_page_idx, force=True)
                 self._stash_page_objects(old_page_idx)
+                if abs(page_index - old_page_idx) > 2:
+                    gc.collect(1)
 
         # Do not clear undo_manager on page navigation! Undo history belongs to the document session.
 
@@ -4800,6 +4806,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.set_content_height(1)
         self.pdf_view.queue_draw()
         self._update_ui_state()
+        gc.collect(1)
 
     def _on_tab_bar_pressed(self, gesture, n_press, x, y):
         """Switch back to editor if clicking the tab bar while on welcome screen."""
@@ -6550,9 +6557,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 continue
 
             # Confidence Heatmap Color Coding:
-            # 🟢 High Confidence (>= 80%): Crisp Green
-            # 🟡 Medium Confidence (50% - 79%): Amber / Yellow
-            # 🔴 Low Confidence (< 50%): Vivid Red Alert
+            # High Confidence (>= 80%): Crisp Green
+            # Medium Confidence (50% - 79%): Amber / Yellow
+            # Low Confidence (< 50%): Vivid Red Alert
             if conf >= 0.80:
                 fill_rgba = (0.15, 0.68, 0.38, 0.22)
                 border_rgba = (0.15, 0.68, 0.38, 0.80)

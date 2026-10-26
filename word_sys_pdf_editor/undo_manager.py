@@ -1,4 +1,5 @@
 import copy
+import collections
 import re
 from typing import Any, Optional, List, Dict, Tuple
 try:
@@ -341,12 +342,13 @@ class Command:
         _perform_ghost_erasure(self.window, target_object, page_num, properties_to_clear=properties_to_clear, session=self._get_target_session())
 
 class UndoManager:
-    """Manager class that stores undo and redo action stacks."""
-    def __init__(self, window):
-        """Initialise undo and redo stacks."""
+    """Manager class that stores bounded undo and redo action stacks."""
+    def __init__(self, window, max_depth: int = 50):
+        """Initialise undo and redo stacks with bounded capacity."""
         self.window = window
-        self.undo_stack = []
-        self.redo_stack = []
+        self.max_depth = max_depth
+        self.undo_stack = collections.deque(maxlen=max_depth)
+        self.redo_stack = collections.deque(maxlen=max_depth)
         self._update_ui_callback = self.window._update_undo_redo_buttons
 
     def add_command(self, command):

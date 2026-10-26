@@ -29,6 +29,9 @@ WSPDF_SALT_LEN = 16
 WSPDF_NONCE_LEN = 12
 WSPDF_TAG_LEN = 16
 WSPDF_PBKDF2_ROUNDS = 100_000
+import collections
+import zlib
+import gc
 import queue
 import itertools
 import threading
@@ -56,7 +59,133 @@ from .models import (
 from .utils import find_specific_font_variant, get_default_unicode_font_path, normalize_color
 from .i18n import _
 
-_cairo_page_cache = {}
+class BoundedLRUCache(dict):
+    """LRU Cache bounded by maximum item count and maximum total memory byte ceiling."""
+    def __init__(self, max_items: int = 6, max_bytes: int = 120 * 1024 * 1024):
+        super().__init__()
+        self.max_items = int(max_items)
+        self.max_bytes = int(max_bytes)
+        self.current_bytes = 0
+        self._item_sizes = {}
+
+    def _estimate_size(self, value) -> int:
+        if value is None:
+            return 0
+        if hasattr(value, "get_stride") and hasattr(value, "get_height"):
+            return int(value.get_stride() * value.get_height())
+        if hasattr(value, "size"):
+            return int(getattr(value, "size", 0))
+        if hasattr(value, "samples"):
+            return len(value.samples)
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return len(value)
+        return 1024
+
+    def __getitem__(self, key):
+        val = super().__getitem__(key)
+        super().__delitem__(key)
+        super().__setitem__(key, val)
+        return val
+
+    def get(self, key, default=None):
+        if key in self:
+            return self[key]
+        return default
+
+    def __setitem__(self, key, value):
+        new_size = self._estimate_size(value)
+        if key in self:
+            old_size = self._item_sizes.get(key, 0)
+            self.current_bytes -= old_size
+            super().__delitem__(key)
+        super().__setitem__(key, value)
+        self._item_sizes[key] = new_size
+        self.current_bytes += new_size
+        self._evict_as_needed()
+
+    def _evict_as_needed(self):
+        while len(self) > 1 and (len(self) > self.max_items or self.current_bytes > self.max_bytes):
+            oldest_key = next(iter(self))
+            self.pop(oldest_key, None)
+
+    def pop(self, key, *args):
+        if key in self:
+            size = self._item_sizes.pop(key, 0)
+            self.current_bytes = max(0, self.current_bytes - size)
+            val = super().__getitem__(key)
+            super().__delitem__(key)
+            return val
+        if args:
+            return args[0]
+        raise KeyError(key)
+
+    def __delitem__(self, key):
+        self.pop(key)
+
+    def clear(self):
+        self._item_sizes.clear()
+        self.current_bytes = 0
+        super().clear()
+
+    def set_budget(self, max_items: Optional[int] = None, max_bytes: Optional[int] = None):
+        """Update cache boundaries dynamically."""
+        if max_items is not None:
+            self.max_items = max(1, int(max_items))
+        if max_bytes is not None:
+            self.max_bytes = max(1024 * 1024, int(max_bytes))
+        self._evict_as_needed()
+
+
+class CompressedSnapshotStore(dict):
+    """In-memory zlib-compressed snapshot storage for PDF page content streams."""
+    _MAGIC = b"ZL\x01"
+
+    def __setitem__(self, key, value):
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            val_bytes = bytes(value)
+            if not val_bytes.startswith(self._MAGIC):
+                compressed = self._MAGIC + zlib.compress(val_bytes, level=6)
+                super().__setitem__(key, compressed)
+                return
+        super().__setitem__(key, value)
+
+    def __getitem__(self, key):
+        val = super().__getitem__(key)
+        if isinstance(val, bytes) and val.startswith(self._MAGIC):
+            return zlib.decompress(val[len(self._MAGIC):])
+        return val
+
+    def get(self, key, default=None):
+        if key in self:
+            return self[key]
+        return default
+
+    def pop(self, key, *args):
+        if key in self:
+            val = super().pop(key)
+            if isinstance(val, bytes) and val.startswith(self._MAGIC):
+                return zlib.decompress(val[len(self._MAGIC):])
+            return val
+        if args:
+            return args[0]
+        raise KeyError(key)
+
+    def raw_items(self):
+        return super().items()
+
+    def items(self):
+        for k in list(self.keys()):
+            yield k, self[k]
+
+    def values(self):
+        for k in list(self.keys()):
+            yield self[k]
+
+    def raw_byte_size(self) -> int:
+        return sum(len(v) for v in super().values() if isinstance(v, (bytes, bytearray)))
+
+
+_cairo_page_cache = BoundedLRUCache(max_items=6, max_bytes=120 * 1024 * 1024)
 
 def invalidate_page_cache(doc=None, page_index=None):
     """Invalidate cached Cairo page surfaces and internal document page cache."""
@@ -227,11 +356,6 @@ def get_page_cairo_surface(doc, page_index, zoom_level, clip_rect=None):
         surf, _ = pixmap_to_cairo_surface(pix)
         if surf is None:
             return None
-
-        # Limit cache size to 6 surfaces to conserve memory
-        if len(_cairo_page_cache) >= 6:
-            oldest_key = next(iter(_cairo_page_cache))
-            _cairo_page_cache.pop(oldest_key, None)
 
         _cairo_page_cache[cache_key] = surf
         return surf
@@ -532,12 +656,13 @@ def load_pdf_document(filepath, password=None):
         return None, f"Error opening PDF: {e}\nPath: {filepath}"
 
 def close_pdf_document(doc):
-    """Close PDF document."""
-    if doc:
+    """Close PDF document and run generational garbage collection."""
+    if doc is not None:
         release_doc_lock(doc)
         try:
             invalidate_page_cache(doc)
             doc.close()
+            gc.collect(1)
         except Exception as e:
             print(f"Error closing PDF document: {e}")
 
@@ -3074,9 +3199,9 @@ def update_form_widget_choices(
 
 
 
-_page_snapshots: dict = {}
+_page_snapshots: dict = CompressedSnapshotStore()
 _page_original_links: dict = {}
-_page_pre_ocr_snapshots: dict = {}
+_page_pre_ocr_snapshots: dict = CompressedSnapshotStore()
 # Maps md5(snapshot content) -> {xobject resource name: xref}. Keyed by content digest
 # so it survives page re-keying of _page_snapshots.
 _snapshot_xobject_names: dict = {}
@@ -3184,12 +3309,13 @@ def release_page_snapshots(doc):
     doc_id = id(doc)
     keys_to_remove = [k for k in _page_snapshots if k[0] == doc_id]
     for k in keys_to_remove:
-        del _page_snapshots[k]
+        _page_snapshots.pop(k, None)
         if k in _page_original_links:
             del _page_original_links[k]
     ocr_keys = [k for k in _page_pre_ocr_snapshots if k[0] == doc_id]
     for k in ocr_keys:
-        del _page_pre_ocr_snapshots[k]
+        _page_pre_ocr_snapshots.pop(k, None)
+    gc.collect(1)
 
 def _apply_single_object_to_page(doc, page, obj):
     """Render a single object (text, image, shape, stroke) onto a PDF page with transforms."""
@@ -3679,12 +3805,13 @@ def insert_blank_page(doc, page_index=None, width=None, height=None):
         if page_index is not None and 0 <= page_index <= doc.page_count:
             target_pno = int(page_index)
             new_snapshots = {}
-            for (did, pno), content in _page_snapshots.items():
+            for (did, pno), content in _page_snapshots.raw_items():
                 if did == doc_id and pno >= target_pno:
                     new_snapshots[(did, pno + 1)] = content
                 else:
                     new_snapshots[(did, pno)] = content
-            _page_snapshots = new_snapshots
+            _page_snapshots.clear()
+            _page_snapshots.update(new_snapshots)
 
             new_links = {}
             for (did, pno), links in _page_original_links.items():
@@ -3753,12 +3880,13 @@ def move_page(doc, from_index, to_index):
             return p
 
         new_snapshots = {}
-        for (did, pno), content in _page_snapshots.items():
+        for (did, pno), content in _page_snapshots.raw_items():
             if did == doc_id:
                 new_snapshots[(did, _remap_index(pno))] = content
             else:
                 new_snapshots[(did, pno)] = content
-        _page_snapshots = new_snapshots
+        _page_snapshots.clear()
+        _page_snapshots.update(new_snapshots)
 
         new_links = {}
         for (did, pno), links in _page_original_links.items():
@@ -3792,7 +3920,7 @@ def delete_page(doc, page_index):
         doc_id = id(doc)
         global _page_snapshots, _page_original_links
         new_snapshots = {}
-        for (did, pno), content in _page_snapshots.items():
+        for (did, pno), content in _page_snapshots.raw_items():
             if did == doc_id:
                 if pno == page_index:
                     continue
@@ -3802,7 +3930,8 @@ def delete_page(doc, page_index):
                     new_snapshots[(did, pno)] = content
             else:
                 new_snapshots[(did, pno)] = content
-        _page_snapshots = new_snapshots
+        _page_snapshots.clear()
+        _page_snapshots.update(new_snapshots)
 
         new_links = {}
         for (did, pno), links in _page_original_links.items():
