@@ -206,6 +206,8 @@ class CompressedSnapshotStore(dict):
 
 
 _cairo_page_cache = BoundedLRUCache(max_items=6, max_bytes=120 * 1024 * 1024)
+_stale_page_cache: Dict[Tuple[int, int], Tuple[cairo.ImageSurface, float]] = {}
+_stale_page_cache_lock = threading.Lock()
 _page_rasterizer_pool = None
 
 def configure_memory_limits(is_eco_mode: bool):
@@ -220,7 +222,7 @@ def configure_memory_limits(is_eco_mode: bool):
 
 def invalidate_page_cache(doc=None, page_index=None):
     """Invalidate cached Cairo page surfaces and internal document page cache."""
-    global _cairo_page_cache, _page_rasterizer_pool
+    global _cairo_page_cache, _stale_page_cache, _page_rasterizer_pool
     if _page_rasterizer_pool is not None:
         if doc is None:
             _page_rasterizer_pool.bump_generation()
@@ -230,6 +232,8 @@ def invalidate_page_cache(doc=None, page_index=None):
             _page_rasterizer_pool.cancel_all(doc)
     if doc is None:
         _cairo_page_cache.clear()
+        with _stale_page_cache_lock:
+            _stale_page_cache.clear()
         return
     if hasattr(doc, '_page_cache') and isinstance(doc._page_cache, dict):
         if page_index is None:
@@ -243,7 +247,10 @@ def invalidate_page_cache(doc=None, page_index=None):
         else:
             keys_to_del = [k for k in list(_cairo_page_cache.keys()) if k[0] == doc_id and k[1] == page_index]
         for k in keys_to_del:
-            _cairo_page_cache.pop(k, None)
+            surf = _cairo_page_cache.pop(k, None)
+            if surf is not None and getattr(surf, 'get_width', lambda: 0)() > 0:
+                with _stale_page_cache_lock:
+                    _stale_page_cache[(k[0], k[1])] = (surf, float(k[2]))
 
 def rotate_point(x, y, cx, cy, angle_degrees):
     """Rotate point (x, y) around pivot (cx, cy) by angle_degrees clockwise."""
@@ -401,6 +408,8 @@ def get_page_cairo_surface(doc, page_index, zoom_level, clip_rect=None):
             return None
 
         _cairo_page_cache[cache_key] = surf
+        with _stale_page_cache_lock:
+            _stale_page_cache.pop((id(doc), page_index), None)
         return surf
     except Exception as e:
         print(f"Error creating cached page surface for page {page_index}: {e}")
@@ -522,6 +531,15 @@ class PageRasterizerPool:
                         candidates.append((surf, float(k[2])))
 
         if not candidates:
+            with _stale_page_cache_lock:
+                stale = _stale_page_cache.get((doc_id, page_index))
+                if (
+                    stale is not None
+                    and stale[0] is not None
+                    and getattr(stale[0], 'get_width', lambda: 0)() > 0
+                    and getattr(stale[0], 'get_height', lambda: 0)() > 0
+                ):
+                    return stale
             return None
 
         best_surf, best_zoom = min(candidates, key=lambda item: abs(item[1] - target_zoom))
@@ -914,7 +932,12 @@ def close_pdf_document(doc):
     if doc is not None:
         release_doc_lock(doc)
         try:
+            doc_id = id(doc)
             invalidate_page_cache(doc)
+            with _stale_page_cache_lock:
+                keys_to_del = [k for k in _stale_page_cache if k[0] == doc_id]
+                for k in keys_to_del:
+                    _stale_page_cache.pop(k, None)
             doc.close()
             gc.collect(1)
         except Exception as e:

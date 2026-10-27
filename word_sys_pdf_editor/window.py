@@ -4360,6 +4360,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         cull_top = scroll_y - prefetch_margin
         cull_bottom = scroll_y + vp_h + prefetch_margin
 
+        fallback_idx = max(0, min(num_pages - 1, getattr(self, 'current_page_index', 0)))
+
         # Fast O(1) algebraic path for uniform geometry
         if getattr(self, '_is_geometry_uniform', False) and hasattr(self.continuous_page_offsets, 'stride'):
             stride = self.continuous_page_offsets.stride
@@ -4369,7 +4371,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             max_i = min(num_pages - 1, int(math.floor((cull_bottom - gap) / stride)))
             if min_i <= max_i:
                 return list(range(min_i, max_i + 1))
-            return []
+            return [fallback_idx]
 
         if num_pages <= 32:
             visible = []
@@ -4377,7 +4379,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 px, py, pw, ph = self.get_page_canvas_rect(p_idx)
                 if (py + ph >= cull_top) and (py <= cull_bottom):
                     visible.append(p_idx)
-            return visible
+            return visible if visible else [fallback_idx]
 
         # Binary search O(log N) for first visible page in large non-uniform documents
         lo, hi = 0, num_pages - 1
@@ -4396,7 +4398,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if py > cull_bottom:
                 break
             visible.append(p_idx)
-        return visible
+        return visible if visible else [fallback_idx]
 
     def get_dominant_visible_page_index(self) -> int:
         """Calculate the page index with the largest visible area in the viewport."""
@@ -4464,6 +4466,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         dominant = self.get_dominant_visible_page_index()
         if dominant != self.current_page_index:
             self._switch_active_page(dominant)
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
 
     def _sync_window_title_and_subtitle(self):
         """Update window title and header subtitle with current session and page info."""
@@ -4593,6 +4597,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._is_programmatic_scrolling = True
             v_adj.set_value(target_y)
             self._is_programmatic_scrolling = False
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
             return
 
         start_time = GLib.get_monotonic_time() / 1000.0
@@ -4606,10 +4612,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             ease = 1.0 - (1.0 - t) ** 3
             current_y = start_y + (delta_y * ease)
             v_adj.set_value(current_y)
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
             if t >= 1.0:
                 v_adj.set_value(target_y)
                 self._is_programmatic_scrolling = False
                 self._scroll_anim_id = None
+                if hasattr(self, 'pdf_view') and self.pdf_view:
+                    self.pdf_view.queue_draw()
                 return False
             return True
 
@@ -5190,17 +5200,24 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.paint()
             cr.restore()
         else:
-            cr.set_source_rgb(0.42, 0.42, 0.42)
-            cr.paint()
-
-        if not self.continuous_scroll:
             if self.current_pdf_page_width <= 0:
+                cr.set_source_rgb(0.42, 0.42, 0.42)
+                cr.paint()
                 return
 
             page_w = float(self.current_pdf_page_width)
             page_h = float(self.current_pdf_page_height)
             page_offset_x = max(0.0, (width - page_w) / 2.0)
             page_offset_y = max(0.0, (height - page_h) / 2.0)
+
+            # Paint canvas background only in the margins outside the page, preventing dark gray flashing
+            cr.save()
+            cr.set_source_rgb(0.42, 0.42, 0.42)
+            cr.rectangle(0, 0, width, height)
+            cr.rectangle(page_offset_x, page_offset_y, page_w, page_h)
+            cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+            cr.fill()
+            cr.restore()
 
             cr.save()
             cr.set_source_rgba(0, 0, 0, 0.15)
@@ -5209,27 +5226,28 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.restore()
 
             self._draw_page_content(area, cr, self.current_page_index, page_offset_x, page_offset_y, page_w, page_h, dirty_rect=dirty_rect)
-        else:
-            if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
-                self._recompute_continuous_layout()
+            return
 
-            visible_pages = self.get_visible_page_indices()
-            for p_idx in visible_pages:
-                px, py, pw, ph = self.get_page_canvas_rect(p_idx)
+        if not hasattr(self, 'continuous_page_offsets') or len(self.continuous_page_offsets) != len(self.doc):
+            self._recompute_continuous_layout()
 
-                # Skip pages completely outside dirty rect when specified
-                if dirty_rect is not None:
-                    dx, dy, dw, dh = dirty_rect
-                    if px + pw < dx or px > dx + dw or py + ph < dy or py > dy + dh:
-                        continue
+        visible_pages = self.get_visible_page_indices()
+        for p_idx in visible_pages:
+            px, py, pw, ph = self.get_page_canvas_rect(p_idx)
 
-                cr.save()
-                cr.set_source_rgba(0, 0, 0, 0.15)
-                cr.rectangle(px + 4.0, py + 4.0, pw, ph)
-                cr.fill()
-                cr.restore()
+            # Skip pages completely outside dirty rect when specified
+            if dirty_rect is not None:
+                dx, dy, dw, dh = dirty_rect
+                if px + pw < dx or px > dx + dw or py + ph < dy or py > dy + dh:
+                    continue
 
-                self._draw_page_content(area, cr, p_idx, px, py, pw, ph, dirty_rect=dirty_rect)
+            cr.save()
+            cr.set_source_rgba(0, 0, 0, 0.15)
+            cr.rectangle(px + 4.0, py + 4.0, pw, ph)
+            cr.fill()
+            cr.restore()
+
+            self._draw_page_content(area, cr, p_idx, px, py, pw, ph, dirty_rect=dirty_rect)
 
     def _draw_page_content(self, area, cr, page_index, page_offset_x, page_offset_y, page_w, page_h, dirty_rect=None):
         """Render single page contents including Cairo surface, objects, annotations, and overlays."""
@@ -5265,7 +5283,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             return
                         is_visible = False
                         if getattr(self, 'continuous_scroll', False):
-                            is_visible = (p_idx in self.get_visible_page_indices())
+                            is_visible = (p_idx in self.get_visible_page_indices() or p_idx == self.current_page_index)
                         else:
                             is_visible = (p_idx == self.current_page_index)
                         if is_visible:

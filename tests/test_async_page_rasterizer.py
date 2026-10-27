@@ -300,6 +300,31 @@ class TestAsyncPageRasterizer(unittest.TestCase):
         self.assertEqual(target_surf.get_width(), 1200)
         self.assertEqual(target_surf.get_height(), 1600)
 
+    def test_stale_cache_retention_prevents_white_flash_on_invalidation(self):
+        """Verify invalidate_page_cache preserves the previous surface as a stale fallback to prevent flashing."""
+        pdf_handler.invalidate_page_cache(self.doc)
+        initial_surf = pdf_handler.get_page_cairo_surface(self.doc, 0, 1.0)
+        self.assertIsNotNone(initial_surf)
+        self.assertIsNotNone(pdf_handler.peek_page_cairo_surface(self.doc, 0, 1.0))
+
+        # Invalidate page 0 cache
+        pdf_handler.invalidate_page_cache(self.doc, 0)
+
+        # Fresh cache is invalidated
+        self.assertIsNone(pdf_handler.peek_page_cairo_surface(self.doc, 0, 1.0))
+
+        # Stale cache retention keeps initial_surf as best match
+        stale_match = pdf_handler.get_page_rasterizer_pool().find_best_cached_surface(self.doc, 0, 1.0)
+        self.assertIsNotNone(stale_match)
+        stale_surf, stale_zoom = stale_match
+        self.assertEqual(stale_surf, initial_surf)
+        self.assertAlmostEqual(stale_zoom, 1.0)
+
+        # Re-generating fresh surface clears stale cache
+        new_surf = pdf_handler.get_page_cairo_surface(self.doc, 0, 1.0)
+        self.assertIsNotNone(new_surf)
+        self.assertNotIn((id(self.doc), 0), pdf_handler._stale_page_cache)
+
 
 if __name__ == '__main__':
     unittest.main()

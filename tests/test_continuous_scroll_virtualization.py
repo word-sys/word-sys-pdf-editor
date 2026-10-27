@@ -286,6 +286,68 @@ class TestContinuousScrollVirtualization(unittest.TestCase):
         self.assertLess(t_recompute, 0.005, f"Recomputation took {t_recompute*1000:.2f}ms, expected < 5ms")
         doc.close()
 
+    def test_continuous_scroll_draws_pages_when_offsets_already_cached(self):
+        """Verify draw_pdf_page renders visible pages in continuous mode when layout offsets are cached."""
+        doc = fitz.open(self.uniform_pdf)
+        win = MagicMock(spec=PdfEditorWindow)
+        win.doc = doc
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win.current_page_index = 0
+        win.page_gap = 16.0
+        win.current_pdf_page_width = 600
+        win.current_pdf_page_height = 800
+        win._doc_page_sizes_cache = None
+        win._is_geometry_uniform = None
+        win._uniform_page_size = None
+        win._fast_get_page_dimension = lambda idx: PdfEditorWindow._fast_get_page_dimension(win, idx)
+        win.get_visible_viewport_rect = lambda: (0.0, 0.0, 800.0, 900.0)
+        win.get_page_canvas_rect = lambda idx: (100.0, idx * 816.0 + 16.0, 600.0, 800.0)
+        win.get_visible_page_indices = lambda prefetch_margin=None: [0, 1]
+        win.pdf_view = MagicMock()
+
+        # Precompute offsets so hasattr is True and len == len(self.doc)
+        PdfEditorWindow._recompute_continuous_layout(win)
+
+        drawn_pages = []
+        win._draw_page_content = lambda area, cr, p_idx, px, py, pw, ph, dirty_rect=None: drawn_pages.append(p_idx)
+
+        cr = MagicMock()
+        PdfEditorWindow.draw_pdf_page(win, win.pdf_view, cr, 800, 900, dirty_rect=None)
+
+        # Both visible pages (0 and 1) must have been drawn!
+        self.assertEqual(drawn_pages, [0, 1])
+        doc.close()
+
+    def test_scroll_to_page_queues_draw(self):
+        """Verify scroll_to_page queues redraw when navigating to a distant page."""
+        doc = fitz.open(self.uniform_pdf)
+        win = MagicMock(spec=PdfEditorWindow)
+        win.doc = doc
+        win.continuous_scroll = True
+        win.zoom_level = 1.0
+        win.current_page_index = 0
+        win.page_gap = 16.0
+        win.current_pdf_page_width = 600
+        win.current_pdf_page_height = 800
+        win._doc_page_sizes_cache = None
+        win._is_geometry_uniform = None
+        win._uniform_page_size = None
+        win._fast_get_page_dimension = lambda idx: PdfEditorWindow._fast_get_page_dimension(win, idx)
+        win.pdf_view = MagicMock()
+        v_adj = MagicMock()
+        v_adj.get_value.return_value = 0.0
+        win.pdf_scroll = MagicMock()
+        win.pdf_scroll.get_vadjustment.return_value = v_adj
+
+        PdfEditorWindow._recompute_continuous_layout(win)
+        PdfEditorWindow.scroll_to_page(win, 4, smooth=False)
+
+        # vadjustment set to page 4 y-offset and queue_draw called
+        v_adj.set_value.assert_called_with(win.continuous_page_offsets[4][1])
+        win.pdf_view.queue_draw.assert_called()
+        doc.close()
+
 
 if __name__ == '__main__':
     unittest.main()

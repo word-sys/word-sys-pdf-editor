@@ -413,6 +413,20 @@ class TestTextboxUndoAndObjectDrag(unittest.TestCase):
         um.redo()
         win_mock._invalidate_spatial_index.assert_called()
 
+    def test_single_page_margin_only_clearing_uses_even_odd(self):
+        """Verify draw_pdf_page in single page mode clears margins with EVEN_ODD instead of blanking under the page."""
+        import cairo
+        self.win.dragged_object = None
+        self.win.continuous_scroll = False
+        self.win.current_pdf_page_width = 400.0
+        self.win.current_pdf_page_height = 600.0
+
+        cr = MagicMock()
+        cr.clip_extents.return_value = (-1000.0, -1000.0, 2000.0, 2000.0)
+        with patch.object(self.win, '_draw_page_content'):
+            PdfEditorWindow.draw_pdf_page(self.win, MagicMock(), cr, 800, 1000, dirty_rect=None)
+            cr.set_fill_rule.assert_called_with(cairo.FILL_RULE_EVEN_ODD)
+
 
 if __name__ == "__main__":
     unittest.main()
