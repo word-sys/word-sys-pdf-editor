@@ -2116,8 +2116,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.add_image_tool_button = _make_tool_btn("insert-image-symbolic", _("tool_add_image"), _("tool_add_image_tip"), "add_image")
         tools_grid.attach(self.add_image_tool_button, 0, 1, 1, 1)
 
-        self.drag_tool_button = _make_tool_btn("drag-handle-symbolic", _("tool_drag"), _("tool_drag_tip"), "drag")
-        tools_grid.attach(self.drag_tool_button, 1, 1, 1, 1)
+        self.redact_tool_button = _make_tool_btn("edit-clear-symbolic", _("tool_redact"), _("tool_redact_tip"), "redact")
+        tools_grid.attach(self.redact_tool_button, 1, 1, 1, 1)
+
+        self.drag_tool_button = None
 
         self.add_ellipse_tool_button = _make_tool_btn("media-record-symbolic", _("tool_ellipse"), _("tool_ellipse_tip"), "add_ellipse")
         tools_grid.attach(self.add_ellipse_tool_button, 0, 2, 1, 1)
@@ -2154,9 +2156,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.signature_tool_button = _make_tool_btn("channel-secure-symbolic", _("tool_place_signature"), _("tool_place_signature_tip"), "place_signature")
         tools_grid.attach(self.signature_tool_button, 1, 7, 1, 1)
-
-        self.redact_tool_button = _make_tool_btn("edit-clear-symbolic", _("tool_redact"), _("tool_redact_tip"), "redact")
-        tools_grid.attach(self.redact_tool_button, 0, 8, 2, 1)
 
         self.calibrate_tool_button = None
         self.stamp_menu_button = None
@@ -3322,7 +3321,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.select_tool_button.get_style_context().remove_class('active')
         self.add_text_tool_button.get_style_context().remove_class('active')
         self.add_image_tool_button.get_style_context().remove_class('active')
-        self.drag_tool_button.get_style_context().remove_class('active')
+        if getattr(self, 'drag_tool_button', None):
+            self.drag_tool_button.get_style_context().remove_class('active')
         self.add_ellipse_tool_button.get_style_context().remove_class('active')
         self.add_rectangle_tool_button.get_style_context().remove_class('active')
         if hasattr(self, 'pen_tool_button'):
@@ -3362,7 +3362,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.add_image_tool_button.get_style_context().add_class('active')
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("cell"))
         elif self.tool_mode == "drag":
-            self.drag_tool_button.get_style_context().add_class('active')
+            if getattr(self, 'drag_tool_button', None):
+                self.drag_tool_button.get_style_context().add_class('active')
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("move"))
         elif self.tool_mode == "add_ellipse":
             self.add_ellipse_tool_button.get_style_context().add_class('active')
@@ -9230,7 +9231,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             layout.set_font_description(font_desc)
             layout.set_text(current_text or " ", -1)
             pw, ph = layout.get_size()
-            calc_w = int(pw / Pango.SCALE) + 14
+            calc_w = int(pw / Pango.SCALE) + 20
             calc_h = int(ph / Pango.SCALE) + 6
         except Exception:
             calc_w = getattr(self, '_inline_editor_base_w', 60)
@@ -9245,6 +9246,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         da_w = max(self.pdf_view.get_allocated_width(), self.current_pdf_page_width)
         max_w = max(base_w, int(da_w - getattr(self, '_inline_editor_base_x', 0) - 20))
         clamped_w = min(new_w, max_w)
+
+        if calc_w > max_w:
+            self.inline_editor_tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        else:
+            self.inline_editor_tv.set_wrap_mode(Gtk.WrapMode.NONE)
 
         self.inline_editor_widget.set_size_request(clamped_w, new_h)
 
@@ -9267,7 +9273,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             ed_x = int(page_offset_x + vis_rect.x0 * self.zoom_level) - 2
             ed_y = int(page_offset_y + vis_rect.y0 * self.zoom_level) - 2
             scaled_font = max(9.0, text_obj.font_size * self.zoom_level)
-            ed_w = max(60, int(vis_rect.width * self.zoom_level) + 14)
+            ed_w = max(60, int(vis_rect.width * self.zoom_level) + 20)
             ed_h = max(int(scaled_font * 1.3) + 6, int(vis_rect.height * self.zoom_level) + 6)
         elif click_x is not None and click_y is not None:
             ed_x = int(click_x) - 2
@@ -9295,7 +9301,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         frame.set_margin_top(ed_y)
         frame.set_size_request(ed_w, ed_h)
 
-        tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.NONE)
         tv.set_left_margin(3)
         tv.set_right_margin(3)
         tv.set_top_margin(1)
@@ -9356,6 +9362,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._hide_inline_editor()
         if hasattr(self, '_invalidate_spatial_index'):
             self._invalidate_spatial_index(self.current_page_index)
+        self.drag_threshold_passed = False
         self._update_ui_state()
         self.pdf_view.queue_draw()
 
@@ -9489,6 +9496,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._invalidate_spatial_index(self.current_page_index)
         if hasattr(self, '_invalidate_spatial_index'):
             self._invalidate_spatial_index(self.current_page_index)
+        self.drag_threshold_passed = False
         self._update_ui_state()
         self.pdf_view.queue_draw()
 
@@ -12661,8 +12669,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 Gdk.KEY_T: "add_text",
                 Gdk.KEY_i: "add_image",
                 Gdk.KEY_I: "add_image",
-                Gdk.KEY_m: "drag",
-                Gdk.KEY_M: "drag",
+                Gdk.KEY_m: "select",
+                Gdk.KEY_M: "select",
                 Gdk.KEY_c: "clone_patch",
                 Gdk.KEY_C: "clone_patch",
                 Gdk.KEY_e: "add_ellipse",
@@ -12703,6 +12711,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.pdf_view.queue_draw()
 
+        if tool_name == "drag":
+            tool_name = "select"
         self.tool_mode = tool_name
         print(_("dbg_tool_changed", self.tool_mode))
         self.temp_calibration_line = None
@@ -13132,6 +13142,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
                 self.resize_start_bbox = selected_obj.bbox
                 self.dragged_object = selected_obj
+                self.drag_threshold_passed = True
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)
                 self.drag_start_pos = (start_x, start_y)
                 self.drag_begin_state = copy.deepcopy(selected_obj.__dict__)
@@ -13282,6 +13293,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_form_builder_controls_for_selected()
                 
                 self.dragged_object = clicked_form_field
+                self.drag_threshold_passed = False
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)
                 self.drag_start_pos = (start_x, start_y)
                 self.drag_begin_state = copy.deepcopy(clicked_form_field.__dict__)
@@ -13316,6 +13328,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.temp_measurement_rect = None
                 self.last_mouse_page_pos = None
                 self.dragged_object = clicked_m
+                self.drag_threshold_passed = False
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)
                 self.drag_start_pos = (start_x, start_y)
                 self.drag_begin_state = copy.deepcopy(clicked_m.__dict__)
@@ -13416,6 +13429,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
 
         if self.dragged_object:
+            self.drag_threshold_passed = False
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             self.drag_start_pos = (start_x, start_y)
             orig_lt = getattr(self.dragged_object, 'linked_text', None)
@@ -13666,6 +13680,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.tool_mode not in ("drag", "form_builder", "select"):
             gesture.set_state(Gtk.EventSequenceState.DENIED)
             return
+
+        # Drag threshold / deadspace: ignore slight jitter to avoid accidental moves during click or double-click
+        if not getattr(self, 'drag_threshold_passed', False):
+            if math.hypot(offset_x, offset_y) < 5.0:
+                return
+            self.drag_threshold_passed = True
             
         delta_x, delta_y = self._visual_to_unrotated_delta(offset_x / self.zoom_level, offset_y / self.zoom_level)
 
@@ -14326,6 +14346,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 del self.rotate_start_angle
             if hasattr(self, 'rotate_pointer_start_angle'):
                 del self.rotate_pointer_start_angle
+            self.drag_threshold_passed = False
             self.pdf_view.queue_draw()
             return
 
@@ -14350,6 +14371,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             del self.rotate_pointer_start_angle
 
         if isinstance(dragged_obj_ref, AcroFormField):
+            if not getattr(self, 'resize_handle', None) and not getattr(self, 'drag_threshold_passed', False):
+                self.drag_threshold_passed = False
+                self.selected_form_field = dragged_obj_ref
+                self._update_ui_state()
+                self.pdf_view.queue_draw()
+                return
             old_rect = old_properties.get('rect', getattr(dragged_obj_ref, 'rect', None))
             new_rect = getattr(dragged_obj_ref, 'rect', None)
             if old_rect and new_rect and old_rect != new_rect:
@@ -14384,6 +14411,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
         
         rot_changed = (old_properties.get('rotation', 0.0) != new_properties.get('rotation', 0.0))
+        is_rotating = hasattr(self, 'rotate_center') or rot_changed
+        if not getattr(self, 'resize_handle', None) and not is_rotating and not getattr(self, 'drag_threshold_passed', False):
+            for k, v in old_properties.items():
+                setattr(dragged_obj_ref, k, v)
+            if hasattr(dragged_obj_ref, 'sync_char_boxes_to_bbox'):
+                dragged_obj_ref.sync_char_boxes_to_bbox()
+            self.drag_threshold_passed = False
+            self.pdf_view.queue_draw()
+            return
+
         if abs(offset_x) < 1 and abs(offset_y) < 1 and not rot_changed:
             self.pdf_view.queue_draw()
             return
@@ -14438,6 +14475,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if hasattr(self, '_invalidate_spatial_index'):
             self._invalidate_spatial_index(self.current_page_index)
+        self.drag_threshold_passed = False
         self._update_ui_state()
         self.pdf_view.queue_draw()
 
@@ -14747,6 +14785,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_form_field = None
         if hasattr(self, '_invalidate_spatial_index'):
             self._invalidate_spatial_index(self.current_page_index)
+        self.drag_threshold_passed = False
         self._update_ui_state()
         self.pdf_view.queue_draw()
 
@@ -16395,6 +16434,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             
         if hasattr(self, '_invalidate_spatial_index'):
             self._invalidate_spatial_index(self.current_page_index)
+        self.drag_threshold_passed = False
         self._update_ui_state()
         self.pdf_view.queue_draw()
         
@@ -17122,6 +17162,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.status_label.set_text(_("patch_pasted_status"))
         if hasattr(self, '_invalidate_spatial_index'):
             self._invalidate_spatial_index(self.current_page_index)
+        self.drag_threshold_passed = False
         self._update_ui_state()
         self.pdf_view.queue_draw()
         return True
@@ -17214,6 +17255,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.status_label.set_text(_("status_patch_text_added"))
         if hasattr(self, '_invalidate_spatial_index'):
             self._invalidate_spatial_index(self.current_page_index)
+        self.drag_threshold_passed = False
         self._update_ui_state()
         self.pdf_view.queue_draw()
         return new_text_obj

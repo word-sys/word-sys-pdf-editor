@@ -81,10 +81,13 @@ class DummyWindow:
     _close_active_form_field_editor = MagicMock()
     _update_ui_state = MagicMock()
     _update_text_format_controls = MagicMock()
+    _update_stroke_format_controls = MagicMock()
+    _apply_inline_editor_style = MagicMock()
 
     on_drag_begin = PdfEditorWindow.on_drag_begin
     on_drag_update = PdfEditorWindow.on_drag_update
     on_drag_end = PdfEditorWindow.on_drag_end
+    on_tool_selected = PdfEditorWindow.on_tool_selected
 
 
 class TestTextboxUndoAndObjectDrag(unittest.TestCase):
@@ -216,6 +219,45 @@ class TestTextboxUndoAndObjectDrag(unittest.TestCase):
         self.win.on_drag_end(gesture, 50.0, 30.0)
         self.win.undo_manager.add_command.assert_called_once()
         self.assertIsNone(self.win.dragged_object)
+
+    def test_drag_deadspace_threshold_cancels_accidental_movement(self):
+        """Mouse movement within deadspace threshold (< 5px) does not move object or record undo."""
+        text_obj = EditableText(200.0, 200.0, "Stable Text", font_size=12.0)
+        text_obj.bbox = (200.0, 200.0, 300.0, 220.0)
+        text_obj.page_number = 0
+        self.win.editable_texts.append(text_obj)
+        self.win.tool_mode = "select"
+
+        gesture = MagicMock()
+        # Mouse press initiates drag
+        self.win.on_drag_begin(gesture, 210.0, 210.0)
+        self.assertEqual(self.win.dragged_object, text_obj)
+        self.assertFalse(self.win.drag_threshold_passed)
+
+        # Micro-jitter of 2px (e.g. while double clicking)
+        self.win.on_drag_update(gesture, 2.0, 1.0)
+        # Position must NOT change
+        self.assertEqual(text_obj.x, 200.0)
+        self.assertEqual(text_obj.y, 200.0)
+        self.assertFalse(self.win.drag_threshold_passed)
+
+        # Mouse release without passing threshold
+        self.win.on_drag_end(gesture, 2.0, 1.0)
+        self.win.undo_manager.add_command.assert_not_called()
+        self.assertIsNone(self.win.dragged_object)
+        self.assertEqual(text_obj.x, 200.0)
+        self.assertEqual(text_obj.y, 200.0)
+
+    def test_movement_tool_alias_to_select(self):
+        """Selecting redundant 'drag' tool mode aliases cleanly to 'select'."""
+        self.win.tool_mode = "pen"
+        self.win.on_tool_selected(None, "drag")
+        self.assertEqual(self.win.tool_mode, "select")
+
+    def test_inline_editor_tv_wrap_mode_none(self):
+        """Inline text editor creates text view with WrapMode.NONE so text does not prematurely wrap."""
+        tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.NONE)
+        self.assertEqual(tv.get_wrap_mode(), Gtk.WrapMode.NONE)
 
     def test_spatial_index_self_healing_on_stale_data(self):
         """When spatial index has stale entries, hit testing self-heals via linear scan."""
