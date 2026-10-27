@@ -224,6 +224,7 @@ class StickyNotePopover(Gtk.Popover):
         self.text_view.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         self.buffer = self.text_view.get_buffer()
         self.buffer.set_text(self.note.content or "")
+        self.buffer.set_enable_undo(True)
         self.buffer.connect("changed", self._on_text_changed)
         scroller.set_child(self.text_view)
         main_box.append(scroller)
@@ -1770,12 +1771,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.undo_button = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
         self.undo_button.set_tooltip_text(_("undo_tip"))
-        self.undo_button.connect("clicked", lambda w: self.undo_manager.undo())
+        self.undo_button.connect("clicked", lambda w: self._on_undo_activated())
         header.pack_start(self.undo_button)
 
         self.redo_button = Gtk.Button.new_from_icon_name("edit-redo-symbolic")
         self.redo_button.set_tooltip_text(_("redo_tip"))
-        self.redo_button.connect("clicked", lambda w: self.undo_manager.redo())
+        self.redo_button.connect("clicked", lambda w: self._on_redo_activated())
         header.pack_start(self.redo_button)
 
         menu_button = Gtk.MenuButton(icon_name="open-menu-symbolic")
@@ -2805,6 +2806,62 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         thumbnail_drop.connect('drop', self.on_thumbnail_drop)
         self.thumbnails_list.add_controller(thumbnail_drop)
 
+    def _on_undo_activated(self, *args):
+        """Undo either in the currently active text editor widget or the document undo manager."""
+        if getattr(self, 'inline_editor_tv', None) is not None:
+            buf = self.inline_editor_tv.get_buffer()
+            if hasattr(buf, 'can_undo') and buf.can_undo():
+                buf.undo()
+                return
+            elif hasattr(buf, 'undo'):
+                buf.undo()
+                return
+            return
+
+        focus_w = self.get_focus()
+        if isinstance(focus_w, Gtk.TextView):
+            buf = focus_w.get_buffer()
+            if hasattr(buf, 'can_undo') and buf.can_undo():
+                buf.undo()
+                return
+            elif hasattr(buf, 'undo'):
+                buf.undo()
+                return
+            return
+        elif isinstance(focus_w, Gtk.Editable):
+            return
+
+        if hasattr(self, 'undo_manager') and self.undo_manager:
+            self.undo_manager.undo()
+
+    def _on_redo_activated(self, *args):
+        """Redo either in the currently active text editor widget or the document undo manager."""
+        if getattr(self, 'inline_editor_tv', None) is not None:
+            buf = self.inline_editor_tv.get_buffer()
+            if hasattr(buf, 'can_redo') and buf.can_redo():
+                buf.redo()
+                return
+            elif hasattr(buf, 'redo'):
+                buf.redo()
+                return
+            return
+
+        focus_w = self.get_focus()
+        if isinstance(focus_w, Gtk.TextView):
+            buf = focus_w.get_buffer()
+            if hasattr(buf, 'can_redo') and buf.can_redo():
+                buf.redo()
+                return
+            elif hasattr(buf, 'redo'):
+                buf.redo()
+                return
+            return
+        elif isinstance(focus_w, Gtk.Editable):
+            return
+
+        if hasattr(self, 'undo_manager') and self.undo_manager:
+            self.undo_manager.redo()
+
     def _connect_actions(self):
         """Connect actions."""
         action_save_as = Gio.SimpleAction.new('save_as', None)
@@ -2881,11 +2938,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.add_action(action_save)
 
         action_undo = Gio.SimpleAction.new("undo", None)
-        action_undo.connect("activate", lambda a, p: self.undo_manager.undo())
+        action_undo.connect("activate", lambda a, p: self._on_undo_activated())
         self.add_action(action_undo)
 
         action_redo = Gio.SimpleAction.new("redo", None)
-        action_redo.connect("activate", lambda a, p: self.undo_manager.redo())
+        action_redo.connect("activate", lambda a, p: self._on_redo_activated())
         self.add_action(action_redo)
 
         current_confirm = bool(get_setting("confirm_delete_objects", True))
@@ -6945,28 +7002,37 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         except Exception:
             pass
         tolerance = 2 / max(self.zoom_level, 0.001)
+
+        def _test_candidates(cands):
+            for text_obj in reversed(cands):
+                if getattr(text_obj, 'page_number', self.current_page_index) != self.current_page_index:
+                    continue
+                if not getattr(text_obj, 'bbox', None): continue
+                x1, y1, x2, y2 = text_obj.bbox
+                rot = getattr(text_obj, 'rotation', 0.0) % 360.0
+                px, py = page_x, page_y
+                if rot != 0.0:
+                    cx = (x1 + x2) / 2.0
+                    cy = (y1 + y2) / 2.0
+                    px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
+                if (x1 - tolerance) <= px <= (x2 + tolerance) and \
+                   (y1 - tolerance) <= py <= (y2 + tolerance):
+                    return text_obj
+            return None
+
         if hasattr(self, '_get_page_spatial_index') and hasattr(self, '_spatial_indices') and isinstance(getattr(self, '_spatial_indices', None), dict):
             grid = self._get_page_spatial_index(self.current_page_index, "text")
             candidates = grid.query_point(page_x, page_y, tolerance=tolerance)
-        else:
-            candidates = getattr(self, 'editable_texts', [])
-        if not candidates:
+            hit = _test_candidates(candidates)
+            if hit is not None:
+                return hit
+            # Fallback to direct linear search in case the spatial index is stale
+            fallback_hit = _test_candidates(getattr(self, 'editable_texts', []))
+            if fallback_hit is not None:
+                self._invalidate_spatial_index(self.current_page_index)
+                return fallback_hit
             return None
-        for text_obj in reversed(candidates):
-            if getattr(text_obj, 'page_number', self.current_page_index) != self.current_page_index:
-                continue
-            if not text_obj.bbox: continue
-            x1, y1, x2, y2 = text_obj.bbox
-            rot = getattr(text_obj, 'rotation', 0.0) % 360.0
-            px, py = page_x, page_y
-            if rot != 0.0:
-                cx = (x1 + x2) / 2.0
-                cy = (y1 + y2) / 2.0
-                px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
-            if (x1 - tolerance) <= px <= (x2 + tolerance) and \
-               (y1 - tolerance) <= py <= (y2 + tolerance):
-                return text_obj
-        return None
+        return _test_candidates(getattr(self, 'editable_texts', []))
 
     def _keep_topmost_hit(self, clicked_text, clicked_image, clicked_shape):
         """Return (text, image, shape) with only the topmost-by-layer hit kept."""
@@ -6998,27 +7064,35 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         except Exception:
             pass
         tolerance = 2 / max(self.zoom_level, 0.001)
+
+        def _test_candidates(cands):
+            for img_obj in reversed(cands):
+                if getattr(img_obj, 'page_number', self.current_page_index) != self.current_page_index:
+                    continue
+                if not getattr(img_obj, 'bbox', None): continue
+                x1, y1, x2, y2 = img_obj.bbox
+                rot = getattr(img_obj, 'rotation', 0.0) % 360.0
+                px, py = page_x, page_y
+                if rot != 0.0:
+                    cx = (x1 + x2) / 2.0
+                    cy = (y1 + y2) / 2.0
+                    px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
+                if (x1 - tolerance) <= px <= (x2 + tolerance) and (y1 - tolerance) <= py <= (y2 + tolerance):
+                    return img_obj
+            return None
+
         if hasattr(self, '_get_page_spatial_index') and hasattr(self, '_spatial_indices') and isinstance(getattr(self, '_spatial_indices', None), dict):
             grid = self._get_page_spatial_index(self.current_page_index, "image")
             candidates = grid.query_point(page_x, page_y, tolerance=tolerance)
-        else:
-            candidates = getattr(self, 'editable_images', [])
-        if not candidates:
+            hit = _test_candidates(candidates)
+            if hit is not None:
+                return hit
+            fallback_hit = _test_candidates(getattr(self, 'editable_images', []))
+            if fallback_hit is not None:
+                self._invalidate_spatial_index(self.current_page_index)
+                return fallback_hit
             return None
-        for img_obj in reversed(candidates):
-            if getattr(img_obj, 'page_number', self.current_page_index) != self.current_page_index:
-                continue
-            if not img_obj.bbox: continue
-            x1, y1, x2, y2 = img_obj.bbox
-            rot = getattr(img_obj, 'rotation', 0.0) % 360.0
-            px, py = page_x, page_y
-            if rot != 0.0:
-                cx = (x1 + x2) / 2.0
-                cy = (y1 + y2) / 2.0
-                px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
-            if (x1 - tolerance) <= px <= (x2 + tolerance) and (y1 - tolerance) <= py <= (y2 + tolerance):
-                return img_obj
-        return None
+        return _test_candidates(getattr(self, 'editable_images', []))
 
     def _find_shape_at_pos(self, page_x, page_y):
         """Find shape at pos."""
@@ -7029,29 +7103,37 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         except Exception:
             pass
         tolerance = 3 / max(self.zoom_level, 0.001)
+
+        def _test_candidates(cands):
+            for shape_obj in reversed(cands):
+                if getattr(shape_obj, 'page_number', self.current_page_index) != self.current_page_index:
+                    continue
+                if not getattr(shape_obj, 'bbox', None): 
+                    continue
+                x1, y1, x2, y2 = shape_obj.bbox
+                rot = getattr(shape_obj, 'rotation', 0.0) % 360.0
+                px, py = page_x, page_y
+                if rot != 0.0:
+                    cx = (x1 + x2) / 2.0
+                    cy = (y1 + y2) / 2.0
+                    px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
+                if (x1 - tolerance) <= px <= (x2 + tolerance) and \
+                   (y1 - tolerance) <= py <= (y2 + tolerance):
+                    return shape_obj
+            return None
+
         if hasattr(self, '_get_page_spatial_index') and hasattr(self, '_spatial_indices') and isinstance(getattr(self, '_spatial_indices', None), dict):
             grid = self._get_page_spatial_index(self.current_page_index, "shape")
             candidates = grid.query_point(page_x, page_y, tolerance=tolerance)
-        else:
-            candidates = getattr(self, 'editable_shapes', [])
-        if not candidates:
+            hit = _test_candidates(candidates)
+            if hit is not None:
+                return hit
+            fallback_hit = _test_candidates(getattr(self, 'editable_shapes', []))
+            if fallback_hit is not None:
+                self._invalidate_spatial_index(self.current_page_index)
+                return fallback_hit
             return None
-        for shape_obj in reversed(candidates):
-            if shape_obj.page_number != self.current_page_index:
-                continue
-            if not shape_obj.bbox: 
-                continue
-            x1, y1, x2, y2 = shape_obj.bbox
-            rot = getattr(shape_obj, 'rotation', 0.0) % 360.0
-            px, py = page_x, page_y
-            if rot != 0.0:
-                cx = (x1 + x2) / 2.0
-                cy = (y1 + y2) / 2.0
-                px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
-            if (x1 - tolerance) <= px <= (x2 + tolerance) and \
-               (y1 - tolerance) <= py <= (y2 + tolerance):
-                return shape_obj
-        return None
+        return _test_candidates(getattr(self, 'editable_shapes', []))
 
     def _find_stroke_at_pos(self, page_x, page_y):
         """Find stroke at pos."""
@@ -7062,30 +7144,38 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         except Exception:
             pass
         tolerance = 8.0 / max(self.zoom_level, 0.001)
+
+        def _test_candidates(cands):
+            for stroke in reversed(cands):
+                if getattr(stroke, 'page_number', self.current_page_index) != self.current_page_index:
+                    continue
+                if not getattr(stroke, 'bbox', None):
+                    continue
+                x1, y1, x2, y2 = stroke.bbox
+                rot = getattr(stroke, 'rotation', 0.0) % 360.0
+                px, py = page_x, page_y
+                if rot != 0.0:
+                    cx = (x1 + x2) / 2.0
+                    cy = (y1 + y2) / 2.0
+                    px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
+                tol = max(getattr(stroke, 'stroke_width', 2.0), 8.0) / max(self.zoom_level, 0.001)
+                if (x1 - tol) <= px <= (x2 + tol) and \
+                   (y1 - tol) <= py <= (y2 + tol):
+                    return stroke
+            return None
+
         if hasattr(self, '_get_page_spatial_index') and hasattr(self, '_spatial_indices') and isinstance(getattr(self, '_spatial_indices', None), dict):
             grid = self._get_page_spatial_index(self.current_page_index, "stroke")
             candidates = grid.query_point(page_x, page_y, tolerance=tolerance)
-        else:
-            candidates = getattr(self, 'editable_strokes', [])
-        if not candidates:
+            hit = _test_candidates(candidates)
+            if hit is not None:
+                return hit
+            fallback_hit = _test_candidates(getattr(self, 'editable_strokes', []))
+            if fallback_hit is not None:
+                self._invalidate_spatial_index(self.current_page_index)
+                return fallback_hit
             return None
-        for stroke in reversed(candidates):
-            if stroke.page_number != self.current_page_index:
-                continue
-            if not stroke.bbox:
-                continue
-            x1, y1, x2, y2 = stroke.bbox
-            rot = getattr(stroke, 'rotation', 0.0) % 360.0
-            px, py = page_x, page_y
-            if rot != 0.0:
-                cx = (x1 + x2) / 2.0
-                cy = (y1 + y2) / 2.0
-                px, py = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
-            tol = max(stroke.stroke_width, 8.0) / max(self.zoom_level, 0.001)
-            if (x1 - tol) <= px <= (x2 + tol) and \
-               (y1 - tol) <= py <= (y2 + tol):
-                return stroke
-        return None
+        return _test_candidates(getattr(self, 'editable_strokes', []))
 
     def _find_form_field_at_pos(self, page_x, page_y):
         """Find interactive form field at page position."""
@@ -9221,7 +9311,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             tv.set_justification(Gtk.Justification.LEFT)
 
         buf = tv.get_buffer()
+        buf.set_enable_undo(False)
         buf.set_text(text_obj.text or "")
+        buf.set_enable_undo(True)
         buf.select_range(buf.get_start_iter(), buf.get_end_iter())
         buf.connect("changed", self._on_inline_editor_text_changed)
 
@@ -9262,6 +9354,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if init_text is not None:
                     text_obj.text = init_text
         self._hide_inline_editor()
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index(self.current_page_index)
         self._update_ui_state()
         self.pdf_view.queue_draw()
 
@@ -9391,6 +9485,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.before_format_change_state = copy.deepcopy(text_obj_to_apply.__dict__)
             self._update_text_format_controls(text_obj_to_apply)
 
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index(self.current_page_index)
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index(self.current_page_index)
         self._update_ui_state()
         self.pdf_view.queue_draw()
 
@@ -9409,9 +9507,27 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         GLib.idle_add(self._commit_inline_edit)
 
     def _on_inline_editor_key(self, controller, keyval, keycode, state):
-        """Handle keyboard shortcuts inside inline editor: Escape, Enter, Ctrl+Enter, Shift+Enter."""
+        """Handle keyboard shortcuts inside inline editor: Escape, Enter, Ctrl+Enter, Shift+Enter, Ctrl+Z, Ctrl+Y."""
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
         shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+
+        if ctrl and not shift and keyval in (Gdk.KEY_z, Gdk.KEY_Z):
+            if hasattr(self, 'inline_editor_tv') and self.inline_editor_tv:
+                buf = self.inline_editor_tv.get_buffer()
+                if hasattr(buf, 'can_undo') and buf.can_undo():
+                    buf.undo()
+                elif hasattr(buf, 'undo'):
+                    buf.undo()
+            return True
+
+        if (ctrl and not shift and keyval in (Gdk.KEY_y, Gdk.KEY_Y)) or (ctrl and shift and keyval in (Gdk.KEY_z, Gdk.KEY_Z)):
+            if hasattr(self, 'inline_editor_tv') and self.inline_editor_tv:
+                buf = self.inline_editor_tv.get_buffer()
+                if hasattr(buf, 'can_redo') and buf.can_redo():
+                    buf.redo()
+                elif hasattr(buf, 'redo'):
+                    buf.redo()
+            return True
 
         if keyval == Gdk.KEY_Escape:
             self._cancel_inline_editor()
@@ -10730,9 +10846,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 elif handle in ("w", "e"):
                     self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("ew-resize"))
                     return
-                elif isinstance(selected_obj, AcroFormField) and getattr(self, 'tool_mode', None) in ("form_builder", "drag", "select"):
+                elif getattr(self, 'tool_mode', None) in ("form_builder", "drag", "select") and hasattr(selected_obj, 'bbox') and selected_obj.bbox:
                     bx1, by1, bx2, by2 = selected_obj.bbox
-                    if min(bx1, bx2) <= unrot_x <= max(bx1, bx2) and min(by1, by2) <= unrot_y <= max(by1, by2):
+                    padding = 4.0 / max(self.zoom_level, 0.001)
+                    if (min(bx1, bx2) - padding) <= unrot_x <= (max(bx1, bx2) + padding) and (min(by1, by2) - padding) <= unrot_y <= (max(by1, by2) + padding):
                         self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("grab"))
                         return
             self._update_cursor_for_tool()
@@ -13216,20 +13333,84 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
             return
 
-        if self.tool_mode == "drag":
+        if self.tool_mode in ("drag", "select"):
             self._close_active_form_field_editor()
-            self.dragged_object = (self._find_text_at_pos(page_x, page_y) or 
-                                   self._find_image_at_pos(page_x, page_y) or 
-                                   self._find_shape_at_pos(page_x, page_y) or 
-                                   self._find_stroke_at_pos(page_x, page_y) or
-                                   self._find_form_field_at_pos(page_x, page_y) or
-                                   self._find_measurement_at_pos(page_x, page_y))
-            if not self.dragged_object:
+            curr_selected = (
+                getattr(self, 'selected_text', None) or 
+                getattr(self, 'selected_image', None) or 
+                getattr(self, 'selected_shape', None) or 
+                getattr(self, 'selected_stroke', None) or
+                getattr(self, 'selected_form_field', None) or
+                getattr(self, 'selected_measurement', None)
+            )
+            target_obj = None
+            if curr_selected and hasattr(curr_selected, 'bbox') and curr_selected.bbox:
+                bx1, by1, bx2, by2 = curr_selected.bbox
+                padding = 4.0 / max(self.zoom_level, 0.001)
+                rot = getattr(curr_selected, 'rotation', 0.0) % 360.0
+                unrot_x, unrot_y = page_x, page_y
+                if rot != 0.0:
+                    cx = (bx1 + bx2) / 2.0
+                    cy = (by1 + by2) / 2.0
+                    unrot_x, unrot_y = pdf_handler.rotate_point(page_x, page_y, cx, cy, -rot)
+                if (min(bx1, bx2) - padding) <= unrot_x <= (max(bx1, bx2) + padding) and (min(by1, by2) - padding) <= unrot_y <= (max(by1, by2) + padding):
+                    target_obj = curr_selected
+
+            if not target_obj:
+                target_obj = (self._find_text_at_pos(page_x, page_y) or 
+                              self._find_image_at_pos(page_x, page_y) or 
+                              self._find_shape_at_pos(page_x, page_y) or 
+                              self._find_stroke_at_pos(page_x, page_y) or
+                              self._find_form_field_at_pos(page_x, page_y) or
+                              self._find_measurement_at_pos(page_x, page_y))
+
+            if target_obj:
+                self.dragged_object = target_obj
+                if isinstance(target_obj, EditableText):
+                    self.selected_text = target_obj
+                    self.selected_image = None
+                    self.selected_shape = None
+                    self.selected_stroke = None
+                    self.selected_form_field = None
+                    self.selected_measurement = None
+                elif isinstance(target_obj, EditableImage):
+                    self.selected_image = target_obj
+                    self.selected_text = None
+                    self.selected_shape = None
+                    self.selected_stroke = None
+                    self.selected_form_field = None
+                    self.selected_measurement = None
+                elif isinstance(target_obj, EditableShape):
+                    self.selected_shape = target_obj
+                    self.selected_text = None
+                    self.selected_image = None
+                    self.selected_stroke = None
+                    self.selected_form_field = None
+                    self.selected_measurement = None
+                elif isinstance(target_obj, EditableStroke):
+                    self.selected_stroke = target_obj
+                    self.selected_text = None
+                    self.selected_image = None
+                    self.selected_shape = None
+                    self.selected_form_field = None
+                    self.selected_measurement = None
+                elif isinstance(target_obj, AcroFormField):
+                    self.selected_form_field = target_obj
+                    self.selected_text = None
+                    self.selected_image = None
+                    self.selected_shape = None
+                    self.selected_stroke = None
+                    self.selected_measurement = None
+                elif isinstance(target_obj, MeasurementObject):
+                    self.selected_measurement = target_obj
+                    self.selected_text = None
+                    self.selected_image = None
+                    self.selected_shape = None
+                    self.selected_stroke = None
+                    self.selected_form_field = None
+            else:
                 gesture.set_state(Gtk.EventSequenceState.DENIED)
                 return
-        elif self.tool_mode == "select":
-            gesture.set_state(Gtk.EventSequenceState.DENIED)
-            return
         else:
             gesture.set_state(Gtk.EventSequenceState.DENIED)
             return
@@ -13482,7 +13663,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             else:
                 self._handle_resize_update(offset_x, offset_y, gesture=gesture)
             return
-        if self.tool_mode not in ("drag", "form_builder"):
+        if self.tool_mode not in ("drag", "form_builder", "select"):
             gesture.set_state(Gtk.EventSequenceState.DENIED)
             return
             
@@ -14255,6 +14436,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_text = None
             self.selected_image = None
 
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index(self.current_page_index)
         self._update_ui_state()
         self.pdf_view.queue_draw()
 
@@ -14562,6 +14745,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.view_sel_rect = None
             self.view_selected_text = ""
             self.selected_form_field = None
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index(self.current_page_index)
         self._update_ui_state()
         self.pdf_view.queue_draw()
 
@@ -16208,6 +16393,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.context_popover.popup()
             return
             
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index(self.current_page_index)
         self._update_ui_state()
         self.pdf_view.queue_draw()
         
@@ -16933,6 +17120,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._refresh_thumbnail(page_num)
         if hasattr(self, 'status_label') and self.status_label:
             self.status_label.set_text(_("patch_pasted_status"))
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index(self.current_page_index)
         self._update_ui_state()
         self.pdf_view.queue_draw()
         return True
@@ -17023,6 +17212,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._show_inline_editor(new_text_obj, target_rect=patch_obj.bbox)
         if hasattr(self, 'status_label') and self.status_label:
             self.status_label.set_text(_("status_patch_text_added"))
+        if hasattr(self, '_invalidate_spatial_index'):
+            self._invalidate_spatial_index(self.current_page_index)
         self._update_ui_state()
         self.pdf_view.queue_draw()
         return new_text_obj

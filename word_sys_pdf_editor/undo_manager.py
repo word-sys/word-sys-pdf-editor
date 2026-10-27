@@ -356,6 +356,8 @@ class UndoManager:
         self.undo_stack.append(command)
         self.redo_stack.clear()
         self._update_ui_callback()
+        if hasattr(self.window, '_invalidate_spatial_index'):
+            self.window._invalidate_spatial_index()
         if hasattr(self.window, 'refresh_annotations_list'):
             self.window.refresh_annotations_list()
 
@@ -396,6 +398,8 @@ class UndoManager:
         command.undo()
         self.redo_stack.append(command)
         self._update_ui_callback()
+        if hasattr(self.window, '_invalidate_spatial_index'):
+            self.window._invalidate_spatial_index()
         if hasattr(self.window, 'refresh_annotations_list'):
             self.window.refresh_annotations_list()
         self.window.pdf_view.queue_draw()
@@ -417,6 +421,8 @@ class UndoManager:
         command.execute()
         self.undo_stack.append(command)
         self._update_ui_callback()
+        if hasattr(self.window, '_invalidate_spatial_index'):
+            self.window._invalidate_spatial_index()
         if hasattr(self.window, 'refresh_annotations_list'):
             self.window.refresh_annotations_list()
         self.window.pdf_view.queue_draw()
