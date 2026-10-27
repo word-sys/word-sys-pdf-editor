@@ -332,6 +332,7 @@ class EditableText:
     def set_rotation(self, angle):
         """Set rotation in degrees (0-360)."""
         self.rotation = float(angle) % 360.0
+        self.original_rotation = self.rotation
 
     def sync_char_boxes_to_bbox(self):
         """Synchronize character bounding boxes with self.bbox if the object has moved."""
@@ -612,6 +613,7 @@ class EditableImage:
     def set_rotation(self, angle):
         """Set rotation in degrees (0-360)."""
         self.rotation = float(angle) % 360.0
+        self.original_rotation = self.rotation
 
 class PatchObject(EditableImage):
     """Specialized EditableImage representing a background texture clone patch."""
@@ -691,6 +693,7 @@ class EditableShape:
     def set_rotation(self, angle):
         """Set rotation in degrees (0-360)."""
         self.rotation = float(angle) % 360.0
+        self.original_rotation = self.rotation
 
     def get_checkmark_points(self):
         """Calculate vector vertex points for checkmark shape within its bounding box."""
@@ -807,6 +810,7 @@ class EditableStroke:
     def set_rotation(self, angle):
         """Set rotation in degrees (0-360)."""
         self.rotation = float(angle) % 360.0
+        self.original_rotation = self.rotation
 
 
 class MeasurementObject:
@@ -919,6 +923,11 @@ class MeasurementObject:
         dy = new_y - self.y
         self.points = [(px + dx, py + dy) for px, py in self.points]
         self.recalculate_bbox()
+
+    def set_rotation(self, angle):
+        """Set rotation in degrees (0-360)."""
+        self.rotation = float(angle) % 360.0
+        self.original_rotation = self.rotation
 
     def to_dict(self) -> dict:
         return {
@@ -1396,6 +1405,11 @@ class RedactionMark:
         self.y = min_y
         self.width = max_x - min_x
         self.height = max_y - min_y
+
+    def set_rotation(self, angle):
+        """Set rotation in degrees (0-360)."""
+        self.rotation = float(angle) % 360.0
+        self.original_rotation = self.rotation
 
     def contains_point(self, px: float, py: float, tolerance: float = 2.0) -> bool:
         """Hit test checking whether (px, py) falls within or on the border of this redaction mark."""

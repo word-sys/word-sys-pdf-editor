@@ -9,7 +9,7 @@ from gi.repository import Gtk, Gdk
 
 import fitz
 from word_sys_pdf_editor.window import PdfEditorWindow
-from word_sys_pdf_editor.models import EditableText, EditableShape, EditableImage, EditableStroke, SpatialGridIndex
+from word_sys_pdf_editor.models import EditableText, EditableShape, EditableImage, EditableStroke, SpatialGridIndex, AcroFormField
 from word_sys_pdf_editor.undo_manager import UndoManager, EditObjectCommand
 
 
@@ -286,7 +286,7 @@ class TestTextboxUndoAndObjectDrag(unittest.TestCase):
         text_obj = EditableText(100.0, 100.0, "Rotated Text", font_size=12.0, rotation=45.0)
         text_obj.bbox = (100.0, 100.0, 200.0, 120.0)
         text_obj.original_bbox = (100.0, 100.0, 200.0, 120.0)
-        text_obj.original_rotation = 45.0
+        text_obj.original_rotation = 0.0  # Even if stale 0.0, rotation must be dynamic!
         text_obj.page_number = 0
 
         self.win.dragged_object = text_obj
@@ -305,6 +305,75 @@ class TestTextboxUndoAndObjectDrag(unittest.TestCase):
             expected_rad = math.radians(45.0)
             rotate_calls = [call.args[0] for call in cr.rotate.call_args_list]
             self.assertTrue(any(abs(rad - expected_rad) < 1e-4 for rad in rotate_calls))
+            # Verify destination blue box was drawn
+            source_rgba_calls = [call.args for call in cr.set_source_rgba.call_args_list]
+            self.assertIn((0.2, 0.5, 0.85, 0.12), source_rgba_calls)
+
+    def test_all_objects_render_destination_drag_area_box(self):
+        """All object types (Shape, Image, FormField, Stroke) render the blue destination drag area box."""
+        # 1. EditableShape
+        shape_obj = EditableShape(
+            shape_type=EditableShape.SHAPE_RECTANGLE,
+            bbox=(50.0, 50.0, 150.0, 150.0),
+            page_number=0,
+            rotation=30.0
+        )
+        shape_obj.original_bbox = (50.0, 50.0, 150.0, 150.0)
+        self.win.dragged_object = shape_obj
+        cr = MagicMock()
+        cr.clip_extents.return_value = (-1000.0, -1000.0, 2000.0, 2000.0)
+        PdfEditorWindow.draw_pdf_page(self.win, MagicMock(), cr, 600, 800, dirty_rect=None)
+        source_rgba_calls = [call.args for call in cr.set_source_rgba.call_args_list]
+        self.assertIn((0.2, 0.5, 0.85, 0.12), source_rgba_calls)
+        self.assertIn((0.2, 0.5, 0.85, 0.6), source_rgba_calls)
+
+        # 2. AcroFormField
+        form_field = AcroFormField(
+            field_id="field1",
+            xref=10,
+            page_number=0,
+            rect=(100.0, 100.0, 200.0, 130.0),
+            field_name="test_field"
+        )
+        form_field.original_bbox = form_field.bbox
+        self.win.dragged_object = form_field
+        cr = MagicMock()
+        cr.clip_extents.return_value = (-1000.0, -1000.0, 2000.0, 2000.0)
+        PdfEditorWindow.draw_pdf_page(self.win, MagicMock(), cr, 600, 800, dirty_rect=None)
+        source_rgba_calls = [call.args for call in cr.set_source_rgba.call_args_list]
+        self.assertIn((0.2, 0.5, 0.85, 0.12), source_rgba_calls)
+
+    def test_stalk_handle_rotation_origin_and_destination_dynamic(self):
+        """Free rotation via stalk handle dynamically updates object rotation and renders rotated boxes."""
+        import math
+        shape_obj = EditableShape(
+            shape_type=EditableShape.SHAPE_RECTANGLE,
+            bbox=(100.0, 100.0, 200.0, 200.0),
+            page_number=0,
+            rotation=0.0
+        )
+        self.win.selected_shape = shape_obj
+        self.win.dragged_object = shape_obj
+        shape_obj.original_bbox = shape_obj.bbox
+        self.win.drag_start_pos = (150.0, 80.0)
+        self.win.rotate_center = (150.0, 150.0)
+        self.win.rotate_pointer_start_angle = -90.0
+        self.win.rotate_start_angle = 0.0
+
+        gesture_mock = MagicMock()
+        gesture_mock.get_current_event_state.return_value = 0
+
+        # Rotate by dragging pointer to the right (+90 degrees offset -> angle 0 deg -> delta +90 deg)
+        PdfEditorWindow._handle_rotate_update(self.win, gesture_mock, offset_x=70.0, offset_y=70.0)
+        self.assertAlmostEqual(shape_obj.rotation, 90.0, places=1)
+
+        # Calling draw_pdf_page should rotate cr by 90 degrees
+        cr = MagicMock()
+        cr.clip_extents.return_value = (-1000.0, -1000.0, 2000.0, 2000.0)
+        PdfEditorWindow.draw_pdf_page(self.win, MagicMock(), cr, 600, 800, dirty_rect=None)
+        expected_rad = math.radians(90.0)
+        rotate_calls = [call.args[0] for call in cr.rotate.call_args_list]
+        self.assertTrue(any(abs(rad - expected_rad) < 1e-4 for rad in rotate_calls))
 
     def test_spatial_index_self_healing_on_stale_data(self):
         """When spatial index has stale entries, hit testing self-heals via linear scan."""
