@@ -5361,14 +5361,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.dragged_object and getattr(self.dragged_object, 'page_number', self.current_page_index) == page_index:
             if self.dragged_object.original_bbox:
                 orig_x1, orig_y1, orig_x2, orig_y2 = self.dragged_object.original_bbox
+                orig_w = orig_x2 - orig_x1
+                orig_h = orig_y2 - orig_y1
                 cr.save()
+                orig_rot = getattr(self.dragged_object, 'original_rotation', getattr(self.dragged_object, 'rotation', 0.0)) % 360.0
+                if orig_rot != 0.0:
+                    orig_cx = orig_x1 + orig_w / 2.0
+                    orig_cy = orig_y1 + orig_h / 2.0
+                    cr.translate(orig_cx, orig_cy)
+                    cr.rotate(math.radians(orig_rot))
+                    cr.translate(-orig_cx, -orig_cy)
                 cr.set_source_rgba(0.85, 0.85, 0.85, 0.55)
-                cr.rectangle(orig_x1, orig_y1, orig_x2 - orig_x1, orig_y2 - orig_y1)
+                cr.rectangle(orig_x1, orig_y1, orig_w, orig_h)
                 cr.fill()
                 cr.set_source_rgba(0.5, 0.5, 0.5, 0.7)
                 cr.set_line_width(1.5 / self.zoom_level)
                 cr.set_dash([4.0 / self.zoom_level, 3.0 / self.zoom_level])
-                cr.rectangle(orig_x1, orig_y1, orig_x2 - orig_x1, orig_y2 - orig_y1)
+                cr.rectangle(orig_x1, orig_y1, orig_w, orig_h)
                 cr.stroke()
                 cr.set_dash([])
                 cr.restore()
@@ -5376,14 +5385,23 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             lt = getattr(self.dragged_object, 'linked_text', None)
             if lt and getattr(lt, 'original_bbox', None):
                 lt_orig_x1, lt_orig_y1, lt_orig_x2, lt_orig_y2 = lt.original_bbox
+                lt_orig_w = lt_orig_x2 - lt_orig_x1
+                lt_orig_h = lt_orig_y2 - lt_orig_y1
                 cr.save()
+                lt_rot = getattr(lt, 'original_rotation', getattr(lt, 'rotation', 0.0)) % 360.0
+                if lt_rot != 0.0:
+                    lt_orig_cx = lt_orig_x1 + lt_orig_w / 2.0
+                    lt_orig_cy = lt_orig_y1 + lt_orig_h / 2.0
+                    cr.translate(lt_orig_cx, lt_orig_cy)
+                    cr.rotate(math.radians(lt_rot))
+                    cr.translate(-lt_orig_cx, -lt_orig_cy)
                 cr.set_source_rgba(0.85, 0.85, 0.85, 0.55)
-                cr.rectangle(lt_orig_x1, lt_orig_y1, lt_orig_x2 - lt_orig_x1, lt_orig_y2 - lt_orig_y1)
+                cr.rectangle(lt_orig_x1, lt_orig_y1, lt_orig_w, lt_orig_h)
                 cr.fill()
                 cr.set_source_rgba(0.5, 0.5, 0.5, 0.7)
                 cr.set_line_width(1.5 / self.zoom_level)
                 cr.set_dash([4.0 / self.zoom_level, 3.0 / self.zoom_level])
-                cr.rectangle(lt_orig_x1, lt_orig_y1, lt_orig_x2 - lt_orig_x1, lt_orig_y2 - lt_orig_y1)
+                cr.rectangle(lt_orig_x1, lt_orig_y1, lt_orig_w, lt_orig_h)
                 cr.stroke()
                 cr.set_dash([])
                 cr.restore()
@@ -5436,6 +5454,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     PangoCairo.show_layout(cr, layout)
                     cr.restore()
             elif isinstance(self.dragged_object, EditableText):
+                cr.save()
+                cr.set_source_rgba(0.2, 0.5, 0.85, 0.12)
+                cr.rectangle(ghost_x, ghost_y, ghost_w, ghost_h)
+                cr.fill()
+                cr.set_source_rgba(0.2, 0.5, 0.85, 0.6)
+                cr.set_line_width(1.5 / self.zoom_level)
+                cr.set_dash([4.0 / self.zoom_level, 3.0 / self.zoom_level])
+                cr.rectangle(ghost_x, ghost_y, ghost_w, ghost_h)
+                cr.stroke()
+                cr.set_dash([])
+                cr.restore()
+
                 layout = PangoCairo.create_layout(cr)
                 font_desc_str = f"{self.dragged_object.font_family_base} {self.dragged_object.font_size}"
                 if self.dragged_object.is_bold: font_desc_str += " Bold"

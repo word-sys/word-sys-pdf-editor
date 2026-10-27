@@ -49,9 +49,29 @@ class DummyWindow:
         self.drag_begin_state = {}
         self.resize_handle = None
         self._focus_widget = None
+        self.continuous_scroll = False
+        self.temp_shape = None
+        self.temp_stroke = None
+        self.temp_image_bbox = None
+        self.temp_stamp_bbox = None
+        self.temp_sig_bbox = None
+        self.temp_clone_patch_bbox = None
+        self.temp_redact_bbox = None
+        self.temp_form_field_rect = None
+        self.temp_calibration_line = None
+        self.temp_measurement_line = None
+        self.temp_measurement_rect = None
+        self.temp_polygon_vertices = []
+        self.selected_word_start_char = None
+        self.selected_word_end_char = None
+        self.word_selection_mode = False
+        self.show_ocr_overlay = False
 
     def get_focus(self):
         return self._focus_widget
+
+    def get_page_canvas_rect(self, page_index):
+        return (0, 0, 600, 800)
 
     def canvas_to_page_coords(self, x, y):
         return self.current_page_index, x / self.zoom_level, y / self.zoom_level
@@ -88,6 +108,7 @@ class DummyWindow:
     on_drag_update = PdfEditorWindow.on_drag_update
     on_drag_end = PdfEditorWindow.on_drag_end
     on_tool_selected = PdfEditorWindow.on_tool_selected
+    _draw_page_content = PdfEditorWindow._draw_page_content
 
 
 class TestTextboxUndoAndObjectDrag(unittest.TestCase):
@@ -258,6 +279,32 @@ class TestTextboxUndoAndObjectDrag(unittest.TestCase):
         """Inline text editor creates text view with WrapMode.NONE so text does not prematurely wrap."""
         tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.NONE)
         self.assertEqual(tv.get_wrap_mode(), Gtk.WrapMode.NONE)
+
+    def test_dragged_rotated_object_applies_rotation_to_shadow_box(self):
+        """When dragged object is rotated, both origin shadow box and destination box rotate."""
+        import math
+        text_obj = EditableText(100.0, 100.0, "Rotated Text", font_size=12.0, rotation=45.0)
+        text_obj.bbox = (100.0, 100.0, 200.0, 120.0)
+        text_obj.original_bbox = (100.0, 100.0, 200.0, 120.0)
+        text_obj.original_rotation = 45.0
+        text_obj.page_number = 0
+
+        self.win.dragged_object = text_obj
+        cr = MagicMock()
+        cr.clip_extents.return_value = (-1000.0, -1000.0, 2000.0, 2000.0)
+        area = MagicMock()
+
+        with patch('word_sys_pdf_editor.window.PangoCairo.create_layout') as mock_layout, \
+             patch('word_sys_pdf_editor.window.PangoCairo.show_layout'):
+            layout_obj = MagicMock()
+            layout_obj.get_size.return_value = (100 * 1024, 20 * 1024)
+            mock_layout.return_value = layout_obj
+
+            # Render canvas page
+            PdfEditorWindow.draw_pdf_page(self.win, area, cr, 600, 800, dirty_rect=None)
+            expected_rad = math.radians(45.0)
+            rotate_calls = [call.args[0] for call in cr.rotate.call_args_list]
+            self.assertTrue(any(abs(rad - expected_rad) < 1e-4 for rad in rotate_calls))
 
     def test_spatial_index_self_healing_on_stale_data(self):
         """When spatial index has stale entries, hit testing self-heals via linear scan."""

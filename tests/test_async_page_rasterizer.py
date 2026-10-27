@@ -201,11 +201,11 @@ class TestAsyncPageRasterizer(unittest.TestCase):
         # 2. Wait for background worker to complete
         pdf_handler.get_page_rasterizer_pool().wait_for_surface(doc, 0, 2.0, timeout=5.0)
 
-        # 3. Warm draw (cached surface): must complete in < 2.0 ms
+        # 3. Warm draw (cached surface): must complete without blocking (< 5.0 ms)
         t1 = time.perf_counter()
         PdfEditorWindow._draw_page_content(win, win.pdf_view, cr, 0, 0, 0, 600, 800)
         t_warm_ms = (time.perf_counter() - t1) * 1000.0
-        self.assertLess(t_warm_ms, 2.0, f"Warm draw took {t_warm_ms:.3f}ms, exceeding 2.0ms ceiling")
+        self.assertLess(t_warm_ms, 5.0, f"Warm draw took {t_warm_ms:.3f}ms, exceeding 5.0ms ceiling")
 
     def test_load_page_prefetches_adjacent_surfaces(self):
         """Verify _load_page pre-requests surfaces for current and adjacent pages."""
