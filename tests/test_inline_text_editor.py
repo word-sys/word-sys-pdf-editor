@@ -59,6 +59,7 @@ class TestInlineTextEditorOverlay(unittest.TestCase):
         if has_screen_display() and self.app:
             self.win = PdfEditorWindow(application=self.app)
             self.win.font_scan_in_progress = False
+            self.win.set_continuous_scroll_mode(False)
             doc_loaded, _ = pdf_handler.load_pdf_document(self.doc_path)
             self.win._finish_loading(doc_loaded, None, self.doc_path, 0, self.win._active_session)
             self.doc = self.win.doc

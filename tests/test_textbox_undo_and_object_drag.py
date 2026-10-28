@@ -43,6 +43,7 @@ class DummyWindow:
         self.pdf_view = MagicMock()
         self.status_label = MagicMock()
         self.dragged_object = None
+        self._can_drag_object = None
         self.dragging_to_create = False
         self.drag_start_pos = (0, 0)
         self.drag_object_start_pos = (0, 0)
@@ -107,6 +108,10 @@ class DummyWindow:
     on_drag_begin = PdfEditorWindow.on_drag_begin
     on_drag_update = PdfEditorWindow.on_drag_update
     on_drag_end = PdfEditorWindow.on_drag_end
+    get_selected_object = PdfEditorWindow.get_selected_object
+    select_object = PdfEditorWindow.select_object
+    deselect_all = PdfEditorWindow.deselect_all
+    _find_any_object_at_pos = PdfEditorWindow._find_any_object_at_pos
     on_tool_selected = PdfEditorWindow.on_tool_selected
     _draw_page_content = PdfEditorWindow._draw_page_content
 
@@ -222,6 +227,7 @@ class TestTextboxUndoAndObjectDrag(unittest.TestCase):
         text_obj.page_number = 0
         self.win.editable_texts.append(text_obj)
         self.win.tool_mode = "select"
+        self.win.selected_text = text_obj
 
         gesture = MagicMock()
         # Drag start at (120, 110) inside the text bbox
@@ -248,6 +254,7 @@ class TestTextboxUndoAndObjectDrag(unittest.TestCase):
         text_obj.page_number = 0
         self.win.editable_texts.append(text_obj)
         self.win.tool_mode = "select"
+        self.win.selected_text = text_obj
 
         gesture = MagicMock()
         # Mouse press initiates drag

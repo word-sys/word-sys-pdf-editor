@@ -12,6 +12,7 @@ from gi.repository import Gtk, Adw, Graphene
 import cairo
 
 from word_sys_pdf_editor.window import PdfEditorWindow, VirtualDrawingArea
+from word_sys_pdf_editor.i18n import set_setting
 
 
 class TestVirtualDrawingAreaContinuousScroll(unittest.TestCase):
@@ -39,8 +40,10 @@ class TestVirtualDrawingAreaContinuousScroll(unittest.TestCase):
 
         self.win = PdfEditorWindow(application=self.app)
         self.win.font_scan_in_progress = False
+        self.win.set_continuous_scroll_mode(True)
 
     def tearDown(self):
+        set_setting("view_mode", "single")
         if hasattr(self, 'win') and self.win:
             try:
                 self.win.close_document()

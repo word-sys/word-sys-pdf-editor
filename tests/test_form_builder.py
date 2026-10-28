@@ -45,6 +45,7 @@ class MockBuilderWindow:
         self.temp_image_bbox = None
         self.temp_shape = None
         self.dragged_object = None
+        self._can_drag_object = None
         self.dragging_to_create = False
         self.resize_handle = None
         self.form_builder_field_type = "text"
@@ -141,6 +142,10 @@ class MockBuilderWindow:
     on_drag_update = PdfEditorWindow.on_drag_update
     on_drag_end = PdfEditorWindow.on_drag_end
     on_pdf_view_pressed = PdfEditorWindow.on_pdf_view_pressed
+    get_selected_object = PdfEditorWindow.get_selected_object
+    select_object = PdfEditorWindow.select_object
+    deselect_all = PdfEditorWindow.deselect_all
+    _find_any_object_at_pos = PdfEditorWindow._find_any_object_at_pos
     _focus_form_field_overlay = PdfEditorWindow._focus_form_field_overlay
     _create_form_field_overlays = PdfEditorWindow._create_form_field_overlays
     _clear_form_field_overlays = PdfEditorWindow._clear_form_field_overlays
@@ -426,6 +431,7 @@ class TestFormBuilder(unittest.TestCase):
         self.window._load_acroform_fields_for_page(0)
         self.assertEqual(len(self.window.form_fields), 1)
         field = self.window.form_fields[0]
+        self.window.selected_form_field = field
 
         # Drag begin inside the field
         self.window.on_drag_begin(gesture, 120, 110)

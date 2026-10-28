@@ -1,4 +1,5 @@
 import copy
+import collections
 from typing import Optional, List, Dict, Tuple, Any
 from .undo_manager import (
     UndoManager, EditObjectCommand, AddObjectCommand, DeleteObjectCommand,
@@ -157,6 +158,134 @@ class VirtualDrawingArea(Gtk.DrawingArea):
             except Exception as e:
                 import traceback
                 traceback.print_exc()
+
+
+class ScrollVelocityTracker:
+    """Tracks scroll velocity and direction to predictively prefetch upcoming pages."""
+
+    DIRECTION_NONE = 0
+    DIRECTION_DOWN = 1
+    DIRECTION_UP = -1
+
+    def __init__(self, sample_window_sec: float = 0.25):
+        self.sample_window_sec = float(sample_window_sec)
+        self._samples: collections.deque = collections.deque(maxlen=10)
+        self._last_velocity: float = 0.0
+        self._last_direction: int = self.DIRECTION_NONE
+
+    def record_scroll(self, y: float, now: Optional[float] = None) -> Tuple[float, int]:
+        """Record scroll position and compute smoothed velocity (px/sec) and direction.
+
+        Returns: (velocity_px_per_sec, direction)
+        direction is:
+          1  (downwards / increasing y)
+          -1 (upwards / decreasing y)
+          0  (stationary / stopped)
+        """
+        if now is None:
+            now = time.perf_counter()
+
+        self._samples.append((now, float(y)))
+
+        cutoff = now - self.sample_window_sec
+        while len(self._samples) > 2 and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+
+        if len(self._samples) < 2:
+            return (self._last_velocity, self._last_direction)
+
+        t_first, y_first = self._samples[0]
+        t_last, y_last = self._samples[-1]
+        dt = t_last - t_first
+        if dt < 0.001:
+            return (self._last_velocity, self._last_direction)
+
+        raw_v = (y_last - y_first) / dt
+        if abs(self._last_velocity) < 0.001:
+            smoothed_v = raw_v
+        else:
+            smoothed_v = 0.7 * raw_v + 0.3 * self._last_velocity
+
+        self._last_velocity = smoothed_v
+
+        # Thresholds: 60 px/s threshold for directional motion
+        if smoothed_v > 60.0:
+            self._last_direction = self.DIRECTION_DOWN
+        elif smoothed_v < -60.0:
+            self._last_direction = self.DIRECTION_UP
+        else:
+            self._last_direction = self.DIRECTION_NONE
+
+        return (self._last_velocity, self._last_direction)
+
+    def reset(self):
+        """Reset velocity tracking when scrolling stops or settles."""
+        self._samples.clear()
+        self._last_velocity = 0.0
+        self._last_direction = self.DIRECTION_NONE
+
+    @property
+    def velocity(self) -> float:
+        """Return latest smoothed velocity in pixels per second."""
+        return self._last_velocity
+
+    @property
+    def direction(self) -> int:
+        """Return latest scroll direction (DIRECTION_DOWN=1, DIRECTION_UP=-1, DIRECTION_NONE=0)."""
+        return self._last_direction
+
+    def get_prefetch_page_indices(
+        self,
+        visible_pages: List[int],
+        total_pages: int,
+        is_eco_mode: bool = False
+    ) -> List[int]:
+        """Compute directional lookahead pages to prefetch based on current velocity and direction.
+
+        - Downwards rapid scroll: prefetch ahead [+1, +2, +3], zero behind.
+        - Upwards rapid scroll: prefetch ahead [-1, -2, -3], zero behind.
+        - Moderate scroll: directionally biased ahead, single page behind.
+        - Stationary / decelerated: balanced [-1, +1].
+        """
+        if not visible_pages or total_pages <= 0:
+            return []
+
+        min_p = min(visible_pages)
+        max_p = max(visible_pages)
+        abs_v = abs(self._last_velocity)
+        candidates: List[int] = []
+
+        if self._last_direction == self.DIRECTION_DOWN:
+            if is_eco_mode:
+                candidates = [max_p + 1]
+            elif abs_v > 400.0:
+                # Rapid downwards scroll: aggressive lookahead ahead, zero behind
+                candidates = [max_p + 1, max_p + 2, max_p + 3]
+            else:
+                # Moderate downwards scroll: biased ahead, 1 behind
+                candidates = [max_p + 1, max_p + 2, min_p - 1]
+        elif self._last_direction == self.DIRECTION_UP:
+            if is_eco_mode:
+                candidates = [min_p - 1]
+            elif abs_v > 400.0:
+                # Rapid upwards scroll: aggressive lookahead ahead, zero behind
+                candidates = [min_p - 1, min_p - 2, min_p - 3]
+            else:
+                # Moderate upwards scroll: biased ahead, 1 behind
+                candidates = [min_p - 1, min_p - 2, max_p + 1]
+        else:
+            # Stationary or decelerated to a stop: balanced lookahead
+            if is_eco_mode:
+                candidates = [max_p + 1]
+            else:
+                candidates = [min_p - 1, max_p + 1]
+
+        vis_set = set(visible_pages)
+        valid: List[int] = []
+        for p in candidates:
+            if 0 <= p < total_pages and p not in vis_set and p not in valid:
+                valid.append(p)
+        return valid
 
 
 class StickyNotePopover(Gtk.Popover):
@@ -525,6 +654,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.set_icon_name("f-pv1")
         self._is_programmatic_scrolling = False
         self._scroll_anim_id = None
+        self._scroll_tracker = ScrollVelocityTracker()
+        self._scroll_settle_timer_id = None
 
         saved_view_mode = get_setting("view_mode", "single")
         is_cont = (saved_view_mode == "continuous")
@@ -576,6 +707,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._show_ocr_overlay_fallback = False
         self._ocr_words_cache = {}
         self.dragged_object = None
+        self._can_drag_object = None
         self.drag_start_pos = (0, 0)
         self.drag_object_start_pos = (0, 0)
         self.resize_handle = None  
@@ -1026,6 +1158,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pending_format_change_obj = None
         self.before_format_change_state = None
         self.dragged_object = None
+        self._can_drag_object = None
         self.temp_polygon_vertices = []
         self.temp_measurement_line = None
         self.temp_measurement_rect = None
@@ -2828,6 +2961,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         click_controller = Gtk.GestureClick.new()
         click_controller.connect('pressed', self.on_pdf_view_pressed)
+        click_controller.connect('released', self._on_pdf_view_released)
         self.pdf_view.add_controller(click_controller)
 
         right_click_controller = Gtk.GestureClick.new()
@@ -4513,11 +4647,77 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if getattr(self, '_is_programmatic_scrolling', False):
             return
 
+        # Directional predictive scroll velocity tracking and lookahead prefetching
+        if hasattr(self, '_scroll_tracker'):
+            cur_y = float(adjustment.get_value())
+            self._scroll_tracker.record_scroll(cur_y)
+            self._trigger_directional_prefetch()
+
+        # Debounce settle timer to restore balanced lookahead when scrolling stops
+        if getattr(self, '_scroll_settle_timer_id', None) is not None:
+            try:
+                GLib.source_remove(self._scroll_settle_timer_id)
+            except Exception:
+                pass
+            self._scroll_settle_timer_id = None
+
+        def _on_scroll_settle_timeout():
+            self._scroll_settle_timer_id = None
+            if hasattr(self, '_scroll_tracker'):
+                self._scroll_tracker.reset()
+                self._trigger_directional_prefetch()
+            return GLib.SOURCE_REMOVE
+
+        self._scroll_settle_timer_id = GLib.timeout_add(150, _on_scroll_settle_timeout)
+
         dominant = self.get_dominant_visible_page_index()
         if dominant != self.current_page_index:
             self._switch_active_page(dominant)
         if hasattr(self, 'pdf_view') and self.pdf_view:
             self.pdf_view.queue_draw()
+
+    def _trigger_directional_prefetch(self):
+        """Submit non-blocking background rasterization for lookahead pages based on scroll velocity."""
+        if not self.doc or getattr(self.doc, 'is_closed', False):
+            return
+        if not getattr(self, 'async_page_rendering', True):
+            return
+        if getattr(self, 'is_zoom_gesture_active', False):
+            return
+
+        total_pages = pdf_handler.get_page_count(self.doc)
+        if total_pages <= 0:
+            return
+
+        if getattr(self, 'continuous_scroll', False):
+            visible_pages = self.get_visible_page_indices(prefetch_margin=0.0)
+        else:
+            visible_pages = [self.current_page_index] if 0 <= self.current_page_index < total_pages else []
+
+        if not visible_pages:
+            return
+
+        is_eco = getattr(self, 'is_eco_mode', False)
+        prefetch_pages = self._scroll_tracker.get_prefetch_page_indices(
+            visible_pages, total_pages, is_eco_mode=is_eco
+        )
+
+        for p_idx in prefetch_pages:
+            if pdf_handler.peek_page_cairo_surface(self.doc, p_idx, self.zoom_level) is None:
+                def _on_prefetched_ready(p, z, surf):
+                    if not self.doc or getattr(self.doc, 'is_closed', False):
+                        return
+                    if abs(self.zoom_level - z) < 0.001 or pdf_handler.peek_page_cairo_surface(self.doc, p, self.zoom_level) is None:
+                        if hasattr(self, 'pdf_view') and self.pdf_view:
+                            vis_now = self.get_visible_page_indices(prefetch_margin=0.0) if getattr(self, 'continuous_scroll', False) else [self.current_page_index]
+                            if p in vis_now:
+                                self.pdf_view.queue_draw()
+
+                pdf_handler.request_page_cairo_surface(
+                    self.doc, p_idx, self.zoom_level,
+                    callback=_on_prefetched_ready,
+                    progressive=True
+                )
 
     def _sync_window_title_and_subtitle(self):
         """Update window title and header subtitle with current session and page info."""
@@ -4643,10 +4843,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         start_y = v_adj.get_value()
         delta_y = target_y - start_y
 
+        if hasattr(self, '_scroll_tracker'):
+            if delta_y > 2.0:
+                self._scroll_tracker._last_direction = ScrollVelocityTracker.DIRECTION_DOWN
+                self._scroll_tracker._last_velocity = 800.0
+            elif delta_y < -2.0:
+                self._scroll_tracker._last_direction = ScrollVelocityTracker.DIRECTION_UP
+                self._scroll_tracker._last_velocity = -800.0
+            self._trigger_directional_prefetch()
+
         if (not smooth) or duration_ms <= 0 or abs(delta_y) < 2.0:
             self._is_programmatic_scrolling = True
             v_adj.set_value(target_y)
             self._is_programmatic_scrolling = False
+            if hasattr(self, '_scroll_tracker'):
+                self._scroll_tracker.reset()
+                self._trigger_directional_prefetch()
             if hasattr(self, 'pdf_view') and self.pdf_view:
                 self.pdf_view.queue_draw()
             return
@@ -4668,6 +4880,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 v_adj.set_value(target_y)
                 self._is_programmatic_scrolling = False
                 self._scroll_anim_id = None
+                if hasattr(self, '_scroll_tracker'):
+                    self._scroll_tracker.reset()
+                    self._trigger_directional_prefetch()
                 if hasattr(self, 'pdf_view') and self.pdf_view:
                     self.pdf_view.queue_draw()
                 return False
@@ -4915,6 +5130,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.commit_pending_format_change()
 
         old_page_idx = getattr(self, 'current_page_index', None)
+        if hasattr(self, '_scroll_tracker') and old_page_idx is not None:
+            if page_index > old_page_idx:
+                self._scroll_tracker._last_direction = ScrollVelocityTracker.DIRECTION_DOWN
+                self._scroll_tracker._last_velocity = 200.0
+            elif page_index < old_page_idx:
+                self._scroll_tracker._last_direction = ScrollVelocityTracker.DIRECTION_UP
+                self._scroll_tracker._last_velocity = -200.0
         if self.doc and old_page_idx is not None and (0 <= old_page_idx < pdf_handler.get_page_count(self.doc)):
             if old_page_idx != page_index:
                 if reload_objects:
@@ -4997,7 +5219,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.queue_draw()
         if getattr(self, 'async_page_rendering', True) and self.doc and not getattr(self.doc, 'is_closed', False):
             pdf_handler.request_page_cairo_surface(self.doc, page_index, self.zoom_level, progressive=True)
-            if not getattr(self, 'is_eco_mode', False):
+            if hasattr(self, '_trigger_directional_prefetch'):
+                self._trigger_directional_prefetch()
+            elif not getattr(self, 'is_eco_mode', False):
                 if page_index + 1 < pdf_handler.get_page_count(self.doc):
                     pdf_handler.request_page_cairo_surface(self.doc, page_index + 1, self.zoom_level)
                 if page_index - 1 >= 0:
@@ -5069,6 +5293,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, '_invalidate_spatial_index'):
             self._invalidate_spatial_index()
         self._invalidate_continuous_layout()
+        if getattr(self, '_scroll_settle_timer_id', None) is not None:
+            try:
+                GLib.source_remove(self._scroll_settle_timer_id)
+            except Exception:
+                pass
+            self._scroll_settle_timer_id = None
+        if hasattr(self, '_scroll_tracker'):
+            self._scroll_tracker.reset()
         self.pdf_view.set_content_width(1)
         self.pdf_view.set_content_height(1)
         self.pdf_view.queue_draw()
@@ -11561,6 +11793,99 @@ class PdfEditorWindow(Adw.ApplicationWindow):
          else:
              show_error_dialog(self, message, _("err_move_page_title"))
 
+    def get_selected_object(self):
+        """Return the currently selected canvas object, if any."""
+        return (
+            getattr(self, 'selected_text', None) or
+            getattr(self, 'selected_image', None) or
+            getattr(self, 'selected_shape', None) or
+            getattr(self, 'selected_stroke', None) or
+            getattr(self, 'selected_form_field', None) or
+            getattr(self, 'selected_measurement', None) or
+            getattr(self, 'selected_redaction_mark', None)
+        )
+
+    def select_object(self, obj):
+        """Select a single canvas object and clear all other selections."""
+        if hasattr(self, '_close_active_form_field_editor'):
+            self._close_active_form_field_editor()
+
+        self.selected_text = obj if isinstance(obj, EditableText) else None
+        self.selected_image = obj if isinstance(obj, EditableImage) else None
+        self.selected_shape = obj if isinstance(obj, EditableShape) else None
+        self.selected_stroke = obj if isinstance(obj, EditableStroke) else None
+        self.selected_form_field = obj if isinstance(obj, AcroFormField) else None
+        self.selected_measurement = obj if isinstance(obj, MeasurementObject) else None
+        self.selected_redaction_mark = obj if isinstance(obj, RedactionMark) else None
+
+        if self.selected_text:
+            self.word_selection_mode = False
+            self.pending_format_change_obj = self.selected_text
+            self.before_format_change_state = copy.deepcopy(self.selected_text.__dict__)
+            if hasattr(self, '_update_text_format_controls'):
+                self._update_text_format_controls(self.selected_text)
+        elif self.selected_stroke:
+            if hasattr(self, '_update_stroke_format_controls'):
+                self._update_stroke_format_controls(self.selected_stroke)
+        elif self.selected_form_field:
+            if hasattr(self, '_update_form_builder_controls_for_selected'):
+                self._update_form_builder_controls_for_selected()
+        elif self.selected_redaction_mark:
+            if hasattr(self, '_open_redaction_popover'):
+                self._open_redaction_popover(self.selected_redaction_mark)
+
+        if hasattr(self, '_update_ui_state'):
+            self._update_ui_state()
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+
+    def deselect_all(self):
+        """Deselect all canvas objects and reset drag authorization."""
+        if hasattr(self, '_close_active_form_field_editor'):
+            self._close_active_form_field_editor()
+        self.selected_text = None
+        self.selected_image = None
+        self.selected_shape = None
+        self.selected_stroke = None
+        self.selected_form_field = None
+        self.selected_measurement = None
+        self.selected_redaction_mark = None
+        self._can_drag_object = None
+        if hasattr(self, '_update_ui_state'):
+            self._update_ui_state()
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+
+    def _find_any_object_at_pos(self, page_x, page_y):
+        """Find the topmost canvas object at unrotated page coordinates, if any."""
+        obj = self._find_text_at_pos(page_x, page_y)
+        if obj:
+            return obj
+        obj = self._find_image_at_pos(page_x, page_y)
+        if obj:
+            return obj
+        obj = self._find_shape_at_pos(page_x, page_y)
+        if obj:
+            return obj
+        obj = self._find_stroke_at_pos(page_x, page_y)
+        if obj:
+            return obj
+        obj = self._find_form_field_at_pos(page_x, page_y)
+        if obj:
+            return obj
+        if hasattr(self, '_find_measurement_at_pos'):
+            obj = self._find_measurement_at_pos(page_x, page_y)
+            if obj:
+                return obj
+        if hasattr(self, '_find_redaction_mark_at_pos'):
+            obj = self._find_redaction_mark_at_pos(page_x, page_y)
+            if obj:
+                return obj
+        return None
+
+    def _on_pdf_view_released(self, gesture, n_press, x, y):
+        """Reset transient click-drag authorization on mouse button release."""
+        self._can_drag_object = None
 
     def on_pdf_view_pressed(self, gesture, n_press, x, y):
         """Handle primary mouse button press for object selection, links, or tool starts."""
@@ -11655,16 +11980,30 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, 'pdf_view') and self.pdf_view:
             self.pdf_view.grab_focus()
 
+        obj_before_press = self.get_selected_object() if hasattr(self, 'get_selected_object') else (
+            getattr(self, 'selected_text', None) or 
+            getattr(self, 'selected_image', None) or 
+            getattr(self, 'selected_shape', None) or 
+            getattr(self, 'selected_stroke', None) or
+            getattr(self, 'selected_form_field', None) or
+            getattr(self, 'selected_measurement', None) or
+            getattr(self, 'selected_redaction_mark', None)
+        )
+        self._can_drag_object = None
+
         if not is_on_page:
             if self.inline_editor_widget is not None:
                 self._apply_and_hide_editor()
-            if getattr(self, '_active_editing_form_field', None) is not None:
-                self._close_active_form_field_editor()
-            self.selected_text = None
-            self.selected_image = None
-            self.selected_form_field = None
-            self.pdf_view.queue_draw()
-            self._update_ui_state()
+            if hasattr(self, 'deselect_all'):
+                self.deselect_all()
+            else:
+                self.selected_text = None
+                self.selected_image = None
+                self.selected_shape = None
+                self.selected_stroke = None
+                self.selected_form_field = None
+                self.selected_measurement = None
+            self._can_drag_object = False
             return
 
 
@@ -11684,82 +12023,56 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             clicked_redaction = self._find_redaction_mark_at_pos(page_x_unzoomed, page_y_unzoomed) if hasattr(self, '_find_redaction_mark_at_pos') else None
 
             if clicked_redaction:
-                self._close_active_form_field_editor()
-                self.selected_text = None
-                self.selected_image = None
-                self.selected_shape = None
-                self.selected_stroke = None
-                self.selected_form_field = None
-                self.selected_measurement = None
-                self.selected_redaction_mark = clicked_redaction
-                self._open_redaction_popover(clicked_redaction)
-                self.pdf_view.queue_draw()
-                self._update_ui_state()
+                self._can_drag_object = (clicked_redaction is obj_before_press)
+                if hasattr(self, 'select_object'):
+                    self.select_object(clicked_redaction)
+                else:
+                    self.selected_redaction_mark = clicked_redaction
                 return
 
-            self.selected_redaction_mark = None
-
             if clicked_text:
-                self._close_active_form_field_editor()
-                self.selected_image = None
-                self.selected_shape = None
-                self.selected_stroke = None
-                self.selected_form_field = None
-                self.selected_measurement = None
-                self.selected_text = clicked_text
-                self.word_selection_mode = False
-                self.pending_format_change_obj = self.selected_text
-                self.before_format_change_state = copy.deepcopy(self.selected_text.__dict__)
-                self._update_text_format_controls(self.selected_text)
+                self._can_drag_object = (clicked_text is obj_before_press)
+                if hasattr(self, 'select_object'):
+                    self.select_object(clicked_text)
+                else:
+                    self.selected_text = clicked_text
                 if n_press >= 2 and not self.view_mode:
                     self._show_inline_editor(clicked_text, click_x=x, click_y=y)
             elif clicked_image:
-                self._close_active_form_field_editor()
-                self.selected_image = clicked_image
-                self.selected_text = None
-                self.selected_shape = None
-                self.selected_stroke = None
-                self.selected_form_field = None
-                self.selected_measurement = None
+                self._can_drag_object = (clicked_image is obj_before_press)
+                if hasattr(self, 'select_object'):
+                    self.select_object(clicked_image)
+                else:
+                    self.selected_image = clicked_image
+                    self.selected_text = None
                 if n_press >= 2 and not self.view_mode and getattr(clicked_image, 'is_patch', False):
                     self.initiate_text_over_patch(clicked_image)
                     return
             elif clicked_shape:
-                self._close_active_form_field_editor()
-                self.selected_shape = clicked_shape
-                self.selected_text = None
-                self.selected_image = None
-                self.selected_stroke = None
-                self.selected_form_field = None
-                self.selected_measurement = None
+                self._can_drag_object = (clicked_shape is obj_before_press)
+                if hasattr(self, 'select_object'):
+                    self.select_object(clicked_shape)
+                else:
+                    self.selected_shape = clicked_shape
             elif clicked_stroke:
-                self._close_active_form_field_editor()
-                self.selected_stroke = clicked_stroke
-                self.selected_shape = None
-                self.selected_text = None
-                self.selected_image = None
-                self.selected_form_field = None
-                self.selected_measurement = None
-                self._update_stroke_format_controls(self.selected_stroke)
+                self._can_drag_object = (clicked_stroke is obj_before_press)
+                if hasattr(self, 'select_object'):
+                    self.select_object(clicked_stroke)
+                else:
+                    self.selected_stroke = clicked_stroke
             elif clicked_form_field:
-                self._close_active_form_field_editor()
-                self.selected_text = None
-                self.selected_image = None
-                self.selected_shape = None
-                self.selected_stroke = None
-                self.selected_measurement = None
-                self.selected_form_field = clicked_form_field
-                self._update_form_builder_controls_for_selected()
+                self._can_drag_object = (clicked_form_field is obj_before_press)
+                if hasattr(self, 'select_object'):
+                    self.select_object(clicked_form_field)
+                else:
+                    self.selected_form_field = clicked_form_field
             elif clicked_measurement:
-                self._close_active_form_field_editor()
-                self.selected_text = None
-                self.selected_image = None
-                self.selected_shape = None
-                self.selected_stroke = None
-                self.selected_form_field = None
-                self.selected_measurement = clicked_measurement
+                self._can_drag_object = (clicked_measurement is obj_before_press)
+                if hasattr(self, 'select_object'):
+                    self.select_object(clicked_measurement)
+                else:
+                    self.selected_measurement = clicked_measurement
             else:
-                self._close_active_form_field_editor()
                 if not self.view_mode and self.doc and 0 <= self.current_page_index < pdf_handler.get_page_count(self.doc):
                     hit_word = pdf_handler.hit_test_text_word_at_pos(
                         self.doc, (page_x_unzoomed, page_y_unzoomed), page_index=self.current_page_index, visual_coords=True
@@ -11795,48 +12108,55 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             found_text.char_boxes = hit_word.get("char_boxes", [])
                             self.editable_texts.append(found_text)
 
-                        self.selected_text = found_text
-                        self.selected_image = None
-                        self.selected_shape = None
-                        self.selected_stroke = None
-                        self.selected_form_field = None
-                        self.selected_measurement = None
-                        self.word_selection_mode = False
-                        self.pending_format_change_obj = found_text
-                        self.before_format_change_state = copy.deepcopy(found_text.__dict__)
-                        self._update_text_format_controls(found_text)
+                        self._can_drag_object = (found_text is obj_before_press)
+                        if hasattr(self, 'select_object'):
+                            self.select_object(found_text)
+                        else:
+                            self.selected_text = found_text
                         if n_press >= 2:
                             self._show_inline_editor(found_text, click_x=x, click_y=y)
-                        self.pdf_view.queue_draw()
-                        self._update_ui_state()
                         return
 
-                self.selected_text = None
-                self.selected_image = None
-                self.selected_shape = None
-                self.selected_stroke = None
-                self.selected_form_field = None
-                self.selected_measurement = None
-
-            self.pdf_view.queue_draw()
-            self._update_ui_state()
+                if hasattr(self, 'deselect_all'):
+                    self.deselect_all()
+                else:
+                    self.selected_text = None
+                    self.selected_image = None
+                    self.selected_shape = None
+                    self.selected_stroke = None
+                    self.selected_form_field = None
+                    self.selected_measurement = None
+                self._can_drag_object = False
 
         elif self.tool_mode in ("measure_area", "measure_distance"):
             clicked_m = self._find_measurement_at_pos(page_x_unzoomed, page_y_unzoomed)
             if clicked_m is not None:
-                self.selected_measurement = clicked_m
-                self.selected_text = None
-                self.selected_image = None
-                self.selected_shape = None
-                self.selected_stroke = None
-                self.selected_form_field = None
+                self._can_drag_object = (clicked_m is obj_before_press)
+                if hasattr(self, 'select_object'):
+                    self.select_object(clicked_m)
+                else:
+                    self.selected_measurement = clicked_m
                 self.temp_polygon_vertices = []
                 self.temp_measurement_line = None
                 self.temp_measurement_rect = None
                 self.last_mouse_page_pos = None
-                self.pdf_view.queue_draw()
-                self._update_ui_state()
                 return
+
+        elif self.tool_mode == "form_builder":
+            unrot_px, unrot_py = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed)
+            clicked_form_field = self._find_form_field_at_pos(unrot_px, unrot_py)
+            if clicked_form_field:
+                self._can_drag_object = (clicked_form_field is obj_before_press)
+                if hasattr(self, 'select_object'):
+                    self.select_object(clicked_form_field)
+                else:
+                    self.selected_form_field = clicked_form_field
+            else:
+                if hasattr(self, 'deselect_all'):
+                    self.deselect_all()
+                else:
+                    self.selected_form_field = None
+                self._can_drag_object = False
 
             if self.tool_mode == "measure_area":
                 unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed)
@@ -13458,22 +13778,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._close_active_form_field_editor()
             clicked_form_field = self._find_form_field_at_pos(unrot_px, unrot_py)
             if clicked_form_field:
-                self.selected_form_field = clicked_form_field
-                self.selected_text = None
-                self.selected_image = None
-                self.selected_shape = None
-                self.selected_stroke = None
-                self._update_form_builder_controls_for_selected()
+                is_already_selected = (
+                    self.selected_form_field is clicked_form_field and
+                    getattr(self, '_can_drag_object', None) is not False
+                )
+                self.select_object(clicked_form_field)
                 
-                self.dragged_object = clicked_form_field
-                self.drag_threshold_passed = False
-                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-                self.drag_start_pos = (start_x, start_y)
-                self.drag_begin_state = copy.deepcopy(clicked_form_field.__dict__)
-                if not hasattr(clicked_form_field, 'original_bbox') or not clicked_form_field.original_bbox:
-                    clicked_form_field.original_bbox = clicked_form_field.bbox
-                x1, y1, _, _ = clicked_form_field.bbox
-                self.drag_object_start_pos = (x1, y1)
+                if is_already_selected:
+                    self.dragged_object = clicked_form_field
+                    self.drag_threshold_passed = False
+                    gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+                    self.drag_start_pos = (start_x, start_y)
+                    self.drag_begin_state = copy.deepcopy(clicked_form_field.__dict__)
+                    if not hasattr(clicked_form_field, 'original_bbox') or not clicked_form_field.original_bbox:
+                        clicked_form_field.original_bbox = clicked_form_field.bbox
+                    x1, y1, _, _ = clicked_form_field.bbox
+                    self.drag_object_start_pos = (x1, y1)
+                else:
+                    self.dragged_object = None
+                    self._can_drag_object = False
+                    gesture.set_state(Gtk.EventSequenceState.DENIED)
                 self.pdf_view.queue_draw()
                 return
 
@@ -13495,16 +13819,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif self.tool_mode in ("measure_distance", "measure_area"):
             clicked_m = self._find_measurement_at_pos(page_x, page_y)
             if clicked_m:
-                self.selected_measurement = clicked_m
+                is_already_selected = (
+                    self.selected_measurement is clicked_m and
+                    getattr(self, '_can_drag_object', None) is not False
+                )
+                self.select_object(clicked_m)
                 self.temp_polygon_vertices = []
                 self.temp_measurement_line = None
                 self.temp_measurement_rect = None
                 self.last_mouse_page_pos = None
-                self.dragged_object = clicked_m
-                self.drag_threshold_passed = False
-                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-                self.drag_start_pos = (start_x, start_y)
-                self.drag_begin_state = copy.deepcopy(clicked_m.__dict__)
+                if is_already_selected:
+                    self.dragged_object = clicked_m
+                    self.drag_threshold_passed = False
+                    gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+                    self.drag_start_pos = (start_x, start_y)
+                    self.drag_begin_state = copy.deepcopy(clicked_m.__dict__)
+                else:
+                    self.dragged_object = None
+                    self._can_drag_object = False
+                    gesture.set_state(Gtk.EventSequenceState.DENIED)
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
                 return
@@ -13521,7 +13854,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if self.tool_mode in ("drag", "select"):
             self._close_active_form_field_editor()
-            curr_selected = (
+            curr_selected = self.get_selected_object() if hasattr(self, 'get_selected_object') else (
                 getattr(self, 'selected_text', None) or 
                 getattr(self, 'selected_image', None) or 
                 getattr(self, 'selected_shape', None) or 
@@ -13542,61 +13875,40 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if (min(bx1, bx2) - padding) <= unrot_x <= (max(bx1, bx2) + padding) and (min(by1, by2) - padding) <= unrot_y <= (max(by1, by2) + padding):
                     target_obj = curr_selected
 
-            if not target_obj:
-                target_obj = (self._find_text_at_pos(page_x, page_y) or 
-                              self._find_image_at_pos(page_x, page_y) or 
-                              self._find_shape_at_pos(page_x, page_y) or 
-                              self._find_stroke_at_pos(page_x, page_y) or
-                              self._find_form_field_at_pos(page_x, page_y) or
-                              self._find_measurement_at_pos(page_x, page_y))
-
-            if target_obj:
+            if target_obj is not None:
+                can_drag = (getattr(self, '_can_drag_object', None) is not False)
+                if not can_drag:
+                    self.dragged_object = None
+                    gesture.set_state(Gtk.EventSequenceState.DENIED)
+                    return
                 self.dragged_object = target_obj
-                if isinstance(target_obj, EditableText):
-                    self.selected_text = target_obj
-                    self.selected_image = None
-                    self.selected_shape = None
-                    self.selected_stroke = None
-                    self.selected_form_field = None
-                    self.selected_measurement = None
-                elif isinstance(target_obj, EditableImage):
-                    self.selected_image = target_obj
-                    self.selected_text = None
-                    self.selected_shape = None
-                    self.selected_stroke = None
-                    self.selected_form_field = None
-                    self.selected_measurement = None
-                elif isinstance(target_obj, EditableShape):
-                    self.selected_shape = target_obj
-                    self.selected_text = None
-                    self.selected_image = None
-                    self.selected_stroke = None
-                    self.selected_form_field = None
-                    self.selected_measurement = None
-                elif isinstance(target_obj, EditableStroke):
-                    self.selected_stroke = target_obj
-                    self.selected_text = None
-                    self.selected_image = None
-                    self.selected_shape = None
-                    self.selected_form_field = None
-                    self.selected_measurement = None
-                elif isinstance(target_obj, AcroFormField):
-                    self.selected_form_field = target_obj
-                    self.selected_text = None
-                    self.selected_image = None
-                    self.selected_shape = None
-                    self.selected_stroke = None
-                    self.selected_measurement = None
-                elif isinstance(target_obj, MeasurementObject):
-                    self.selected_measurement = target_obj
-                    self.selected_text = None
-                    self.selected_image = None
-                    self.selected_shape = None
-                    self.selected_stroke = None
-                    self.selected_form_field = None
             else:
-                gesture.set_state(Gtk.EventSequenceState.DENIED)
-                return
+                hit_obj = self._find_any_object_at_pos(page_x, page_y) if hasattr(self, '_find_any_object_at_pos') else (
+                    (self._find_text_at_pos(page_x, page_y) if hasattr(self, '_find_text_at_pos') else None) or
+                    (self._find_image_at_pos(page_x, page_y) if hasattr(self, '_find_image_at_pos') else None) or
+                    (self._find_shape_at_pos(page_x, page_y) if hasattr(self, '_find_shape_at_pos') else None) or
+                    (self._find_stroke_at_pos(page_x, page_y) if hasattr(self, '_find_stroke_at_pos') else None) or
+                    (self._find_form_field_at_pos(page_x, page_y) if hasattr(self, '_find_form_field_at_pos') else None) or
+                    (self._find_measurement_at_pos(page_x, page_y) if hasattr(self, '_find_measurement_at_pos') else None)
+                )
+                if hit_obj:
+                    # First click selects the object, movement is disabled
+                    if hasattr(self, 'select_object'):
+                        self.select_object(hit_obj)
+                    else:
+                        self.selected_text = hit_obj if isinstance(hit_obj, EditableText) else None
+                        self.selected_image = hit_obj if isinstance(hit_obj, EditableImage) else None
+                        self.selected_shape = hit_obj if isinstance(hit_obj, EditableShape) else None
+                        self.selected_stroke = hit_obj if isinstance(hit_obj, EditableStroke) else None
+                        self.selected_form_field = hit_obj if isinstance(hit_obj, AcroFormField) else None
+                    self.dragged_object = None
+                    self._can_drag_object = False
+                    gesture.set_state(Gtk.EventSequenceState.DENIED)
+                    return
+                else:
+                    self.dragged_object = None
+                    gesture.set_state(Gtk.EventSequenceState.DENIED)
+                    return
         else:
             gesture.set_state(Gtk.EventSequenceState.DENIED)
             return
@@ -14057,6 +14369,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def on_drag_end(self, gesture, offset_x, offset_y):
         """Finalize canvas drag interaction, committing created or modified objects to undo history."""
+        self._can_drag_object = None
         if self.view_mode:
             if getattr(self, 'dragged_sticky_note', None):
                 note = self.dragged_sticky_note
@@ -14511,6 +14824,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not self.dragged_object or not hasattr(self, 'drag_begin_state'):
             if self.dragged_object:
                 self.dragged_object = None
+            self._can_drag_object = None
             self.resize_handle = None
             self.resize_start_bbox = None
             if hasattr(self, 'rotate_center'):
@@ -14533,6 +14847,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         dragged_obj_ref = self.dragged_object
         self.dragged_object = None
+        self._can_drag_object = None
         self.resize_handle = None
         self.resize_start_bbox = None
         del self.drag_begin_state

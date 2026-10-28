@@ -129,6 +129,9 @@ class MockCorrectionWindow:
     def commit_pending_format_change(self):
         pass
 
+    get_selected_object = PdfEditorWindow.get_selected_object
+    select_object = PdfEditorWindow.select_object
+
     def initiate_text_over_patch(self, patch_obj):
         return PdfEditorWindow.initiate_text_over_patch(self, patch_obj)
 
