@@ -5258,74 +5258,146 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          dirty_rect[2] * self.zoom_level, dirty_rect[3] * self.zoom_level)
             cr.clip()
 
-        use_async = getattr(self, 'async_page_rendering', True)
-        cached_surf = None
-        if use_async:
-            cached_surf = pdf_handler.peek_page_cairo_surface(self.doc, page_index, self.zoom_level)
-        else:
-            cached_surf = pdf_handler.get_page_cairo_surface(self.doc, page_index, self.zoom_level)
+        tiler = pdf_handler.get_tiled_page_renderer()
+        page_unscaled_w = page_w / self.zoom_level
+        page_unscaled_h = page_h / self.zoom_level
+        use_tiling = tiler.is_tiling_required(page_unscaled_w, page_unscaled_h, self.zoom_level)
 
-        if (
-            cached_surf is not None
-            and getattr(cached_surf, 'get_width', lambda: 0)() > 0
-            and getattr(cached_surf, 'get_height', lambda: 0)() > 0
-        ):
-            cr.set_source_surface(cached_surf, 0, 0)
-            cr.paint()
-        else:
-            if use_async and self.doc and not getattr(self.doc, 'is_closed', False):
-                is_gesturing = getattr(self, 'is_zoom_gesture_active', False)
-                if not is_gesturing:
-                    def _on_async_page_ready(p_idx, z_val, surf):
+        if use_tiling:
+            vp_rect = self.get_visible_viewport_rect()
+            visible_tiles = tiler.get_visible_tile_coords(
+                page_offset_x, page_offset_y, page_unscaled_w, page_unscaled_h,
+                self.zoom_level, vp_rect, margin_tiles=1
+            )
+            active_tile_set = set(visible_tiles)
+
+            for col, row in visible_tiles:
+                tx0, ty0, tw, th = tiler.get_tile_pixel_rect(
+                    col, row, page_unscaled_w, page_unscaled_h, self.zoom_level
+                )
+                tile_surf = tiler.peek_tile(self.doc, page_index, self.zoom_level, col, row)
+                if (
+                    tile_surf is not None
+                    and getattr(tile_surf, 'get_width', lambda: 0)() > 0
+                    and getattr(tile_surf, 'get_height', lambda: 0)() > 0
+                ):
+                    cr.save()
+                    cr.set_source_surface(tile_surf, tx0, ty0)
+                    cr.rectangle(tx0, ty0, tw, th)
+                    cr.fill()
+                    cr.restore()
+                else:
+                    def _on_tile_ready(c, r, surf):
                         if not self.doc or getattr(self.doc, 'is_closed', False):
                             return
-                        if getattr(self, '_active_session', None) is None:
-                            return
-                        is_visible = False
-                        if getattr(self, 'continuous_scroll', False):
-                            is_visible = (p_idx in self.get_visible_page_indices() or p_idx == self.current_page_index)
-                        else:
-                            is_visible = (p_idx == self.current_page_index)
-                        if is_visible:
-                            # Redraw if target zoom arrived or low-res preview arrived before target
-                            if abs(self.zoom_level - z_val) < 0.001 or pdf_handler.peek_page_cairo_surface(self.doc, p_idx, self.zoom_level) is None:
-                                if hasattr(self, 'pdf_view') and self.pdf_view:
-                                    self.pdf_view.queue_draw()
+                        if hasattr(self, 'pdf_view') and self.pdf_view:
+                            self.pdf_view.queue_draw()
 
-                    pdf_handler.request_page_cairo_surface(
-                        self.doc, page_index, self.zoom_level,
-                        callback=_on_async_page_ready,
-                        progressive=True
+                    tiler.request_tile(
+                        self.doc, page_index, self.zoom_level, col, row, callback=_on_tile_ready
                     )
 
-                rendered_fallback = False
-                best_match = pdf_handler.get_page_rasterizer_pool().find_best_cached_surface(self.doc, page_index, self.zoom_level)
-                if best_match is not None:
-                    alt_surf, alt_zoom = best_match
-                    if alt_zoom > 0:
-                        scale_factor = self.zoom_level / alt_zoom
-                        cr.save()
-                        cr.scale(scale_factor, scale_factor)
-                        cr.set_source_surface(alt_surf, 0, 0)
-                        pat = cr.get_source()
-                        if pat is not None:
-                            pat.set_filter(cairo.FILTER_BILINEAR)
-                        cr.paint()
-                        cr.restore()
-                        rendered_fallback = True
+                    best_match = pdf_handler.get_page_rasterizer_pool().find_best_cached_surface(
+                        self.doc, page_index, self.zoom_level
+                    )
+                    rendered_tile_fallback = False
+                    if best_match is not None:
+                        alt_surf, alt_zoom = best_match
+                        if alt_zoom > 0:
+                            scale_factor = self.zoom_level / alt_zoom
+                            cr.save()
+                            cr.rectangle(tx0, ty0, tw, th)
+                            cr.clip()
+                            cr.scale(scale_factor, scale_factor)
+                            cr.set_source_surface(alt_surf, 0, 0)
+                            pat = cr.get_source()
+                            if pat is not None:
+                                pat.set_filter(cairo.FILTER_BILINEAR)
+                            cr.paint()
+                            cr.restore()
+                            rendered_tile_fallback = True
 
-                if not rendered_fallback:
-                    cr.save()
-                    cr.set_source_rgb(1.0, 1.0, 1.0)
-                    cr.rectangle(0, 0, page_w, page_h)
-                    cr.fill()
-                    cr.set_source_rgb(0.85, 0.85, 0.85)
-                    cr.set_line_width(1.0)
-                    cr.rectangle(0, 0, page_w, page_h)
-                    cr.stroke()
-                    cr.restore()
+                    if not rendered_tile_fallback:
+                        cr.save()
+                        cr.set_source_rgb(1.0, 1.0, 1.0)
+                        cr.rectangle(tx0, ty0, tw, th)
+                        cr.fill()
+                        cr.set_source_rgb(0.9, 0.9, 0.9)
+                        cr.set_line_width(1.0)
+                        cr.rectangle(tx0, ty0, tw, th)
+                        cr.stroke()
+                        cr.restore()
+
+            tiler.prune_distant_tiles(self.doc, page_index, self.zoom_level, active_tile_set)
+        else:
+            use_async = getattr(self, 'async_page_rendering', True)
+            cached_surf = None
+            if use_async:
+                cached_surf = pdf_handler.peek_page_cairo_surface(self.doc, page_index, self.zoom_level)
             else:
-                pdf_handler.draw_page_to_cairo(cr, self.doc, page_index, self.zoom_level)
+                cached_surf = pdf_handler.get_page_cairo_surface(self.doc, page_index, self.zoom_level)
+
+            if (
+                cached_surf is not None
+                and getattr(cached_surf, 'get_width', lambda: 0)() > 0
+                and getattr(cached_surf, 'get_height', lambda: 0)() > 0
+            ):
+                cr.set_source_surface(cached_surf, 0, 0)
+                cr.paint()
+            else:
+                if use_async and self.doc and not getattr(self.doc, 'is_closed', False):
+                    is_gesturing = getattr(self, 'is_zoom_gesture_active', False)
+                    if not is_gesturing:
+                        def _on_async_page_ready(p_idx, z_val, surf):
+                            if not self.doc or getattr(self.doc, 'is_closed', False):
+                                return
+                            if getattr(self, '_active_session', None) is None:
+                                return
+                            is_visible = False
+                            if getattr(self, 'continuous_scroll', False):
+                                is_visible = (p_idx in self.get_visible_page_indices() or p_idx == self.current_page_index)
+                            else:
+                                is_visible = (p_idx == self.current_page_index)
+                            if is_visible:
+                                # Redraw if target zoom arrived or low-res preview arrived before target
+                                if abs(self.zoom_level - z_val) < 0.001 or pdf_handler.peek_page_cairo_surface(self.doc, p_idx, self.zoom_level) is None:
+                                    if hasattr(self, 'pdf_view') and self.pdf_view:
+                                        self.pdf_view.queue_draw()
+
+                        pdf_handler.request_page_cairo_surface(
+                            self.doc, page_index, self.zoom_level,
+                            callback=_on_async_page_ready,
+                            progressive=True
+                        )
+
+                    rendered_fallback = False
+                    best_match = pdf_handler.get_page_rasterizer_pool().find_best_cached_surface(self.doc, page_index, self.zoom_level)
+                    if best_match is not None:
+                        alt_surf, alt_zoom = best_match
+                        if alt_zoom > 0:
+                            scale_factor = self.zoom_level / alt_zoom
+                            cr.save()
+                            cr.scale(scale_factor, scale_factor)
+                            cr.set_source_surface(alt_surf, 0, 0)
+                            pat = cr.get_source()
+                            if pat is not None:
+                                pat.set_filter(cairo.FILTER_BILINEAR)
+                            cr.paint()
+                            cr.restore()
+                            rendered_fallback = True
+
+                    if not rendered_fallback:
+                        cr.save()
+                        cr.set_source_rgb(1.0, 1.0, 1.0)
+                        cr.rectangle(0, 0, page_w, page_h)
+                        cr.fill()
+                        cr.set_source_rgb(0.85, 0.85, 0.85)
+                        cr.set_line_width(1.0)
+                        cr.rectangle(0, 0, page_w, page_h)
+                        cr.stroke()
+                        cr.restore()
+                else:
+                    pdf_handler.draw_page_to_cairo(cr, self.doc, page_index, self.zoom_level)
         cr.restore()
 
         page = self.doc[page_index]

@@ -37,7 +37,7 @@ import itertools
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, List, Dict, Any, Tuple, Union, Set
+from typing import Optional, List, Dict, Any, Tuple, Union, Set, Callable
 try:
     import anyconvert
     from anyconvert import ConversionMode
@@ -209,20 +209,25 @@ _cairo_page_cache = BoundedLRUCache(max_items=6, max_bytes=120 * 1024 * 1024)
 _stale_page_cache: Dict[Tuple[int, int], Tuple[cairo.ImageSurface, float]] = {}
 _stale_page_cache_lock = threading.Lock()
 _page_rasterizer_pool = None
+_tiled_page_renderer = None
 
 def configure_memory_limits(is_eco_mode: bool):
     """Dynamically adjust internal page cache budget based on Eco / Low-Spec mode."""
-    global _cairo_page_cache, _page_rasterizer_pool
+    global _cairo_page_cache, _page_rasterizer_pool, _tiled_page_renderer
     if is_eco_mode:
         _cairo_page_cache.set_limits(max_items=3, max_bytes=40 * 1024 * 1024)
+        if _tiled_page_renderer is not None:
+            _tiled_page_renderer._tile_cache.set_limits(max_items=32, max_bytes=40 * 1024 * 1024)
     else:
         _cairo_page_cache.set_limits(max_items=6, max_bytes=120 * 1024 * 1024)
+        if _tiled_page_renderer is not None:
+            _tiled_page_renderer._tile_cache.set_limits(max_items=64, max_bytes=80 * 1024 * 1024)
     if _page_rasterizer_pool is not None:
         _page_rasterizer_pool.set_eco_mode(is_eco_mode)
 
 def invalidate_page_cache(doc=None, page_index=None):
     """Invalidate cached Cairo page surfaces and internal document page cache."""
-    global _cairo_page_cache, _stale_page_cache, _page_rasterizer_pool
+    global _cairo_page_cache, _stale_page_cache, _page_rasterizer_pool, _tiled_page_renderer
     if _page_rasterizer_pool is not None:
         if doc is None:
             _page_rasterizer_pool.bump_generation()
@@ -230,6 +235,8 @@ def invalidate_page_cache(doc=None, page_index=None):
         else:
             _page_rasterizer_pool.bump_generation(id(doc))
             _page_rasterizer_pool.cancel_all(doc)
+    if _tiled_page_renderer is not None:
+        _tiled_page_renderer.invalidate_doc_tiles(doc, page_index)
     if doc is None:
         _cairo_page_cache.clear()
         with _stale_page_cache_lock:
@@ -673,6 +680,259 @@ def peek_page_cairo_surface(doc, page_index, zoom_level):
 
 def request_page_cairo_surface(doc, page_index, zoom_level, callback=None, defer: bool = True, progressive: bool = False):
     return get_page_rasterizer_pool().request_surface(doc, page_index, zoom_level, callback=callback, defer=defer, progressive=progressive)
+
+
+class TiledPageRenderer:
+    """Sub-viewport tile-based virtualized renderer for huge PDF pages and extreme zoom levels.
+
+    Prevents GPU texture limit overruns and out-of-memory aborts on large pages (A0/A1 blueprints)
+    and high zoom levels (400%-1000%) by decomposing pages into 512x512 pixel tiles and only
+    rasterizing and retaining in memory the tiles that intersect the visible viewport (+1 tile margin).
+    """
+    DEFAULT_TILE_SIZE = 512
+    TILE_DIMENSION_THRESHOLD = 2500
+    TILE_PIXEL_AREA_THRESHOLD = 6_250_000
+
+    def __init__(self, tile_size: int = DEFAULT_TILE_SIZE, max_cached_tiles: int = 64, max_cache_bytes: int = 80 * 1024 * 1024):
+        self.tile_size = int(tile_size)
+        self._tile_cache = BoundedLRUCache(max_items=max_cached_tiles, max_bytes=max_cache_bytes)
+        self._lock = threading.RLock()
+        self._pending_callbacks: Dict[Tuple[int, int, float, int, int], List[Callable]] = {}
+        self._active_futures: Dict[Tuple[int, int, float, int, int], Any] = {}
+        self._doc_generations: Dict[int, int] = {}
+        self._executor = None
+
+    def _get_executor(self):
+        if self._executor is None:
+            pool = get_page_rasterizer_pool()
+            if pool and hasattr(pool, '_executor'):
+                self._executor = pool._executor
+            else:
+                self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="TileWorker")
+        return self._executor
+
+    def is_tiling_required(self, page_width_pt: float, page_height_pt: float, zoom_level: float) -> bool:
+        """Return True if rasterized dimensions exceed safe single-surface texture and memory ceilings."""
+        pw_px = float(page_width_pt) * float(zoom_level)
+        ph_px = float(page_height_pt) * float(zoom_level)
+        return (pw_px > self.TILE_DIMENSION_THRESHOLD or 
+                ph_px > self.TILE_DIMENSION_THRESHOLD or 
+                (pw_px * ph_px) > self.TILE_PIXEL_AREA_THRESHOLD)
+
+    def get_tile_counts(self, page_width_pt: float, page_height_pt: float, zoom_level: float) -> Tuple[int, int]:
+        """Return (num_cols, num_rows) grid dimension for the given page geometry and zoom."""
+        pw_px = max(1, int(math.ceil(float(page_width_pt) * float(zoom_level))))
+        ph_px = max(1, int(math.ceil(float(page_height_pt) * float(zoom_level))))
+        num_cols = max(1, int(math.ceil(pw_px / self.tile_size)))
+        num_rows = max(1, int(math.ceil(ph_px / self.tile_size)))
+        return num_cols, num_rows
+
+    def get_tile_pixel_rect(self, col: int, row: int, page_width_pt: float, page_height_pt: float, zoom_level: float) -> Tuple[float, float, float, float]:
+        """Return (x0, y0, width, height) in page pixel space for tile (col, row)."""
+        pw_px = float(page_width_pt) * float(zoom_level)
+        ph_px = float(page_height_pt) * float(zoom_level)
+        tx0 = float(col * self.tile_size)
+        ty0 = float(row * self.tile_size)
+        tx1 = min(pw_px, float((col + 1) * self.tile_size))
+        ty1 = min(ph_px, float((row + 1) * self.tile_size))
+        return (tx0, ty0, max(1.0, tx1 - tx0), max(1.0, ty1 - ty0))
+
+    def get_visible_tile_coords(self, page_canvas_x: float, page_canvas_y: float,
+                                page_width_pt: float, page_height_pt: float,
+                                zoom_level: float, viewport_rect: Tuple[float, float, float, float],
+                                margin_tiles: int = 1) -> List[Tuple[int, int]]:
+        """Return list of (col, row) coordinates intersecting visible viewport with buffer margin."""
+        scroll_x, scroll_y, vp_w, vp_h = viewport_rect
+        pw_px = float(page_width_pt) * float(zoom_level)
+        ph_px = float(page_height_pt) * float(zoom_level)
+        num_cols, num_rows = self.get_tile_counts(page_width_pt, page_height_pt, zoom_level)
+
+        vis_x0 = max(0.0, scroll_x - page_canvas_x)
+        vis_y0 = max(0.0, scroll_y - page_canvas_y)
+        vis_x1 = min(pw_px, (scroll_x + vp_w) - page_canvas_x)
+        vis_y1 = min(ph_px, (scroll_y + vp_h) - page_canvas_y)
+
+        if vis_x1 <= vis_x0 or vis_y1 <= vis_y0:
+            return []
+
+        min_col = max(0, int(math.floor(vis_x0 / self.tile_size)) - margin_tiles)
+        max_col = min(num_cols - 1, int(math.floor(vis_x1 / self.tile_size)) + margin_tiles)
+        min_row = max(0, int(math.floor(vis_y0 / self.tile_size)) - margin_tiles)
+        max_row = min(num_rows - 1, int(math.floor(vis_y1 / self.tile_size)) + margin_tiles)
+
+        tiles = []
+        for r in range(min_row, max_row + 1):
+            for c in range(min_col, max_col + 1):
+                tiles.append((c, r))
+        return tiles
+
+    def peek_tile(self, doc, page_index: int, zoom_level: float, col: int, row: int) -> Optional[cairo.ImageSurface]:
+        """Return cached tile Cairo surface if immediately available in LRU cache, otherwise None."""
+        if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
+            return None
+        doc_id = id(doc)
+        zoom_rounded = round(float(zoom_level), 4)
+        tile_key = (doc_id, page_index, zoom_rounded, col, row)
+        with self._lock:
+            return self._tile_cache.get(tile_key)
+
+    def render_tile(self, doc, page_index: int, zoom_level: float, col: int, row: int) -> Optional[cairo.ImageSurface]:
+        """Synchronously render and cache single tile at (col, row)."""
+        if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
+            return None
+        doc_id = id(doc)
+        zoom_rounded = round(float(zoom_level), 4)
+        tile_key = (doc_id, page_index, zoom_rounded, col, row)
+
+        with self._lock:
+            cached = self._tile_cache.get(tile_key)
+            if cached is not None:
+                return cached
+
+        try:
+            lock = get_doc_lock(doc)
+            if lock:
+                with lock:
+                    page = doc.load_page(page_index)
+                    tx0 = float(col * self.tile_size)
+                    ty0 = float(row * self.tile_size)
+                    tx1 = min(page.rect.width * zoom_level, float((col + 1) * self.tile_size))
+                    ty1 = min(page.rect.height * zoom_level, float((row + 1) * self.tile_size))
+                    clip_rect = fitz.Rect(tx0 / zoom_level, ty0 / zoom_level, tx1 / zoom_level, ty1 / zoom_level)
+                    zoom_mat = fitz.Matrix(zoom_level, zoom_level)
+                    pix = page.get_pixmap(matrix=zoom_mat, clip=clip_rect, alpha=False)
+            else:
+                page = doc.load_page(page_index)
+                tx0 = float(col * self.tile_size)
+                ty0 = float(row * self.tile_size)
+                tx1 = min(page.rect.width * zoom_level, float((col + 1) * self.tile_size))
+                ty1 = min(page.rect.height * zoom_level, float((row + 1) * self.tile_size))
+                clip_rect = fitz.Rect(tx0 / zoom_level, ty0 / zoom_level, tx1 / zoom_level, ty1 / zoom_level)
+                zoom_mat = fitz.Matrix(zoom_level, zoom_level)
+                pix = page.get_pixmap(matrix=zoom_mat, clip=clip_rect, alpha=False)
+
+            surf, _ = pixmap_to_cairo_surface(pix)
+            if surf is not None:
+                with self._lock:
+                    self._tile_cache[tile_key] = surf
+                return surf
+        except Exception as e:
+            print(f"Error rendering tile ({col}, {row}) for page {page_index}: {e}")
+            return None
+
+    def request_tile(self, doc, page_index: int, zoom_level: float, col: int, row: int, callback: Optional[Callable] = None, defer: bool = True):
+        """Submit background tile rasterization request."""
+        if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
+            return
+
+        doc_id = id(doc)
+        zoom_rounded = round(float(zoom_level), 4)
+        task_key = (doc_id, page_index, zoom_rounded, col, row)
+
+        cached = self.peek_tile(doc, page_index, zoom_level, col, row)
+        if cached is not None:
+            if callback:
+                def _dispatch_cached():
+                    try:
+                        callback(col, row, cached)
+                    except Exception:
+                        pass
+                    return False
+                GLib.idle_add(_dispatch_cached)
+            return
+
+        with self._lock:
+            gen = self._doc_generations.get(doc_id, 0)
+            if task_key in self._pending_callbacks:
+                if callback:
+                    self._pending_callbacks[task_key].append(callback)
+                return
+            self._pending_callbacks[task_key] = [callback] if callback else []
+
+        def _worker(d, p_idx, z_val, c, r, t_key, expected_gen):
+            try:
+                if getattr(d, 'is_closed', False):
+                    return
+                surf = self.render_tile(d, p_idx, z_val, c, r)
+            except Exception:
+                surf = None
+
+            with self._lock:
+                cbs = self._pending_callbacks.pop(t_key, [])
+                self._active_futures.pop(t_key, None)
+                cur_gen = self._doc_generations.get(doc_id, 0)
+                if cur_gen != expected_gen or getattr(d, 'is_closed', False):
+                    return
+
+            if cbs and surf is not None:
+                def _dispatch_all():
+                    for cb in cbs:
+                        try:
+                            cb(c, r, surf)
+                        except Exception:
+                            pass
+                    return False
+                GLib.idle_add(_dispatch_all)
+
+        def _do_submit():
+            with self._lock:
+                if task_key not in self._pending_callbacks:
+                    return False
+                executor = self._get_executor()
+                future = executor.submit(_worker, doc, page_index, zoom_rounded, col, row, task_key, gen)
+                self._active_futures[task_key] = future
+            return False
+
+        if defer:
+            GLib.idle_add(_do_submit)
+        else:
+            _do_submit()
+
+    def prune_distant_tiles(self, doc, page_index: int, zoom_level: float, active_tiles: Set[Tuple[int, int]]):
+        """Evict off-screen tiles exceeding cache retention limits."""
+        if not doc:
+            return
+        doc_id = id(doc)
+        zoom_rounded = round(float(zoom_level), 4)
+        with self._lock:
+            keys_to_remove = []
+            for k in list(self._tile_cache.keys()):
+                if k[0] == doc_id and k[1] == page_index and abs(k[2] - zoom_rounded) < 0.001:
+                    if (k[3], k[4]) not in active_tiles:
+                        keys_to_remove.append(k)
+            if len(keys_to_remove) > 32:
+                for k in keys_to_remove[:-32]:
+                    self._tile_cache.pop(k, None)
+
+    def invalidate_doc_tiles(self, doc=None, page_index=None):
+        """Invalidate cached tiles and cancel pending background tile rasterizations."""
+        with self._lock:
+            if doc is None:
+                self._tile_cache.clear()
+                self._pending_callbacks.clear()
+                self._active_futures.clear()
+                self._doc_generations.clear()
+                return
+            doc_id = id(doc)
+            self._doc_generations[doc_id] = self._doc_generations.get(doc_id, 0) + 1
+            for k in list(self._pending_callbacks.keys()):
+                if k[0] == doc_id and (page_index is None or k[1] == page_index):
+                    self._pending_callbacks.pop(k, None)
+            for k in list(self._active_futures.keys()):
+                if k[0] == doc_id and (page_index is None or k[1] == page_index):
+                    fut = self._active_futures.pop(k, None)
+                    if fut and not fut.running():
+                        fut.cancel()
+            for k in list(self._tile_cache.keys()):
+                if k[0] == doc_id and (page_index is None or k[1] == page_index):
+                    self._tile_cache.pop(k, None)
+
+
+def get_tiled_page_renderer() -> TiledPageRenderer:
+    global _tiled_page_renderer
+    if _tiled_page_renderer is None:
+        _tiled_page_renderer = TiledPageRenderer()
+    return _tiled_page_renderer
 
 def _get_font_args_for_pymupdf(text_obj):
     """Get the font args for pymupdf."""
