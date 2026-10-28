@@ -26,7 +26,7 @@ except ImportError:
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Gio, GLib, Adw, Gdk, GdkPixbuf, Pango, GObject, PangoCairo
+from gi.repository import Gtk, Gio, GLib, Adw, Gdk, GdkPixbuf, Pango, GObject, PangoCairo, Graphene
 
 from . import constants
 from . import pdf_handler
@@ -108,6 +108,55 @@ class UniformPageOffsets(list):
 
     def copy(self):
         return list(self)
+
+
+class VirtualDrawingArea(Gtk.DrawingArea):
+    """Sub-viewport virtualized DrawingArea for massive documents and extreme zoom levels.
+
+    Instead of allocating an unbounded Cairo surface for the entire canvas height
+    (which exhausts GPU textures and triggers GSK/Cairo aborts on large multi-page PDFs),
+    VirtualDrawingArea dynamically clips snapshot Cairo bounds to the visible viewport
+    rectangle queried from get_viewport_rect_cb().
+    """
+    __gtype_name__ = 'VirtualDrawingArea'
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.get_viewport_rect_cb = None
+        self._user_draw_func = None
+
+    def set_draw_func(self, func, user_data=None):
+        """Set the draw function called during snapshotting."""
+        self._user_draw_func = func
+
+    def do_snapshot(self, snapshot):
+        """Render virtualized snapshot clipped strictly to the active viewport."""
+        w = self.get_width()
+        h = self.get_height()
+        if w <= 0 or h <= 0:
+            return
+
+        if self.get_viewport_rect_cb:
+            try:
+                vx, vy, vw, vh = self.get_viewport_rect_cb()
+                margin = 80.0
+                clip_x = max(0.0, float(vx) - margin)
+                clip_y = max(0.0, float(vy) - margin)
+                clip_w = max(1.0, min(float(w) - clip_x, float(vw) + margin * 2.0))
+                clip_h = max(1.0, min(float(h) - clip_y, float(vh) + margin * 2.0))
+                rect = Graphene.Rect().init(clip_x, clip_y, clip_w, clip_h)
+            except Exception:
+                rect = Graphene.Rect().init(0, 0, w, h)
+        else:
+            rect = Graphene.Rect().init(0, 0, w, h)
+
+        cr = snapshot.append_cairo(rect)
+        if cr is not None and self._user_draw_func:
+            try:
+                self._user_draw_func(self, cr, w, h)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
 
 
 class StickyNotePopover(Gtk.Popover):
@@ -2031,8 +2080,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         v_adj = self.pdf_scroll.get_vadjustment()
         if v_adj:
             v_adj.connect("value-changed", self._on_canvas_scrolled)
-        self.pdf_view = Gtk.DrawingArea(content_width=1, content_height=1,
-                                        hexpand=True, vexpand=True)
+        self.pdf_view = VirtualDrawingArea(content_width=1, content_height=1,
+                                           hexpand=True, vexpand=True)
+        self.pdf_view.get_viewport_rect_cb = self.get_visible_viewport_rect
         self.pdf_view.set_draw_func(self.draw_pdf_page)
         self.pdf_view.add_css_class('pdf-view')
         self.pdf_view.set_focusable(True)
