@@ -4632,6 +4632,9 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
                  exclude_obj=None, all_strokes=None, all_measurements=None,
                  all_sticky_notes=None):
     """Re-render page from snapshot applying all active editable objects."""
+    key = (id(doc), page_num)
+    if key not in _page_snapshots:
+        save_page_snapshot(doc, page_num, force=True)
     if not restore_page_from_snapshot(doc, page_num):
         print(f"Warning: no snapshot for page {page_num}, skipping restore")
     try:
@@ -4728,6 +4731,9 @@ def insert_blank_page(doc, page_index=None, width=None, height=None):
             doc.new_page(pno=target_pno, width=width, height=height)
         else:
             doc.new_page(width=width, height=height)
+            target_pno = doc.page_count - 1
+
+        save_page_snapshot(doc, target_pno, force=True)
 
         invalidate_page_cache(doc)
         return True, _("success_blank_page_added", doc.page_count)

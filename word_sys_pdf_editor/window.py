@@ -5173,8 +5173,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._scroll_tracker._last_velocity = -200.0
         if self.doc and old_page_idx is not None and (0 <= old_page_idx < pdf_handler.get_page_count(self.doc)):
             if old_page_idx != page_index:
-                if reload_objects:
-                    pdf_handler.save_page_snapshot(self.doc, old_page_idx, force=True)
+                old_key = (id(self.doc), old_page_idx)
+                if old_key not in pdf_handler._page_snapshots:
+                    pdf_handler.save_page_snapshot(self.doc, old_page_idx)
                 self._stash_page_objects(old_page_idx)
                 if abs(page_index - old_page_idx) > 2:
                     gc.collect(1)
@@ -5309,8 +5310,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if fallback_font:
             self.status_label.set_text(f"font cannot be determinated, using {fallback_font}")
         
-        if self.doc and reload_objects:
-            pdf_handler.save_page_snapshot(self.doc, page_index)
+        if self.doc:
+            key = (id(self.doc), page_index)
+            if key not in pdf_handler._page_snapshots:
+                pdf_handler.save_page_snapshot(self.doc, page_index)
 
     def close_document(self):
         """Close document."""
@@ -10142,6 +10145,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _merge_pdf_at_position(self, source_pdf_path, insert_position):
         """Insert pages from another PDF file into the active document at insert_position."""
+        # Stash current page objects into cache before any page insertion/shifting
+        self._stash_page_objects(self.current_page_index)
+
         success, message, pages_inserted = pdf_handler.merge_pdf_pages(
             self.doc, source_pdf_path, insert_position
         )
@@ -10164,7 +10170,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.document_modified = True
             self.status_label.set_text(message)
             self._invalidate_continuous_layout()
-            self._load_page(insert_position)
+            self._load_page(insert_position, reload_objects=True)
             self._load_thumbnails(target_page=insert_position)
             self._update_ui_state()
         else:
@@ -11642,6 +11648,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         page_width = current_page.rect.width
         page_height = current_page.rect.height
         insert_position = self.current_page_index + 1
+
+        # Stash current page objects into cache before any page insertion/shifting
+        self._stash_page_objects(self.current_page_index)
+
         success, message = pdf_handler.insert_blank_page(self.doc, insert_position, page_width, page_height)
 
         if success:
@@ -11662,7 +11672,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.document_modified = True
             self.status_label.set_text(message)
             self._invalidate_continuous_layout()
-            self._load_page(insert_position)
+            self._load_page(insert_position, reload_objects=True)
             self._load_thumbnails(target_page=insert_position)
             self._update_ui_state()
         else:
@@ -15258,12 +15268,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     sess = self._active_session or self.create_session()
                     if sess not in self.sessions:
                         self.add_session(sess, switch_to=True)
+                    else:
+                        sess.close()
 
                 sess.doc = doc
                 sess.pdf_path = None
                 sess.original_file_path = None
                 sess.current_page_index = 0
                 sess.is_modified = True
+                sess.page_objects_cache.clear()
+                sess.editable_texts.clear()
+                sess.editable_shapes.clear()
+                sess.editable_images.clear()
+                sess.editable_strokes.clear()
+                sess.form_fields.clear()
+                if sess.undo_manager:
+                    sess.undo_manager.clear()
 
                 self.set_active_session(sess)
                 self.set_title(f"{constants.APP_NAME} - {sess.display_title}")
@@ -15274,7 +15294,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.tab_bar.set_visible(True)
 
                 self._load_thumbnails(sess)
-                self._load_page(0)
+                self._load_page(0, reload_objects=True)
                 self.status_label.set_text(_("status_new_doc_created"))
                 self._update_ui_state()
 

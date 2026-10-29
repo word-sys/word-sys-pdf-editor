@@ -58,6 +58,8 @@ class MockWindow:
         self.zoom_level = 1.0
         self.current_pdf_page_width = 595
         self.current_pdf_page_height = 842
+        self.form_fields = []
+        self._page_objects_cache = {}
 
     def _update_undo_redo_buttons(self): pass
     def _refresh_thumbnail(self, p): pass
@@ -65,7 +67,40 @@ class MockWindow:
     def commit_pending_format_change(self): pass
     def hide_text_editor(self): pass
 
-    def _load_page(self, page_index, preserve_scroll=False):
+    def _stash_page_objects(self, page_index: int):
+        if page_index is None or not self.doc or not (0 <= page_index < len(self.doc)):
+            return
+        self._page_objects_cache[page_index] = {
+            'texts': list(self.editable_texts),
+            'images': list(self.editable_images),
+            'shapes': list(self.editable_shapes),
+            'strokes': list(self.editable_strokes),
+            'form_fields': list(getattr(self, 'form_fields', [])),
+        }
+
+    def _restore_page_objects(self, page_index: int):
+        if page_index is None or not self.doc or not (0 <= page_index < len(self.doc)):
+            return
+        if page_index in self._page_objects_cache:
+            cached = self._page_objects_cache[page_index]
+            self.editable_texts = list(cached.get('texts', []))
+            self.editable_images = list(cached.get('images', []))
+            self.editable_shapes = list(cached.get('shapes', []))
+            self.editable_strokes = list(cached.get('strokes', []))
+            self.form_fields = list(cached.get('form_fields', []))
+        else:
+            texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
+            self.editable_texts = texts or []
+            images, error = pdf_handler.extract_editable_images(self.doc, page_index)
+            self.editable_images = images or []
+            shapes, shapes_error = pdf_handler.extract_editable_shapes(self.doc, page_index)
+            self.editable_shapes = shapes or []
+            strokes, strokes_error = pdf_handler.extract_editable_strokes(self.doc, page_index)
+            self.editable_strokes = strokes or []
+            self.form_fields = []
+            self._stash_page_objects(page_index)
+
+    def _load_page(self, page_index, preserve_scroll=False, reload_objects=False):
         if not self.doc or not (0 <= page_index < pdf_handler.get_page_count(self.doc)):
             return
 
@@ -74,7 +109,10 @@ class MockWindow:
         old_page_idx = getattr(self, 'current_page_index', None)
         if self.doc and old_page_idx is not None and (0 <= old_page_idx < pdf_handler.get_page_count(self.doc)):
             if old_page_idx != page_index:
-                pdf_handler.save_page_snapshot(self.doc, old_page_idx, force=True)
+                old_key = (id(self.doc), old_page_idx)
+                if old_key not in pdf_handler._page_snapshots:
+                    pdf_handler.save_page_snapshot(self.doc, old_page_idx)
+                self._stash_page_objects(old_page_idx)
 
         self.undo_manager.clear()
 
@@ -84,16 +122,22 @@ class MockWindow:
         self.selected_shape = None
         self.hide_text_editor()
 
-        texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
-        self.editable_texts = texts or []
-        images, error = pdf_handler.extract_editable_images(self.doc, page_index)
-        self.editable_images = images or []
-        shapes, shapes_error = pdf_handler.extract_editable_shapes(self.doc, page_index)
-        self.editable_shapes = shapes or []
-        strokes, strokes_error = pdf_handler.extract_editable_strokes(self.doc, page_index)
-        self.editable_strokes = strokes or []
+        if reload_objects:
+            texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
+            self.editable_texts = texts or []
+            images, error = pdf_handler.extract_editable_images(self.doc, page_index)
+            self.editable_images = images or []
+            shapes, shapes_error = pdf_handler.extract_editable_shapes(self.doc, page_index)
+            self.editable_shapes = shapes or []
+            strokes, strokes_error = pdf_handler.extract_editable_strokes(self.doc, page_index)
+            self.editable_strokes = strokes or []
+            self.form_fields = []
+            self._stash_page_objects(page_index)
+        else:
+            self._restore_page_objects(page_index)
 
-        if self.doc:
+        key = (id(self.doc), page_index)
+        if key not in pdf_handler._page_snapshots:
             pdf_handler.save_page_snapshot(self.doc, page_index)
 
 
@@ -617,6 +661,8 @@ class MockUserBugsWindow:
         self.zoom_level = 1.0
         self.current_pdf_page_width = 595
         self.current_pdf_page_height = 842
+        self.form_fields = []
+        self._page_objects_cache = {}
 
     def _update_undo_redo_buttons(self): pass
     def _refresh_thumbnail(self, p): pass
@@ -624,7 +670,40 @@ class MockUserBugsWindow:
     def commit_pending_format_change(self): pass
     def hide_text_editor(self): pass
 
-    def _load_page(self, page_index, preserve_scroll=False):
+    def _stash_page_objects(self, page_index: int):
+        if page_index is None or not self.doc or not (0 <= page_index < len(self.doc)):
+            return
+        self._page_objects_cache[page_index] = {
+            'texts': list(self.editable_texts),
+            'images': list(self.editable_images),
+            'shapes': list(self.editable_shapes),
+            'strokes': list(self.editable_strokes),
+            'form_fields': list(getattr(self, 'form_fields', [])),
+        }
+
+    def _restore_page_objects(self, page_index: int):
+        if page_index is None or not self.doc or not (0 <= page_index < len(self.doc)):
+            return
+        if page_index in self._page_objects_cache:
+            cached = self._page_objects_cache[page_index]
+            self.editable_texts = list(cached.get('texts', []))
+            self.editable_images = list(cached.get('images', []))
+            self.editable_shapes = list(cached.get('shapes', []))
+            self.editable_strokes = list(cached.get('strokes', []))
+            self.form_fields = list(cached.get('form_fields', []))
+        else:
+            texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
+            self.editable_texts = texts or []
+            images, error = pdf_handler.extract_editable_images(self.doc, page_index)
+            self.editable_images = images or []
+            shapes, shapes_error = pdf_handler.extract_editable_shapes(self.doc, page_index)
+            self.editable_shapes = shapes or []
+            strokes, strokes_error = pdf_handler.extract_editable_strokes(self.doc, page_index)
+            self.editable_strokes = strokes or []
+            self.form_fields = []
+            self._stash_page_objects(page_index)
+
+    def _load_page(self, page_index, preserve_scroll=False, reload_objects=False):
         if not self.doc or not (0 <= page_index < pdf_handler.get_page_count(self.doc)):
             return
 
@@ -632,7 +711,10 @@ class MockUserBugsWindow:
         old_page_idx = getattr(self, 'current_page_index', None)
         if self.doc and old_page_idx is not None and (0 <= old_page_idx < pdf_handler.get_page_count(self.doc)):
             if old_page_idx != page_index:
-                pdf_handler.save_page_snapshot(self.doc, old_page_idx, force=True)
+                old_key = (id(self.doc), old_page_idx)
+                if old_key not in pdf_handler._page_snapshots:
+                    pdf_handler.save_page_snapshot(self.doc, old_page_idx)
+                self._stash_page_objects(old_page_idx)
 
         self.undo_manager.clear()
 
@@ -642,16 +724,22 @@ class MockUserBugsWindow:
         self.selected_shape = None
         self.hide_text_editor()
 
-        texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
-        self.editable_texts = texts or []
-        images, error = pdf_handler.extract_editable_images(self.doc, page_index)
-        self.editable_images = images or []
-        shapes, shapes_error = pdf_handler.extract_editable_shapes(self.doc, page_index)
-        self.editable_shapes = shapes or []
-        strokes, strokes_error = pdf_handler.extract_editable_strokes(self.doc, page_index)
-        self.editable_strokes = strokes or []
+        if reload_objects:
+            texts, error = pdf_handler.extract_editable_text(self.doc, page_index)
+            self.editable_texts = texts or []
+            images, error = pdf_handler.extract_editable_images(self.doc, page_index)
+            self.editable_images = images or []
+            shapes, shapes_error = pdf_handler.extract_editable_shapes(self.doc, page_index)
+            self.editable_shapes = shapes or []
+            strokes, strokes_error = pdf_handler.extract_editable_strokes(self.doc, page_index)
+            self.editable_strokes = strokes or []
+            self.form_fields = []
+            self._stash_page_objects(page_index)
+        else:
+            self._restore_page_objects(page_index)
 
-        if self.doc:
+        key = (id(self.doc), page_index)
+        if key not in pdf_handler._page_snapshots:
             pdf_handler.save_page_snapshot(self.doc, page_index)
 
 class TestBugsVerification(unittest.TestCase):
@@ -719,6 +807,158 @@ class TestBugsVerification(unittest.TestCase):
         print(f"Page 0 text after adding Text 2: {repr(page0_text)}")
         self.assertIn("Text 1 Added", page0_text)
         self.assertIn("Text 2 Added", page0_text)
+
+    def test_new_document_multiple_object_additions_no_duplication(self):
+        """Verify adding multiple text and shape objects to a newly created PDF does not duplicate objects."""
+        doc, err = pdf_handler.create_new_pdf(width=595, height=842, num_pages=1)
+        self.assertIsNone(err)
+        self.assertIsNotNone(doc)
+
+        win = MockUserBugsWindow(doc)
+        win._load_page(0)
+
+        t1 = EditableText(50, 100, "HELLO NEW DOC 1", font_size=14, is_new=True, page_number=0)
+        cmd1 = AddObjectCommand(win, t1)
+        cmd1.execute()
+        win.undo_manager.add_command(cmd1)
+
+        t2 = EditableText(50, 150, "HELLO NEW DOC 2", font_size=14, is_new=True, page_number=0)
+        cmd2 = AddObjectCommand(win, t2)
+        cmd2.execute()
+        win.undo_manager.add_command(cmd2)
+
+        s1 = EditableShape(EditableShape.SHAPE_RECTANGLE, (100, 200, 180, 250),
+                           stroke_color=(1, 0, 0), stroke_width=2.0, is_new=True, page_number=0)
+        cmd3 = AddObjectCommand(win, s1)
+        cmd3.execute()
+        win.undo_manager.add_command(cmd3)
+
+        s2 = EditableShape(EditableShape.SHAPE_ELLIPSE, (200, 200, 260, 260),
+                           stroke_color=(0, 0, 1), stroke_width=2.0, is_new=True, page_number=0)
+        cmd4 = AddObjectCommand(win, s2)
+        cmd4.execute()
+        win.undo_manager.add_command(cmd4)
+
+        text_content = doc[0].get_text()
+        self.assertEqual(text_content.count("HELLO NEW DOC 1"), 1)
+        self.assertEqual(text_content.count("HELLO NEW DOC 2"), 1)
+        drawings = doc[0].get_drawings()
+        self.assertEqual(len(drawings), 2)
+
+        # Test Undo of last shape
+        win.undo_manager.undo()
+        self.assertEqual(len(doc[0].get_drawings()), 1)
+        text_content_after_undo = doc[0].get_text()
+        self.assertEqual(text_content_after_undo.count("HELLO NEW DOC 1"), 1)
+        self.assertEqual(text_content_after_undo.count("HELLO NEW DOC 2"), 1)
+
+        # Test Redo of last shape
+        win.undo_manager.redo()
+        self.assertEqual(len(doc[0].get_drawings()), 2)
+        text_content_after_redo = doc[0].get_text()
+        self.assertEqual(text_content_after_redo.count("HELLO NEW DOC 1"), 1)
+        self.assertEqual(text_content_after_redo.count("HELLO NEW DOC 2"), 1)
+
+    def test_insert_blank_page_multiple_object_additions_no_duplication(self):
+        """Verify adding multiple objects to a newly inserted blank page does not duplicate objects."""
+        doc = fitz.open()
+        p0 = doc.new_page(width=595, height=842)
+        p0.insert_text(fitz.Point(50, 50), "EXISTING PAGE CONTENT", fontsize=12)
+        pdf_handler.save_page_snapshot(doc, 0, force=True)
+
+        success, msg = pdf_handler.insert_blank_page(doc, page_index=1, width=595, height=842)
+        self.assertTrue(success)
+        self.assertEqual(doc.page_count, 2)
+
+        win = MockUserBugsWindow(doc)
+        win._load_page(1)
+
+        t1 = EditableText(60, 120, "BLANK PAGE OBJ 1", font_size=16, is_new=True, page_number=1)
+        cmd1 = AddObjectCommand(win, t1)
+        cmd1.execute()
+        win.undo_manager.add_command(cmd1)
+
+        t2 = EditableText(60, 180, "BLANK PAGE OBJ 2", font_size=16, is_new=True, page_number=1)
+        cmd2 = AddObjectCommand(win, t2)
+        cmd2.execute()
+        win.undo_manager.add_command(cmd2)
+
+        s1 = EditableShape(EditableShape.SHAPE_RECTANGLE, (60, 240, 180, 310),
+                           stroke_color=(0, 0.5, 0), stroke_width=1.5, is_new=True, page_number=1)
+        cmd3 = AddObjectCommand(win, s1)
+        cmd3.execute()
+        win.undo_manager.add_command(cmd3)
+
+        # Check page 1 has exact counts without duplicates
+        page1_text = doc[1].get_text()
+        self.assertEqual(page1_text.count("BLANK PAGE OBJ 1"), 1)
+        self.assertEqual(page1_text.count("BLANK PAGE OBJ 2"), 1)
+        self.assertEqual(len(doc[1].get_drawings()), 1)
+
+        # Verify page 0 is completely unaffected
+        page0_text = doc[0].get_text()
+        self.assertEqual(page0_text.count("EXISTING PAGE CONTENT"), 1)
+        self.assertEqual(page0_text.count("BLANK PAGE OBJ 1"), 0)
+
+    def test_cross_page_navigation_and_blank_page_creation_no_duplication(self):
+        """Verify making changes on page 1, creating a blank page, making changes there,
+
+        returning to page 1, and making another change does NOT duplicate page 1 changes.
+        """
+        doc = fitz.open()
+        p0 = doc.new_page(width=595, height=842)
+        pdf_handler.save_page_snapshot(doc, 0)
+
+        win = MockUserBugsWindow(doc)
+        win._load_page(0)
+
+        # 1. Make changes on Page 0 (text and shape)
+        t1 = EditableText(50, 80, "PAGE 1 ORIGINAL TEXT", font_size=14, is_new=True, page_number=0)
+        cmd1 = AddObjectCommand(win, t1)
+        cmd1.execute()
+        win.undo_manager.add_command(cmd1)
+
+        s1 = EditableShape(EditableShape.SHAPE_RECTANGLE, (50, 200, 150, 260),
+                           stroke_color=(1, 0, 0), stroke_width=2.0, is_new=True, page_number=0)
+        cmd2 = AddObjectCommand(win, s1)
+        cmd2.execute()
+        win.undo_manager.add_command(cmd2)
+
+        self.assertEqual(doc[0].get_text().count("PAGE 1 ORIGINAL TEXT"), 1)
+        self.assertEqual(len(doc[0].get_drawings()), 1)
+
+        # 2. Stash page 0 and create a blank page at index 1
+        win._stash_page_objects(win.current_page_index)
+        success, _ = pdf_handler.insert_blank_page(doc, 1, 595, 842)
+        self.assertTrue(success)
+        win._load_page(1, reload_objects=True)
+
+        # 3. Make changes on the blank page (Page 1)
+        t2 = EditableText(60, 100, "BLANK PAGE UNIQUE TEXT", font_size=14, is_new=True, page_number=1)
+        cmd3 = AddObjectCommand(win, t2)
+        cmd3.execute()
+        win.undo_manager.add_command(cmd3)
+
+        self.assertEqual(doc[1].get_text().count("BLANK PAGE UNIQUE TEXT"), 1)
+
+        # 4. Navigate back to Page 0
+        win._load_page(0)
+
+        # 5. Make another change on Page 0
+        t3 = EditableText(50, 140, "PAGE 1 SECOND TEXT", font_size=14, is_new=True, page_number=0)
+        cmd4 = AddObjectCommand(win, t3)
+        cmd4.execute()
+        win.undo_manager.add_command(cmd4)
+
+        # 6. Verify Page 0 has exact counts without duplicate burn-in
+        page0_text = doc[0].get_text()
+        self.assertEqual(page0_text.count("PAGE 1 ORIGINAL TEXT"), 1)
+        self.assertEqual(page0_text.count("PAGE 1 SECOND TEXT"), 1)
+        self.assertEqual(len(doc[0].get_drawings()), 1)
+
+        # 7. Verify Page 1 is untouched and has exact counts
+        page1_text = doc[1].get_text()
+        self.assertEqual(page1_text.count("BLANK PAGE UNIQUE TEXT"), 1)
 
 if __name__ == '__main__':
     unittest.main()
@@ -1213,7 +1453,7 @@ def test_add_page_preserves_new_page_index():
     win.target_page_after_load = None
 
     loaded_pages = []
-    win._load_page = MagicMock(side_effect=lambda idx: loaded_pages.append(idx))
+    win._load_page = MagicMock(side_effect=lambda idx, *a, **kw: loaded_pages.append(idx))
     win._update_ui_state = MagicMock()
     win._sync_thumbnail_selection = MagicMock()
 
