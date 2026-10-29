@@ -1829,10 +1829,13 @@ def extract_editable_text(doc, page_index):
     try:
         page = doc.load_page(page_index)
         try:
-            raw_json = page.get_text("rawjson", flags=0)
-            text_dict = json.loads(raw_json)
-        except Exception:
             text_dict = page.get_text("rawdict", flags=0)
+        except Exception:
+            try:
+                raw_json = page.get_text("rawjson", flags=0)
+                text_dict = json.loads(raw_json)
+            except Exception:
+                text_dict = {"blocks": []}
 
         page_drawings = None
         try:
@@ -2047,8 +2050,8 @@ def extract_page_text_raw(target, page_index=None, use_rawjson=True) -> Dict[str
     Args:
         target: fitz.Page, or fitz.Document.
         page_index: 0-based page index if target is a fitz.Document.
-        use_rawjson: If True, uses PyMuPDF's page.get_text("rawjson") parsed via json.loads.
-                     If False, uses page.get_text("rawdict").
+        use_rawjson: Accepted for backward compatibility. Uses fast direct
+                     page.get_text("rawdict") extraction.
                      
     Returns:
         Dict with keys 'width', 'height', and 'blocks'.
@@ -2058,16 +2061,13 @@ def extract_page_text_raw(target, page_index=None, use_rawjson=True) -> Dict[str
         return {"width": 0.0, "height": 0.0, "blocks": []}
         
     try:
-        if use_rawjson:
-            raw_str = page.get_text("rawjson", flags=0)
-            return json.loads(raw_str)
-        else:
-            return page.get_text("rawdict", flags=0)
-    except Exception:
         try:
             return page.get_text("rawdict", flags=0)
         except Exception:
-            return {"width": 0.0, "height": 0.0, "blocks": []}
+            raw_str = page.get_text("rawjson", flags=0)
+            return json.loads(raw_str)
+    except Exception:
+        return {"width": 0.0, "height": 0.0, "blocks": []}
 
 
 def extract_text_spans_with_char_boxes(target, page_index=None, use_rawjson=True) -> List[Dict[str, Any]]:
@@ -2077,7 +2077,7 @@ def extract_text_spans_with_char_boxes(target, page_index=None, use_rawjson=True
     Args:
         target: fitz.Page, or fitz.Document.
         page_index: 0-based page index if target is a fitz.Document.
-        use_rawjson: If True, uses page.get_text("rawjson"); otherwise page.get_text("rawdict").
+        use_rawjson: Accepted for backward compatibility. Uses fast direct page.get_text("rawdict").
         
     Returns:
         List of span dictionaries.
@@ -2171,7 +2171,7 @@ def get_text_hit_info_at_pos(target, pos: Tuple[float, float], page_index=None,
         page_index: 0-based page index if target is a fitz.Document.
         tolerance: Maximum distance in points to consider a hit. Default is 2.0.
         visual_coords: If True, pos is interpreted in visual coordinates on rotated pages.
-        use_rawjson: If True, uses page.get_text("rawjson") for extraction.
+        use_rawjson: Accepted for backward compatibility. Uses fast direct rawdict extraction.
         
     Returns:
         Dict with keys: 'char', 'word', 'span', 'line', 'page_index', 'block_index', or None if no hit.

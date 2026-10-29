@@ -196,6 +196,70 @@ class TestTextLayoutExtraction(unittest.TestCase):
         self.assertAlmostEqual(span2["size"], 16.0, places=1)
         self.assertAlmostEqual(span2["baseline"], 150.0, places=1)
 
+    def test_extract_editable_text_rawdict_equivalence(self):
+        """Verify extract_editable_text yields identical EditableText properties between rawdict and rawjson."""
+        test_doc = fitz.open()
+        page = test_doc.new_page(width=600, height=800)
+        page.insert_text((50, 100), "Plain text sample", fontname="helv", fontsize=12)
+        page.insert_text((50, 200), "Multi-font Times Roman", fontname="tiro", fontsize=14)
+        page.insert_text((50, 300), "Courier Monospace", fontname="cour", fontsize=11)
+        page.insert_text((50, 400), "Rotated text run", fontname="helv", fontsize=13, rotate=90)
+        page.insert_text((50, 500), "Underlined text run", fontname="helv", fontsize=12)
+        rect = fitz.Rect(50, 502, 180, 503)
+        page.draw_rect(rect, color=(0, 0, 0), fill=(0, 0, 0))
+
+        # 1. Extraction with primary rawdict path
+        texts_rawdict, err1 = pdf_handler.extract_editable_text(test_doc, 0)
+        self.assertIsNone(err1)
+        self.assertGreaterEqual(len(texts_rawdict), 4)
+
+        # 2. Extraction forced via rawjson path by monkeypatching get_text
+        orig_get_text = fitz.Page.get_text
+        def force_rawjson_get_text(p_self, opt, *args, **kwargs):
+            if opt == "rawdict":
+                raise RuntimeError("Force fallback to rawjson")
+            return orig_get_text(p_self, opt, *args, **kwargs)
+
+        try:
+            fitz.Page.get_text = force_rawjson_get_text
+            texts_rawjson, err2 = pdf_handler.extract_editable_text(test_doc, 0)
+            self.assertIsNone(err2)
+        finally:
+            fitz.Page.get_text = orig_get_text
+
+        self.assertEqual(len(texts_rawdict), len(texts_rawjson))
+        for a, b in zip(texts_rawdict, texts_rawjson):
+            self.assertEqual(a.text, b.text)
+            self.assertEqual(a.bbox, b.bbox)
+            self.assertAlmostEqual(a.baseline, b.baseline, places=2)
+            self.assertAlmostEqual(a.rotation, b.rotation, places=2)
+            self.assertEqual(a.font_size, b.font_size)
+            self.assertEqual(a.font_properties, b.font_properties)
+            self.assertEqual(a.is_underline, b.is_underline)
+            self.assertEqual(len(a.char_boxes), len(b.char_boxes))
+            for ca, cb in zip(a.char_boxes, b.char_boxes):
+                self.assertEqual(ca["char"], cb["char"])
+                self.assertEqual(ca["bbox"], cb["bbox"])
+                self.assertEqual(ca["origin"], cb["origin"])
+        test_doc.close()
+
+    def test_extract_editable_text_performance_guard(self):
+        """Timing guard: verify fast text extraction completes in under 250 ms for a 40-line page."""
+        test_doc = fitz.open()
+        page = test_doc.new_page(width=600, height=800)
+        for i in range(40):
+            page.insert_text((50, 40 + i * 18), f"Line {i}: Testing performance speedup with PyMuPDF rawdict extraction.", fontsize=11)
+
+        import time
+        t0 = time.perf_counter()
+        texts, err = pdf_handler.extract_editable_text(test_doc, 0)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+        self.assertIsNone(err)
+        self.assertGreaterEqual(len(texts), 35)
+        self.assertLess(elapsed_ms, 250.0, f"extract_editable_text took {elapsed_ms:.1f} ms, expected < 250 ms")
+        test_doc.close()
+
 
 class TestTextHitTesting(unittest.TestCase):
     """Test suite for character, word, span, and line hit testing."""
