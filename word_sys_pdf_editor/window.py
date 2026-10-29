@@ -53,7 +53,6 @@ from .stamp_manager import (
 )
 from .search_engine import DocumentSearchEngine, SearchMatch
 from .protect_dialog import ProtectDocumentDialog, DocumentUnlockDialog
-from .signature_dialog import DigitalSignatureDialog, SignatureDetailsDialog
 from .hardware import is_eco_mode_enabled, set_eco_mode_enabled, detect_hardware_spec
 
 
@@ -125,19 +124,32 @@ class VirtualDrawingArea(Gtk.DrawingArea):
         super().__init__(**kwargs)
         self.get_viewport_rect_cb = None
         self._user_draw_func = None
+        self.is_virtualization_required_cb = None
+        self.is_clipping_active = False
 
     def set_draw_func(self, func, user_data=None):
         """Set the draw function called during snapshotting."""
         self._user_draw_func = func
 
     def do_snapshot(self, snapshot):
-        """Render virtualized snapshot clipped strictly to the active viewport."""
+        """Render virtualized snapshot clipped strictly to the active viewport when required."""
         w = self.get_width()
         h = self.get_height()
         if w <= 0 or h <= 0:
             return
 
-        if self.get_viewport_rect_cb:
+        needs_clip = False
+        if self.is_virtualization_required_cb is not None:
+            try:
+                needs_clip = bool(self.is_virtualization_required_cb(w, h))
+            except Exception:
+                needs_clip = (w > 8192 or h > 8192)
+        elif self.get_viewport_rect_cb is not None:
+            needs_clip = (w > 8192 or h > 8192)
+
+        self.is_clipping_active = needs_clip
+
+        if needs_clip and self.get_viewport_rect_cb:
             try:
                 vx, vy, vw, vh = self.get_viewport_rect_cb()
                 margin = 80.0
@@ -2213,9 +2225,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         v_adj = self.pdf_scroll.get_vadjustment()
         if v_adj:
             v_adj.connect("value-changed", self._on_canvas_scrolled)
+        h_adj = self.pdf_scroll.get_hadjustment()
+        if h_adj:
+            h_adj.connect("value-changed", self._on_canvas_scrolled)
         self.pdf_view = VirtualDrawingArea(content_width=1, content_height=1,
                                            hexpand=True, vexpand=True)
         self.pdf_view.get_viewport_rect_cb = self.get_visible_viewport_rect
+        self.pdf_view.is_virtualization_required_cb = self._is_canvas_virtualization_required
         self.pdf_view.set_draw_func(self.draw_pdf_page)
         self.pdf_view.add_css_class('pdf-view')
         self.pdf_view.set_focusable(True)
@@ -4358,6 +4374,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         return (scroll_x, scroll_y, vp_w, vp_h)
 
+    def _is_canvas_virtualization_required(self, w: float, h: float) -> bool:
+        """Determine whether Cairo sub-viewport clipping is required to avoid GPU texture limits."""
+        # Continuous scroll mode tiles across dozens/hundreds of stacked pages (can exceed 100k px)
+        if getattr(self, 'continuous_scroll', False):
+            return True
+        # In single page mode, only clip if dimensions exceed standard safe GPU texture bounds
+        return (w > 8192.0 or h > 8192.0 or (w * h) > 33_554_432.0)
+
     def get_object_canvas_rect(
         self,
         obj: Any,
@@ -4642,9 +4666,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _on_canvas_scrolled(self, adjustment):
         """Handle canvas scroll adjustment value change to track visible page and sync indicators."""
-        if not self.doc or not self.continuous_scroll:
+        if not self.doc:
             return
         if getattr(self, '_is_programmatic_scrolling', False):
+            return
+
+        if not self.continuous_scroll:
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
             return
 
         # Directional predictive scroll velocity tracking and lookahead prefetching
@@ -5249,6 +5278,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._is_programmatic_scrolling = False
                 return False
             GLib.idle_add(_apply_scroll)
+        elif not self.continuous_scroll:
+            self._is_programmatic_scrolling = True
+            def _reset_single_page_scroll():
+                v_adj = self.pdf_scroll.get_vadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+                h_adj = self.pdf_scroll.get_hadjustment() if hasattr(self, 'pdf_scroll') and self.pdf_scroll else None
+                if v_adj:
+                    v_adj.set_value(0.0)
+                if h_adj:
+                    h_adj.set_value(0.0)
+                self._is_programmatic_scrolling = False
+                return False
+            GLib.idle_add(_reset_single_page_scroll)
 
         self._sync_thumbnail_selection()
         self._update_ui_state()

@@ -1538,6 +1538,43 @@ class TestWindowSpatialHitTestIntegration(unittest.TestCase):
         self.assertLess(avg_per_query, 0.05, f"Spatial query too slow: {avg_per_query:.4f} ms per query")
 
 
+class TestStartupLazyModuleLoading(unittest.TestCase):
+    """Verify that heavy signature, conversion, and network libraries are deferred at startup."""
+
+    def test_window_import_does_not_load_heavy_modules(self):
+        """Verify importing window does not load anyconvert, pyhanko, or signature_dialog."""
+        import subprocess, json
+        code = (
+            "import sys, time, json\n"
+            "t0 = time.perf_counter()\n"
+            "import word_sys_pdf_editor.window\n"
+            "elapsed = (time.perf_counter() - t0) * 1000.0\n"
+            "heavy = [m for m in ('anyconvert', 'pyhanko', 'aiohttp', 'word_sys_pdf_editor.signature_dialog') if m in sys.modules]\n"
+            "print(json.dumps({'elapsed': elapsed, 'heavy': heavy}))\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, f"Subprocess failed: {proc.stderr}")
+        data = json.loads(proc.stdout.strip())
+        self.assertEqual(data["heavy"], [], f"Heavy modules eagerly loaded at startup: {data['heavy']}")
+        # Startup should complete well under 800 ms (measured ~300 ms vs ~1080 ms baseline)
+        self.assertLess(data["elapsed"], 800.0, f"Startup took {data['elapsed']:.1f} ms, expected < 800 ms")
+
+    def test_anyconvert_lazy_access_in_pdf_handler(self):
+        """Verify HAS_ANYCONVERT is detected via find_spec and module is loaded only on demand."""
+        import subprocess
+        code = (
+            "import sys\n"
+            "from word_sys_pdf_editor import pdf_handler\n"
+            "assert 'anyconvert' not in sys.modules, 'anyconvert was eagerly imported'\n"
+            "assert pdf_handler.HAS_ANYCONVERT is True, 'HAS_ANYCONVERT should be True'\n"
+            "cm = pdf_handler.ConversionMode\n"
+            "assert cm is not None, 'ConversionMode should resolve via __getattr__'\n"
+            "assert 'anyconvert' in sys.modules, 'anyconvert should now be imported'\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, f"Lazy anyconvert verification failed: {proc.stderr}")
+
+
 if __name__ == "__main__":
     unittest.main()
 

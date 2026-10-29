@@ -1119,6 +1119,55 @@ class TestVirtualDrawingAreaContinuousScroll(unittest.TestCase):
         self.assertEqual(len(captured_bounds), 1)
         self.assertEqual(captured_bounds[0], (800, 500000))
 
+    def test_single_page_mode_full_snapshot_bounds_no_viewport_clipping(self):
+        """Verify single page mode uses full page bounds without clipping viewport when within texture limits."""
+        self.win.set_continuous_scroll_mode(False)
+        self.assertFalse(self.win.continuous_scroll)
+        self.assertFalse(self.win._is_canvas_virtualization_required(1200, 1600))
+
+        w = VirtualDrawingArea(content_width=1200, content_height=1600)
+        w.get_viewport_rect_cb = lambda: (0.0, 500.0, 1000.0, 800.0)
+        w.is_virtualization_required_cb = lambda width, height: False
+
+        captured_bounds = []
+        def mock_draw(area, cr, width, height):
+            captured_bounds.append((width, height))
+
+        w.set_draw_func(mock_draw)
+
+        win_dummy = Gtk.Window()
+        win_dummy.set_child(w)
+        win_dummy.allocate(1200, 1600, -1, None)
+
+        snap = Gtk.Snapshot()
+        w.do_snapshot(snap)
+        node = snap.to_node()
+        self.assertIsNotNone(node)
+        self.assertFalse(w.is_clipping_active)
+        self.assertEqual(len(captured_bounds), 1)
+        self.assertEqual(captured_bounds[0], (1200, 1600))
+
+    def test_single_page_mode_scroll_triggers_queue_draw(self):
+        """Verify scrolling in single page mode queues canvas redraw properly."""
+        self.win.set_continuous_scroll_mode(False)
+        self.win._finish_loading(self.doc, None, self.pdf_path or "test.pdf", 0, self.win._active_session)
+        ctx = GLib.MainContext.default()
+        for _ in range(10):
+            if ctx.pending():
+                ctx.iteration(False)
+        self.win._is_programmatic_scrolling = False
+
+        redraw_called = []
+        orig_queue_draw = self.win.pdf_view.queue_draw
+        self.win.pdf_view.queue_draw = lambda: redraw_called.append(True)
+
+        try:
+            adj = self.win.pdf_scroll.get_vadjustment()
+            self.win._on_canvas_scrolled(adj)
+            self.assertGreaterEqual(len(redraw_called), 1)
+        finally:
+            self.win.pdf_view.queue_draw = orig_queue_draw
+
 
 if __name__ == '__main__':
     unittest.main()

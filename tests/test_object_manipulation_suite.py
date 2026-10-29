@@ -260,6 +260,107 @@ class TestTextLayoutExtraction(unittest.TestCase):
         self.assertLess(elapsed_ms, 250.0, f"extract_editable_text took {elapsed_ms:.1f} ms, expected < 250 ms")
         test_doc.close()
 
+    def test_underline_and_strikethrough_detection_accuracy(self):
+        """Verify accurate detection of vector underlines, strikethroughs, and URI link annotations."""
+        doc = fitz.open()
+        page = doc.new_page(width=500, height=500)
+        page.insert_text((50, 50), "Plain text sample", fontsize=12)
+
+        page.insert_text((50, 100), "Underline via line", fontsize=12)
+        page.draw_line((50, 101.5), (200, 101.5), width=0.8)
+
+        page.insert_text((50, 150), "Underline via rect", fontsize=12)
+        page.draw_rect(fitz.Rect(50, 151, 200, 152), color=(0, 0, 0), fill=(0, 0, 0))
+
+        page.insert_text((50, 200), "Strikethrough via line", fontsize=12)
+        page.draw_line((50, 196.4), (200, 196.4), width=0.8)
+
+        page.insert_text((50, 250), "Strikethrough via rect", fontsize=12)
+        page.draw_rect(fitz.Rect(50, 246, 200, 247), color=(0, 0, 0), fill=(0, 0, 0))
+
+        page.insert_text((50, 300), "Linked text sample", fontsize=12)
+        page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(50, 285, 200, 305), "uri": "https://example.com/test"})
+
+        data = doc.tobytes()
+        doc.close()
+
+        loaded_doc = fitz.open(stream=data, filetype="pdf")
+        texts, err = pdf_handler.extract_editable_text(loaded_doc, 0)
+        self.assertIsNone(err)
+        self.assertEqual(len(texts), 6)
+
+        # Plain text
+        self.assertEqual(texts[0].text, "Plain text sample")
+        self.assertFalse(texts[0].is_underline)
+        self.assertFalse(texts[0].is_strikethrough)
+        self.assertIsNone(texts[0].link_url)
+
+        # Underline via line
+        self.assertEqual(texts[1].text, "Underline via line")
+        self.assertTrue(texts[1].is_underline)
+        self.assertFalse(texts[1].is_strikethrough)
+
+        # Underline via rect
+        self.assertEqual(texts[2].text, "Underline via rect")
+        self.assertTrue(texts[2].is_underline)
+        self.assertFalse(texts[2].is_strikethrough)
+
+        # Strikethrough via line
+        self.assertEqual(texts[3].text, "Strikethrough via line")
+        self.assertFalse(texts[3].is_underline)
+        self.assertTrue(texts[3].is_strikethrough)
+
+        # Strikethrough via rect
+        self.assertEqual(texts[4].text, "Strikethrough via rect")
+        self.assertFalse(texts[4].is_underline)
+        self.assertTrue(texts[4].is_strikethrough)
+
+        # Linked text
+        self.assertEqual(texts[5].text, "Linked text sample")
+        self.assertEqual(texts[5].link_url, "https://example.com/test")
+        self.assertEqual(texts[5].original_link_url, "https://example.com/test")
+        loaded_doc.close()
+
+    def test_table_drawings_linear_time_performance_guard(self):
+        """Timing guard: verify 600-cell table extraction completes in well under 150 ms (vs ~1100 ms baseline)."""
+        doc = fitz.open()
+        page = doc.new_page(width=800, height=1200)
+
+        rows = 30
+        cols = 20
+        cell_w = 35
+        cell_h = 25
+        start_x = 50
+        start_y = 50
+
+        # Draw 600 cell rectangle borders
+        for r in range(rows):
+            for c in range(cols):
+                rx0 = start_x + c * cell_w
+                ry0 = start_y + r * cell_h
+                rect = fitz.Rect(rx0, ry0, rx0 + cell_w, ry0 + cell_h)
+                page.draw_rect(rect, color=(0.7, 0.7, 0.7), width=0.5)
+
+        # Insert 600 cell text runs
+        for r in range(rows):
+            for c in range(cols):
+                tx = start_x + c * cell_w + 3
+                ty = start_y + r * cell_h + 17
+                page.insert_text((tx, ty), f"C{r}_{c}", fontsize=8)
+
+        self.assertEqual(len(page.get_drawings()), 600)
+
+        import time
+        t0 = time.perf_counter()
+        texts, err = pdf_handler.extract_editable_text(doc, 0)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+        self.assertIsNone(err)
+        self.assertEqual(len(texts), 600)
+        # Target in PLAN.md is well under 100 ms (measured ~35 ms). Use 150 ms ceiling to avoid flakiness on loaded systems.
+        self.assertLess(elapsed_ms, 150.0, f"Table extraction took {elapsed_ms:.1f} ms, expected < 150 ms")
+        doc.close()
+
 
 class TestTextHitTesting(unittest.TestCase):
     """Test suite for character, word, span, and line hit testing."""

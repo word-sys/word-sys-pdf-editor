@@ -30,6 +30,7 @@ WSPDF_NONCE_LEN = 12
 WSPDF_TAG_LEN = 16
 WSPDF_PBKDF2_ROUNDS = 100_000
 import collections
+import bisect
 import zlib
 import gc
 import queue
@@ -38,13 +39,10 @@ import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, List, Dict, Any, Tuple, Union, Set, Callable
+import importlib.util
 try:
-    import anyconvert
-    from anyconvert import ConversionMode
-    HAS_ANYCONVERT = True
-except ImportError:
-    anyconvert = None
-    ConversionMode = None
+    HAS_ANYCONVERT = (importlib.util.find_spec("anyconvert") is not None)
+except Exception:
     HAS_ANYCONVERT = False
 import gi
 gi.require_version('Gtk', '4.0')
@@ -1808,6 +1806,79 @@ def _is_strikethrough_drawing(drawing, strikelines):
     return False
 
 
+def _extract_candidate_horizontal_drawings(drawings):
+    """Extract thin horizontal line/rect segments from drawings as sorted (y, x0, x1) tuples."""
+    candidates = []
+    if not drawings:
+        return candidates, []
+    for drawing in drawings:
+        try:
+            items = drawing.get('items', [])
+            rect = drawing.get('rect')
+            line_y = None
+            line_x0 = None
+            line_x1 = None
+            if len(items) == 1 and items[0][0] == 'l':
+                p1, p2 = items[0][1], items[0][2]
+                if abs(p1.y - p2.y) <= 1.0 and abs(p1.x - p2.x) >= 4.0:
+                    line_y = (p1.y + p2.y) / 2.0
+                    line_x0, line_x1 = min(p1.x, p2.x), max(p1.x, p2.x)
+            elif rect and rect.height <= 3.5 and rect.width >= 4.0:
+                line_y = (rect.y0 + rect.y1) / 2.0
+                line_x0, line_x1 = rect.x0, rect.x1
+
+            if line_y is not None and line_x0 is not None and line_x1 is not None:
+                candidates.append((line_y, line_x0, line_x1))
+        except Exception:
+            continue
+
+    if not candidates:
+        return [], []
+    candidates.sort(key=lambda c: c[0])
+    candidate_ys = [c[0] for c in candidates]
+    return candidates, candidate_ys
+
+
+def _is_underline_in_candidates(candidates, candidate_ys, tx0, tx1, baseline):
+    """Fast bisect lookup checking if any horizontal candidate matches text underline."""
+    if not candidates:
+        return False
+    y_min = baseline - 1.0
+    y_max = baseline + 4.0
+    idx_start = bisect.bisect_left(candidate_ys, y_min)
+    idx_end = bisect.bisect_right(candidate_ys, y_max)
+    text_width = max(0.1, tx1 - tx0)
+    min_overlap = min(4.0, text_width * 0.4)
+    for i in range(idx_start, idx_end):
+        line_y, line_x0, line_x1 = candidates[i]
+        if abs(line_y - (baseline + 1.5)) <= 2.5:
+            overlap = min(line_x1, tx1) - max(line_x0, tx0)
+            if overlap >= min_overlap:
+                return True
+    return False
+
+
+def _is_strikethrough_in_candidates(candidates, candidate_ys, tx0, tx1, baseline, font_sz):
+    """Fast bisect lookup checking if any horizontal candidate matches text strikethrough."""
+    if not candidates:
+        return False
+    target_strike_y = baseline - (font_sz * 0.3)
+    tolerance = max(2.5, font_sz * 0.2)
+    y_min = target_strike_y - tolerance
+    y_max = target_strike_y + tolerance
+    idx_start = bisect.bisect_left(candidate_ys, y_min)
+    idx_end = bisect.bisect_right(candidate_ys, y_max)
+    text_width = max(0.1, tx1 - tx0)
+    min_overlap = min(4.0, text_width * 0.4)
+    for i in range(idx_start, idx_end):
+        line_y, line_x0, line_x1 = candidates[i]
+        if abs(line_y - target_strike_y) <= tolerance:
+            overlap = min(line_x1, tx1) - max(line_x0, tx0)
+            if overlap >= min_overlap:
+                return True
+    return False
+
+
 def _get_span_style_signature(span):
     """Compute a normalized tuple signature for style comparison."""
     color = span.get("color", 0)
@@ -1842,6 +1913,8 @@ def extract_editable_text(doc, page_index):
             page_drawings = page.get_drawings()
         except Exception:
             page_drawings = []
+
+        candidates, candidate_ys = _extract_candidate_horizontal_drawings(page_drawings)
 
         for block in text_dict.get("blocks", []):
             if block.get("type") == 0:
@@ -1989,29 +2062,35 @@ def extract_editable_text(doc, page_index):
                             editable.font_family_original,
                             flags=first_span.get("flags", 0) if first_span else 0
                         )
-                        if page_drawings:
-                            for d in page_drawings:
-                                if _is_underline_drawing(d, [(bbox[0], bbox[2], orig_origin[1])]):
-                                    editable.is_underline = True
-                                    break
-                            for d in page_drawings:
-                                if _is_strikethrough_drawing(d, [(bbox[0], bbox[2], orig_origin[1], editable.font_size)]):
-                                    editable.is_strikethrough = True
-                                    break
+                        if candidates:
+                            tx0 = bbox[0]
+                            tx1 = bbox[2]
+                            base = orig_origin[1]
+                            if _is_underline_in_candidates(candidates, candidate_ys, tx0, tx1, base):
+                                editable.is_underline = True
+                            if _is_strikethrough_in_candidates(candidates, candidate_ys, tx0, tx1, base, editable.font_size):
+                                editable.is_strikethrough = True
                         editable_texts.append(editable)
         
         # Attach existing PDF link annotations to corresponding text objects
         page_links = page.get_links() if hasattr(page, 'get_links') else []
-        for editable in editable_texts:
-            if not getattr(editable, 'bbox', None):
-                continue
-            e_rect = fitz.Rect(editable.bbox)
+        uri_links = []
+        if page_links:
             for link in page_links:
                 if link.get('kind') == fitz.LINK_URI and link.get('uri'):
                     l_rect = link.get('from')
-                    if l_rect and (e_rect.intersects(l_rect) or l_rect.contains(e_rect) or e_rect.contains(l_rect)):
-                        editable.link_url = link.get('uri')
-                        editable.original_link_url = editable.link_url
+                    if l_rect:
+                        uri_links.append((fitz.Rect(l_rect), link.get('uri')))
+
+        if uri_links:
+            for editable in editable_texts:
+                if not getattr(editable, 'bbox', None):
+                    continue
+                e_rect = fitz.Rect(editable.bbox)
+                for l_rect, uri in uri_links:
+                    if e_rect.intersects(l_rect) or l_rect.contains(e_rect) or e_rect.contains(l_rect):
+                        editable.link_url = uri
+                        editable.original_link_url = uri
                         break
 
         return editable_texts, None
@@ -2547,8 +2626,19 @@ def export_document(
     if not output_path.lower().endswith(f".{fmt}"):
         output_path = f"{output_path}.{fmt}"
 
+    global HAS_ANYCONVERT
     if not HAS_ANYCONVERT:
         return False, "anyconvert engine is not installed. Please install 'anyconvert' to enable document export."
+
+    if globals().get("anyconvert") is None:
+        try:
+            import anyconvert as _ac
+            from anyconvert import ConversionMode as _cm
+            globals()["anyconvert"] = _ac
+            globals()["ConversionMode"] = _cm
+        except ImportError:
+            HAS_ANYCONVERT = False
+            return False, "anyconvert engine is not installed. Please install 'anyconvert' to enable document export."
 
     conv_mode = "canvas"
     if isinstance(mode, str):
@@ -6189,3 +6279,22 @@ def embed_ocr_text_layer(
         "total_words_embedded": total_words,
         "per_page": per_page,
     }
+
+
+def __getattr__(name: str):
+    """Lazily resolve export conversion modules on demand."""
+    if name in ("anyconvert", "ConversionMode"):
+        global HAS_ANYCONVERT
+        try:
+            import anyconvert as _ac
+            from anyconvert import ConversionMode as _cm
+            globals()["anyconvert"] = _ac
+            globals()["ConversionMode"] = _cm
+            HAS_ANYCONVERT = True
+            return _cm if name == "ConversionMode" else _ac
+        except ImportError:
+            globals()["anyconvert"] = None
+            globals()["ConversionMode"] = None
+            HAS_ANYCONVERT = False
+            return None
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
