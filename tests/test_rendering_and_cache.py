@@ -1174,6 +1174,7 @@ class TestDiskThumbnailCache(unittest.TestCase):
         # Save document
         time.sleep(0.02)
         self.win.save_document(self.pdf_path)
+        self.win.wait_for_save()
 
         # Verify disk cache now contains thumbnail matching the saved rotated state
         reloaded_doc = fitz.open(self.pdf_path)

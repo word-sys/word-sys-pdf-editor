@@ -2544,7 +2544,7 @@ def apply_text_edit(doc, text_obj: EditableText, new_text: str):
 
 def save_document(doc, save_path, incremental=False):
     """Save PyMuPDF document to disk with optional incremental saving and cleanup."""
-    if not doc:
+    if not doc or getattr(doc, 'is_closed', False):
         return False, "Kaydedilecek belge yok."
 
     # If saving to .wspdf or the doc was opened as a vault container
@@ -2553,13 +2553,47 @@ def save_document(doc, save_path, incremental=False):
         if vault_pw:
             return save_wspdf_vault(doc, save_path, vault_pw)
 
-    temp_path = f"{save_path}.tmp_save"
+    pdf_pw = getattr(doc, '_pdf_password', None)
+    owner_pw = getattr(doc, '_pdf_owner_password', None) or pdf_pw
+    perms = getattr(doc, '_pdf_permissions', None)
+    has_custom_encryption = bool(pdf_pw or owner_pw or perms is not None)
+
+    # Safe incremental quick save: allowed when requested, document opened from same path,
+    # no custom encryption changes, and document can save incrementally.
+    if incremental and not has_custom_encryption:
+        doc_name = getattr(doc, 'name', '')
+        if doc_name and os.path.exists(save_path):
+            try:
+                same_path = (os.path.abspath(doc_name) == os.path.abspath(save_path))
+            except Exception:
+                same_path = False
+
+            can_incr = getattr(doc, 'can_save_incrementally', lambda: False)()
+            if same_path and can_incr:
+                try:
+                    orig_size = os.path.getsize(save_path)
+                except OSError:
+                    orig_size = None
+
+                try:
+                    doc.save(save_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+                    return True, None
+                except Exception as inc_err:
+                    print(f"Incremental save failed, falling back to clean rewrite: {inc_err}")
+                    if orig_size is not None and os.path.exists(save_path):
+                        try:
+                            if os.path.getsize(save_path) != orig_size:
+                                with open(save_path, "r+b") as f:
+                                    f.truncate(orig_size)
+                        except Exception:
+                            pass
+
+    # Full clean rewrite with atomic file replacement
+    thread_id = getattr(threading, 'get_ident', lambda: 0)()
+    temp_path = f"{save_path}.tmp_save_{os.getpid()}_{thread_id}"
 
     try:
-        pdf_pw = getattr(doc, '_pdf_password', None)
-        owner_pw = getattr(doc, '_pdf_owner_password', None) or pdf_pw
-        perms = getattr(doc, '_pdf_permissions', None)
-        if pdf_pw or owner_pw or perms is not None:
+        if has_custom_encryption:
             save_kwargs = {
                 "garbage": 4,
                 "deflate": True,
@@ -2573,13 +2607,14 @@ def save_document(doc, save_path, incremental=False):
                 save_kwargs["permissions"] = permissions_to_bitmask(perms)
             doc.save(temp_path, **save_kwargs)
         else:
+            enc = fitz.PDF_ENCRYPT_KEEP if getattr(doc, 'is_encrypted', False) else fitz.PDF_ENCRYPT_NONE
             doc.save(
                 temp_path,
                 garbage=4,
                 deflate=True,
                 clean=True,
                 incremental=False,  
-                encryption=fitz.PDF_ENCRYPT_NONE
+                encryption=enc
             )
 
         os.replace(temp_path, save_path)

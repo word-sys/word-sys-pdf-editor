@@ -1581,6 +1581,7 @@ class DocumentSession:
     # Modification & Undo
     _is_modified: bool = field(default=False, repr=False)
     allow_incremental_save: bool = True
+    is_saving: bool = False
     is_repaired_file: bool = False
     undo_manager: Any = None
 

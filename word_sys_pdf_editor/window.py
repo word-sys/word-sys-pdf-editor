@@ -1362,6 +1362,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _on_tab_close_page(self, tab_view, page) -> bool:
         """Handle tab close request, prompting to save unsaved modifications."""
+        if getattr(self, 'is_saving', False) is True:
+            self.wait_for_save()
         target_session = self.get_session_by_tab_page(page)
         if target_session:
             if target_session.is_modified:
@@ -1369,7 +1371,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 response = show_save_changes_dialog(self)
                 if response == Gtk.ResponseType.ACCEPT:
                     if target_session.pdf_path:
-                        self.save_document(target_session.pdf_path, incremental=False)
+                        self.save_document(target_session.pdf_path, incremental=False, background=False)
                     else:
                         self.on_save_as(None, None)
                         if target_session.is_modified:
@@ -2274,6 +2276,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         status_bar_box.add_css_class('statusbar')
         self.status_label = Gtk.Label(label=_('new_doc_loaded'), xalign=0.0)
         status_bar_box.append(self.status_label)
+        self.save_spinner = Gtk.Spinner()
+        self.save_spinner.set_visible(False)
+        status_bar_box.append(self.save_spinner)
         self.main_box.append(status_bar_box)
 
     def _create_sidebar(self):
@@ -5418,77 +5423,129 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
 
 
-    def save_document(self, save_path, incremental=False):
-        """Save document."""
-        if not self.doc or self.is_saving:
+    def save_document(self, save_path, incremental=False, background=True, on_finish=None):
+        """Save document using background worker thread or synchronous rewrite."""
+        if not self.doc or (getattr(self, 'is_saving', False) is True):
+            if getattr(self, 'is_saving', False) is True:
+                print("Save already in progress, skipping concurrent save.")
             return
         page_to_restore = self.current_page_index
+        target_sess = self._active_session
         self.is_saving = True
+        if target_sess:
+            target_sess.is_saving = True
+
+        if hasattr(self, 'save_spinner') and self.save_spinner:
+            self.save_spinner.set_visible(True)
+            self.save_spinner.start()
+
         self.status_label.set_text(_("saving").format(os.path.basename(save_path)))
         if self.inline_editor_widget is not None:
             self._apply_and_hide_editor(force_apply=True)
         if hasattr(self, '_commit_pending_form_field_edit'):
             self._commit_pending_form_field_edit()
 
-        if self._active_session and getattr(self._active_session, 'scale_calibration', None):
-            pdf_handler.embed_scale_calibration(self.doc, self._active_session.scale_calibration.to_dict())
+        if target_sess and getattr(target_sess, 'scale_calibration', None):
+            pdf_handler.embed_scale_calibration(self.doc, target_sess.scale_calibration.to_dict())
 
-        if self._active_session:
+        if target_sess:
             all_meas_dicts = []
-            for p_idx, m_list in self._active_session.measurements.items():
+            for p_idx, m_list in target_sess.measurements.items():
                 for m in m_list:
                     all_meas_dicts.append(m.to_dict())
             if all_meas_dicts:
                 pdf_handler.embed_measurements(self.doc, all_meas_dicts)
-            pdf_handler.sync_sticky_notes(self.doc, getattr(self._active_session, 'sticky_notes', {}))
-            if getattr(self._active_session, 'redaction_marks', None):
+            pdf_handler.sync_sticky_notes(self.doc, getattr(target_sess, 'sticky_notes', {}))
+            if getattr(target_sess, 'redaction_marks', None):
                 self.apply_all_redactions(prompt_warning=False)
-            if hasattr(self._active_session, 'pdf_password'):
-                self.doc._pdf_password = self._active_session.pdf_password
-            if hasattr(self._active_session, 'pdf_owner_password'):
-                self.doc._pdf_owner_password = self._active_session.pdf_owner_password
-            if hasattr(self._active_session, 'pdf_permissions'):
-                self.doc._pdf_permissions = self._active_session.pdf_permissions
-            if getattr(self._active_session, 'is_vault', False):
+            if hasattr(target_sess, 'pdf_password'):
+                self.doc._pdf_password = target_sess.pdf_password
+            if hasattr(target_sess, 'pdf_owner_password'):
+                self.doc._pdf_owner_password = target_sess.pdf_owner_password
+            if hasattr(target_sess, 'pdf_permissions'):
+                self.doc._pdf_permissions = target_sess.pdf_permissions
+            if getattr(target_sess, 'is_vault', False):
                 self.doc._is_vault = True
-                self.doc._vault_password = getattr(self._active_session, 'vault_password', None)
+                self.doc._vault_password = getattr(target_sess, 'vault_password', None)
 
-        success, error_msg = pdf_handler.save_document(self.doc, save_path, incremental=False)
-        self.is_saving = False
-        
-        if success:
-            print(_("dbg_save_success", save_path))
-            self.document_modified = False 
-            if self._active_session:
-                self._active_session.is_modified = False
-                self._active_session.pdf_path = save_path
-                self._active_session.original_file_path = save_path
-                self._update_tab_title(self._active_session)
-                self.set_title(f"{constants.APP_NAME} - {self._active_session.display_title}")
-            if self.doc:
-                self.doc._is_modified = False
-
-            # File is now actually saved on disk; write thumbnail for the saved file to disk cache
+        def _do_save_worker():
             try:
-                thumb_w = 100 if getattr(self, 'is_eco_mode', False) else 150
-                if self.doc and 0 <= page_to_restore < pdf_handler.get_page_count(self.doc):
-                    pdf_handler.generate_thumbnail(
-                        self.doc, page_to_restore, target_width=thumb_w, filepath=save_path, save_to_disk=True
-                    )
-                    if thumb_w != 150:
-                        pdf_handler.generate_thumbnail(
-                            self.doc, page_to_restore, target_width=150, filepath=save_path, save_to_disk=True
-                        )
+                return pdf_handler.save_document(self.doc, save_path, incremental=incremental)
             except Exception as e:
-                print(f"Warning caching thumbnail on save: {e}")
+                return False, str(e)
 
-            self.load_document(save_path, target_page=page_to_restore, in_new_tab=False)
-            self.status_label.set_text(_("saved").format(os.path.basename(save_path)))
+        def _on_save_completed(success, error_msg):
+            self.is_saving = False
+            if target_sess:
+                target_sess.is_saving = False
+
+            if hasattr(self, 'save_spinner') and self.save_spinner:
+                self.save_spinner.stop()
+                self.save_spinner.set_visible(False)
+
+            if success:
+                print(_("dbg_save_success", save_path))
+                self.document_modified = False 
+                if target_sess:
+                    target_sess.is_modified = False
+                    target_sess.pdf_path = save_path
+                    target_sess.original_file_path = save_path
+                    self._update_tab_title(target_sess)
+                    self.set_title(f"{constants.APP_NAME} - {target_sess.display_title}")
+                if self.doc:
+                    self.doc._is_modified = False
+
+                # File is now actually saved on disk; write thumbnail for the saved file to disk cache
+                try:
+                    thumb_w = 100 if getattr(self, 'is_eco_mode', False) else 150
+                    if self.doc and 0 <= page_to_restore < pdf_handler.get_page_count(self.doc):
+                        pdf_handler.generate_thumbnail(
+                            self.doc, page_to_restore, target_width=thumb_w, filepath=save_path, save_to_disk=True
+                        )
+                        if thumb_w != 150:
+                            pdf_handler.generate_thumbnail(
+                                self.doc, page_to_restore, target_width=150, filepath=save_path, save_to_disk=True
+                            )
+                except Exception as e:
+                    print(f"Warning caching thumbnail on save: {e}")
+
+                self.load_document(save_path, target_page=page_to_restore, in_new_tab=False)
+                self.status_label.set_text(_("saved").format(os.path.basename(save_path)))
+            else:
+                show_error_dialog(self, _("err_pdf_save", error_msg))
+                self.status_label.set_text(_("save_failed"))
+
+            self._update_ui_state()
+
+            if on_finish and callable(on_finish):
+                try:
+                    on_finish(success, error_msg)
+                except Exception as cb_err:
+                    print(f"Warning in on_finish save callback: {cb_err}")
+
+            return False
+
+        if background:
+            def _thread_target():
+                succ, err = _do_save_worker()
+                GLib.idle_add(_on_save_completed, succ, err)
+
+            self._save_thread = threading.Thread(target=_thread_target, daemon=True)
+            self._save_thread.start()
         else:
-            show_error_dialog(self, _("err_pdf_save", error_msg))
-            self.status_label.set_text(_("save_failed"))
+            succ, err = _do_save_worker()
+            _on_save_completed(succ, err)
 
-        self._update_ui_state()
+    def wait_for_save(self, timeout=5.0):
+        """Wait for in-flight background save to complete and process idle callbacks."""
+        thread = getattr(self, '_save_thread', None)
+        if thread and thread.is_alive():
+            thread.join(timeout=timeout)
+        ctx = GLib.MainContext.default()
+        iterations = 0
+        while (getattr(self, 'is_saving', False) is True or ctx.pending()) and iterations < 100:
+            ctx.iteration(False)
+            iterations += 1
 
     def queue_canvas_dirty_rect(self, rect):
         """Schedule a sub-rectangle dirty region repaint on the canvas."""
@@ -10017,6 +10074,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def check_unsaved_changes(self, session: Optional[DocumentSession] = None):
         """Prompt user to save pending modifications. Returns True if cancelled."""
+        if getattr(self, 'is_saving', False) is True:
+            self.wait_for_save()
         target_session = session or getattr(self, '_active_session', None)
         if not target_session or not target_session.is_modified:
             return False
@@ -10028,7 +10087,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         if response == Gtk.ResponseType.ACCEPT:
             if target_session.pdf_path:
-                self.save_document(target_session.pdf_path, incremental=False)
+                self.save_document(target_session.pdf_path, incremental=False, background=False)
                 return False
             else:
                 self.on_save_as(None, None)
@@ -10146,7 +10205,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def on_save_clicked(self, button):
         """Save active document to current path or prompt Save As if untitled."""
-        if not self.doc:
+        if not self.doc or (getattr(self, 'is_saving', False) is True):
             return
 
         redacts = getattr(self._active_session, 'redaction_marks', {}) if self._active_session else {}
@@ -10164,12 +10223,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if self.current_file_path:
             self.commit_pending_format_change()
-            self.save_document(self.current_file_path, incremental=False)
+            use_incr = (total_marks == 0) and getattr(self, "allow_incremental_save", True)
+            self.save_document(self.current_file_path, incremental=use_incr)
         else:
             self.on_save_as(None, None)
 
     def on_save_as(self, action=None, param=None):
         """Prompt save file dialog to write PDF to a new destination."""
+        if getattr(self, 'is_saving', False) is True:
+            return
         self.commit_pending_format_change()
         if not self.doc: return
 
@@ -11607,12 +11669,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             show_error_dialog(self, message, _("err_add_page_title"))
 
     def on_delete_page(self, button):
+        if getattr(self, 'is_saving', False) is True:
+            return
         self._delete_page_at_index(self.current_page_index)
 
     def _delete_page_at_index(self, page_to_delete):
         """Delete the specified page index with confirmation."""
-        if not self.doc:
-            show_error_dialog(self, _("err_no_doc_open_msg"), _("err_no_doc_title"))
+        if not self.doc or (getattr(self, 'is_saving', False) is True):
+            if not self.doc:
+                show_error_dialog(self, _("err_no_doc_open_msg"), _("err_no_doc_title"))
             return
 
         page_count = pdf_handler.get_page_count(self.doc)
@@ -11663,7 +11728,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def rotate_current_page(self, angle_delta, page_index=None):
         """Rotate the specified or current page by angle_delta degrees (+90 or -90)."""
-        if not self.doc:
+        if not self.doc or (getattr(self, 'is_saving', False) is True):
             return
         target_idx = self.current_page_index if page_index is None else page_index
         if not (0 <= target_idx < pdf_handler.get_page_count(self.doc)):
@@ -12013,6 +12078,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self._update_ui_state()
             return
 
+        if getattr(self, 'is_saving', False) is True:
+            return
+
         if self.font_scan_in_progress:
             show_error_dialog(self, _("err_fonts_scanning_msg"), _("err_fonts_scanning_title"))
             return
@@ -12355,6 +12423,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def on_text_format_changed(self, widget=None, *args):
         """Apply typography updates (font family, size, style, color, alignment) to selected text."""
+        if getattr(self, 'is_saving', False) is True:
+            return
+
         if self.font_scan_in_progress:
             return
 
@@ -12906,6 +12977,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.on_prev_tab()
                 return True
             return False
+
+        if (getattr(self, 'is_saving', False) is True) and (
+            (ctrl and keyval in (Gdk.KEY_z, Gdk.KEY_Z, Gdk.KEY_y, Gdk.KEY_Y))
+            or keyval in (Gdk.KEY_Delete, Gdk.KEY_BackSpace)
+        ):
+            return True
 
         if keyval == Gdk.KEY_Escape:
             if getattr(self, 'temp_polygon_vertices', None):
@@ -13658,6 +13735,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.view_sel_rect = (page_x, page_y, page_x, page_y)
             self.view_selected_text = ""
             self.pdf_view.queue_draw()
+            return
+
+        if getattr(self, 'is_saving', False) is True:
+            gesture.set_state(Gtk.EventSequenceState.DENIED)
             return
 
         # Allow direct resize handle interaction on already selected objects regardless of active tool
@@ -15250,6 +15331,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def do_close_request(self):
         """Prompt to save unsaved changes in all open tabs before closing the window."""
+        if getattr(self, 'is_saving', False) is True:
+            self.wait_for_save()
+
         if getattr(self, '_zoom_debounce_timer', None) is not None:
             try:
                 GLib.source_remove(self._zoom_debounce_timer)

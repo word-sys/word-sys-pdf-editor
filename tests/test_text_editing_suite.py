@@ -1951,6 +1951,7 @@ def test_multipage_rotate_page_change_undo_redo_and_save(tmp_path):
 
     # Save document
     win.save_document(saved_path)
+    win.wait_for_save()
 
     # Reopen saved document fresh
     win2 = PdfEditorWindow()
