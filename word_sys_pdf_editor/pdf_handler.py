@@ -2542,6 +2542,15 @@ def apply_text_edit(doc, text_obj: EditableText, new_text: str):
         traceback.print_exc()
         return False, f"Error during text application: {e}"
 
+def _source_has_encryption(doc) -> bool:
+    """True if the document carries an encryption dictionary (even when it opened without a password)."""
+    try:
+        meta = getattr(doc, 'metadata', None) or {}
+        return bool(meta.get("encryption"))
+    except Exception:
+        return False
+
+
 def save_document(doc, save_path, incremental=False):
     """Save PyMuPDF document to disk with optional incremental saving and cleanup."""
     if not doc or getattr(doc, 'is_closed', False):
@@ -2600,9 +2609,14 @@ def save_document(doc, save_path, incremental=False):
     work_doc = doc
     copy_doc = None
     try:
+        # Owner-protected / permission-restricted PDFs that open without a password report
+        # is_encrypted=False but still carry an encryption dictionary. Keep it on save instead
+        # of silently writing an unprotected file.
+        keep_source_encryption = (not has_custom_encryption) and _source_has_encryption(doc)
         if not (getattr(doc, 'is_encrypted', False) and not has_custom_encryption):
             try:
-                copy_doc = fitz.open("pdf", doc.tobytes(encryption=fitz.PDF_ENCRYPT_NONE))
+                copy_enc = fitz.PDF_ENCRYPT_KEEP if keep_source_encryption else fitz.PDF_ENCRYPT_NONE
+                copy_doc = fitz.open("pdf", doc.tobytes(encryption=copy_enc))
                 work_doc = copy_doc
             except Exception as copy_err:
                 print(f"Warning: could not snapshot document for safe rewrite: {copy_err}")
@@ -2624,7 +2638,7 @@ def save_document(doc, save_path, incremental=False):
             work_doc.save(temp_path, **save_kwargs)
         else:
             if copy_doc is not None:
-                enc = fitz.PDF_ENCRYPT_NONE
+                enc = fitz.PDF_ENCRYPT_KEEP if keep_source_encryption else fitz.PDF_ENCRYPT_NONE
             else:
                 enc = fitz.PDF_ENCRYPT_KEEP if getattr(doc, 'is_encrypted', False) else fitz.PDF_ENCRYPT_NONE
             work_doc.save(

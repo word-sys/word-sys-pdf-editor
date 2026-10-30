@@ -434,3 +434,70 @@ def test_full_rewrite_without_stored_password_never_mutates_unencrypted_live_doc
     finally:
         pdf_handler.release_page_snapshots(doc)
         doc.close()
+
+
+def _make_owner_protected_pdf(path):
+    d = fitz.open()
+    d.new_page().insert_text((72, 72), "Owner protected")
+    perms = int(fitz.PDF_PERM_ACCESSIBILITY | fitz.PDF_PERM_PRINT)
+    d.save(path, encryption=fitz.PDF_ENCRYPT_AES_256, user_pw="", owner_pw="own", permissions=perms)
+    d.close()
+    return perms
+
+
+@pytest.mark.parametrize("incremental", [False, True])
+def test_owner_protected_pdf_keeps_restrictions_on_save(tmp_path, incremental):
+    path = str(tmp_path / "owner.pdf")
+    _make_owner_protected_pdf(path)
+    orig = fitz.open(path)
+    orig_perm = orig.permissions
+    orig.close()
+    assert orig_perm != -4  # restricted
+
+    doc, err = pdf_handler.load_pdf_document(path)
+    assert doc is not None, err
+    assert not doc.is_encrypted
+    try:
+        assert pdf_handler._source_has_encryption(doc)
+        ok, e = pdf_handler.save_document(doc, path, incremental=incremental)
+        assert ok, e
+    finally:
+        doc.close()
+
+    saved = fitz.open(path)
+    try:
+        assert saved.metadata.get("encryption")
+        assert saved.permissions == orig_perm
+        assert "Owner protected" in saved[0].get_text()
+    finally:
+        saved.close()
+
+
+def test_owner_protected_pdf_edit_after_save_and_unprotected_unaffected(tmp_path):
+    path = str(tmp_path / "owner2.pdf")
+    _make_owner_protected_pdf(path)
+    doc, err = pdf_handler.load_pdf_document(path)
+    try:
+        before = doc.xref_length()
+        for incr in (False, True, False):
+            ok, e = pdf_handler.save_document(doc, path, incremental=incr)
+            assert ok, e
+        assert doc.xref_length() == before
+    finally:
+        doc.close()
+
+    plain = str(tmp_path / "plain.pdf")
+    p = fitz.open()
+    p.new_page().insert_text((72, 72), "plain")
+    p.save(plain)
+    p.close()
+    pdoc, _ = pdf_handler.load_pdf_document(plain)
+    try:
+        assert not pdf_handler._source_has_encryption(pdoc)
+        ok, e = pdf_handler.save_document(pdoc, plain, incremental=False)
+        assert ok, e
+    finally:
+        pdoc.close()
+    re = fitz.open(plain)
+    assert not re.metadata.get("encryption") and re.permissions == -4
+    re.close()
