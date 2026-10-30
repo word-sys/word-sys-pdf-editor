@@ -2222,3 +2222,83 @@ class TestPart97FontNameDecompositionCache:
         props_uncached = [(t.text, dict(t.font_properties)) for t in uncached_run]
         assert props_cached == props_uncached and len(props_cached) >= 3
         doc.close()
+
+
+class TestPart98DecodedImageCache:
+    @staticmethod
+    def _png(w, h, color=(200, 30, 30)):
+        import fitz
+        pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, w, h), False)
+        pix.set_rect(pix.irect, color)
+        return pix.tobytes("png")
+
+    def test_repeat_decode_hits_cache_and_returns_same_pixbuf(self):
+        from word_sys_pdf_editor.utils import DecodedPixbufCache
+        cache = DecodedPixbufCache()
+        data = self._png(200, 100)
+        first = cache.get(data)
+        for _ in range(20):
+            assert cache.get(data) is first
+        assert cache.misses == 1 and cache.hits == 20
+        assert (first.get_width(), first.get_height()) == (200, 100)
+
+    def test_changed_bytes_never_return_stale_pixbuf(self):
+        from word_sys_pdf_editor.utils import DecodedPixbufCache
+        cache = DecodedPixbufCache()
+        a = cache.get(self._png(50, 50, (255, 0, 0)))
+        b = cache.get(self._png(80, 40, (0, 0, 255)))
+        assert a is not b and (b.get_width(), b.get_height()) == (80, 40)
+
+    def test_large_image_is_downscaled_preserving_aspect(self):
+        from word_sys_pdf_editor.utils import DecodedPixbufCache
+        cache = DecodedPixbufCache(max_dimension=500)
+        pb = cache.get(self._png(2000, 1000))
+        assert (pb.get_width(), pb.get_height()) == (500, 250)
+
+    def test_lru_eviction_respects_byte_and_entry_budgets(self):
+        from word_sys_pdf_editor.utils import DecodedPixbufCache
+        cache = DecodedPixbufCache(max_entries=3, max_bytes=10**9)
+        blobs = [self._png(20 + i, 20) for i in range(5)]
+        for b in blobs:
+            cache.get(b)
+        assert len(cache) == 3
+        small = DecodedPixbufCache(max_entries=50, max_bytes=60 * 1024)
+        for i in range(10):
+            small.get(self._png(100 + i, 100))   # ~40 KB decoded each
+        assert small.total_bytes <= 60 * 1024 + 41 * 1024 and len(small) >= 1
+        small.set_limits(max_entries=1)
+        assert len(small) == 1
+
+    def test_undecodable_and_empty_bytes_are_safe_and_cached(self):
+        from word_sys_pdf_editor.utils import DecodedPixbufCache
+        cache = DecodedPixbufCache()
+        assert cache.get(b"") is None and cache.get(None) is None
+        junk = b"not an image at all"
+        assert cache.get(junk) is None
+        assert cache.get(junk) is None
+        assert cache.misses == 1   # failure is cached, not retried every frame
+        assert cache.get(bytearray(self._png(10, 10))) is not None  # non-bytes bypasses cache
+
+    def test_eco_mode_tightens_limits(self):
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.utils import DECODED_PIXBUF_CACHE
+        try:
+            pdf_handler.configure_memory_limits(True)
+            assert DECODED_PIXBUF_CACHE.max_bytes == 32 * 1024 * 1024
+            assert DECODED_PIXBUF_CACHE.max_dimension == 1600
+        finally:
+            pdf_handler.configure_memory_limits(False)
+        assert DECODED_PIXBUF_CACHE.max_bytes == 96 * 1024 * 1024
+        assert DECODED_PIXBUF_CACHE.max_dimension == 2560
+
+    def test_cache_speeds_up_large_decode(self):
+        import time
+        from word_sys_pdf_editor.utils import DecodedPixbufCache
+        cache = DecodedPixbufCache()
+        data = self._png(3000, 2000)
+        t0 = time.perf_counter(); cache.get(data); cold = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        for _ in range(100):
+            cache.get(data)
+        warm = (time.perf_counter() - t0) / 100
+        assert warm < cold / 20

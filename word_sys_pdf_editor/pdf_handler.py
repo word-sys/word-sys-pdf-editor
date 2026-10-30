@@ -222,6 +222,14 @@ def configure_memory_limits(is_eco_mode: bool):
             _tiled_page_renderer._tile_cache.set_limits(max_items=64, max_bytes=80 * 1024 * 1024)
     if _page_rasterizer_pool is not None:
         _page_rasterizer_pool.set_eco_mode(is_eco_mode)
+    try:
+        from .utils import DECODED_PIXBUF_CACHE
+        if is_eco_mode:
+            DECODED_PIXBUF_CACHE.set_limits(max_bytes=32 * 1024 * 1024, max_entries=12, max_dimension=1600)
+        else:
+            DECODED_PIXBUF_CACHE.set_limits(max_bytes=96 * 1024 * 1024, max_entries=32, max_dimension=2560)
+    except Exception as cache_err:
+        print(f"Warning: could not configure decoded image cache: {cache_err}")
 
 def invalidate_page_cache(doc=None, page_index=None):
     """Invalidate cached Cairo page surfaces and internal document page cache."""

@@ -5910,10 +5910,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             if isinstance(self.dragged_object, EditableImage) and self.dragged_object.image_bytes:
                 try:
-                    loader = GdkPixbuf.PixbufLoader.new()
-                    loader.write(self.dragged_object.image_bytes)
-                    loader.close()
-                    pixbuf = loader.get_pixbuf()
+                    pixbuf = utils.get_decoded_pixbuf(self.dragged_object.image_bytes)
                     if pixbuf and ghost_w > 0 and ghost_h > 0:
                         cr.save()
                         cr.translate(ghost_x, ghost_y)
@@ -6090,10 +6087,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.rotate(math.radians(rot))
                 cr.translate(-cx, -cy)
             try:
-                loader = GdkPixbuf.PixbufLoader.new()
-                loader.write(img_obj.image_bytes)
-                loader.close()
-                pixbuf = loader.get_pixbuf()
+                pixbuf = utils.get_decoded_pixbuf(img_obj.image_bytes)
                 if pixbuf:
                     cr.save()
                     cr.translate(x1, y1)

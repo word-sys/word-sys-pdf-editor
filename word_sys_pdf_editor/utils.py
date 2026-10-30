@@ -528,3 +528,119 @@ def point_in_polygon(px: float, py: float, vertices: list) -> bool:
                         inside = not inside
         p1x, p1y = p2x, p2y
     return inside
+
+
+class DecodedPixbufCache:
+    """Bounded LRU cache of decoded, display-sized GdkPixbuf images.
+
+    The canvas used to re-create a `GdkPixbuf.PixbufLoader` and re-decode the image bytes on
+    every frame (a 4000x3000 JPEG costs ~237 ms per decode). The cache is keyed on the encoded
+    `bytes` object itself: hashing a bytes object is cached by Python and an identical object
+    matches by identity, so a hit costs microseconds, and new bytes (replace, rotate, undo/redo)
+    can never see a stale pixbuf. Images larger than `max_dimension` on their longest side are
+    downscaled once, which also bounds decoded memory for huge photos.
+    """
+
+    def __init__(self, max_bytes=96 * 1024 * 1024, max_entries=32, max_dimension=2560):
+        from collections import OrderedDict
+        self._entries = OrderedDict()   # encoded bytes -> (pixbuf or None, decoded_size)
+        self._total = 0
+        self._lock = threading.Lock()
+        self.max_bytes = max_bytes
+        self.max_entries = max_entries
+        self.max_dimension = max_dimension
+        self.hits = 0
+        self.misses = 0
+
+    @staticmethod
+    def _decode(image_bytes, max_dimension):
+        from gi.repository import GdkPixbuf
+        loader = GdkPixbuf.PixbufLoader.new()
+        try:
+            loader.write(image_bytes)
+        finally:
+            loader.close()
+        pixbuf = loader.get_pixbuf()
+        if pixbuf is None:
+            return None
+        w, h = pixbuf.get_width(), pixbuf.get_height()
+        longest = max(w, h)
+        if max_dimension and longest > max_dimension:
+            ratio = max_dimension / float(longest)
+            pixbuf = pixbuf.scale_simple(
+                max(1, int(w * ratio)), max(1, int(h * ratio)), GdkPixbuf.InterpType.BILINEAR
+            ) or pixbuf
+        return pixbuf
+
+    def get(self, image_bytes):
+        """Return the decoded pixbuf for encoded image bytes, or None if undecodable."""
+        if not image_bytes:
+            return None
+        if not isinstance(image_bytes, bytes):
+            try:
+                return self._decode(bytes(image_bytes), self.max_dimension)
+            except Exception:
+                return None
+        with self._lock:
+            entry = self._entries.get(image_bytes)
+            if entry is not None:
+                self._entries.move_to_end(image_bytes)
+                self.hits += 1
+                return entry[0]
+        self.misses += 1
+        try:
+            pixbuf = self._decode(image_bytes, self.max_dimension)
+        except Exception:
+            pixbuf = None
+        size = pixbuf.get_byte_length() if pixbuf is not None else 0
+        with self._lock:
+            if image_bytes in self._entries:
+                self._total -= self._entries[image_bytes][1]
+            self._entries[image_bytes] = (pixbuf, size)
+            self._entries.move_to_end(image_bytes)
+            self._total += size
+            while self._entries and (
+                len(self._entries) > self.max_entries
+                or (self._total > self.max_bytes and len(self._entries) > 1)
+            ):
+                _key, (_pb, sz) = self._entries.popitem(last=False)
+                self._total -= sz
+        return pixbuf
+
+    def set_limits(self, max_bytes=None, max_entries=None, max_dimension=None):
+        """Adjust budgets (used by Eco mode) and evict down to the new limits."""
+        with self._lock:
+            if max_bytes is not None:
+                self.max_bytes = max_bytes
+            if max_entries is not None:
+                self.max_entries = max_entries
+            if max_dimension is not None and max_dimension != self.max_dimension:
+                self.max_dimension = max_dimension
+                self._entries.clear()   # decoded sizes depend on max_dimension
+                self._total = 0
+            while self._entries and (
+                len(self._entries) > self.max_entries
+                or (self._total > self.max_bytes and len(self._entries) > 1)
+            ):
+                _key, (_pb, sz) = self._entries.popitem(last=False)
+                self._total -= sz
+
+    def clear(self):
+        with self._lock:
+            self._entries.clear()
+            self._total = 0
+
+    @property
+    def total_bytes(self):
+        return self._total
+
+    def __len__(self):
+        return len(self._entries)
+
+
+DECODED_PIXBUF_CACHE = DecodedPixbufCache()
+
+
+def get_decoded_pixbuf(image_bytes):
+    """Decode (or fetch from cache) a display-sized pixbuf for the canvas."""
+    return DECODED_PIXBUF_CACHE.get(image_bytes)
