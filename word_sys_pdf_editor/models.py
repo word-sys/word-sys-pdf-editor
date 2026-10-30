@@ -1826,6 +1826,9 @@ class DocumentSession:
     vault_password: Optional[str] = None
     pdf_password: Optional[str] = None
     digital_signatures: Optional[List[Dict[str, Any]]] = None
+    sig_inspection_in_progress: bool = False
+    sig_inspection_token: int = 0
+    _sig_inspection_on_complete: Optional[Any] = None
 
     def __post_init__(self):
         """Ensure Gio.ListStore for pages_model if not provided and apply view mode settings."""
@@ -1886,17 +1889,20 @@ class DocumentSession:
 
     def close(self):
         """Cleanly close the underlying document and free session resources."""
+        self.sig_inspection_in_progress = False
+        self.sig_inspection_token += 1
+        self._sig_inspection_on_complete = None
+        self.digital_signatures = None
         if self.doc is not None:
             try:
                 from . import pdf_handler
                 pdf_handler.release_page_snapshots(self.doc)
-                pdf_handler.invalidate_page_cache(self.doc)
+                pdf_handler.close_pdf_document(self.doc)
             except Exception:
-                pass
-            try:
-                self.doc.close()
-            except Exception:
-                pass
+                try:
+                    self.doc.close()
+                except Exception:
+                    pass
             self.doc = None
         self.page_cache.clear()
         self.page_objects_cache.clear()

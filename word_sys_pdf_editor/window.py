@@ -1257,7 +1257,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                 h.set_value(min(sx, max_h))
                         return GLib.SOURCE_REMOVE
                     GLib.idle_add(_restore_tab_scroll)
-            self._update_signature_banner(getattr(session, "digital_signatures", None))
+            self._update_signature_banner(
+                getattr(session, "digital_signatures", None),
+                verifying=bool(getattr(session, "sig_inspection_in_progress", False)),
+            )
             if hasattr(self, 'search_bar') and self.search_bar and self.search_bar.get_search_mode():
                 self._on_search_query_changed(self.search_entry)
             elif hasattr(self, 'search_engine'):
@@ -3977,14 +3980,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             if getattr(sess, 'is_repaired_file', False):
                 print(_("dbg_repaired_while_opening"))
-            # Check digital signatures
-            try:
-                sigs = pdf_handler.inspect_document_signatures(doc)
-                sess.digital_signatures = sigs
-                self._update_signature_banner(sigs)
-            except Exception:
-                sess.digital_signatures = []
-                self._update_signature_banner(None)
+            # Check digital signatures asynchronously so document open never blocks
+            self._start_signature_inspection(sess, doc)
 
             self._record_recent_file(filepath)
             self.set_active_session(sess)
@@ -5332,6 +5329,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._active_session.is_modified = False
             if self._active_session.pages_model:
                 self._active_session.pages_model.remove_all()
+        self._update_signature_banner(None)
         self.temp_stroke = None
         self.selected_form_field = None
         if hasattr(self, 'search_engine') and self.search_engine:
@@ -10401,10 +10399,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not self.doc or not self._active_session:
             return
         from .signature_dialog import SignatureDetailsDialog
-        sigs = getattr(self._active_session, "digital_signatures", None)
+        sess = self._active_session
+        sigs = getattr(sess, "digital_signatures", None)
         if sigs is None:
-            sigs = pdf_handler.inspect_document_signatures(self.doc)
-            self._active_session.digital_signatures = sigs
+            doc_ref = self.doc
+
+            def _present_when_ready(resolved_sigs):
+                if getattr(self, "_active_session", None) is not sess or getattr(sess, "doc", None) is not doc_ref:
+                    return
+                dialog = SignatureDetailsDialog(parent_window=self, signatures=resolved_sigs or [])
+                dialog.present()
+
+            if getattr(sess, "sig_inspection_in_progress", False):
+                sess._sig_inspection_on_complete = _present_when_ready
+            else:
+                self._start_signature_inspection(sess, doc_ref, on_complete=_present_when_ready)
+            return
 
         dialog = SignatureDetailsDialog(parent_window=self, signatures=sigs or [])
         dialog.present()
@@ -10576,10 +10586,72 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             callback=on_signed_save_finish,
         )
 
-    def _update_signature_banner(self, sigs: Optional[List[Dict[str, Any]]]):
+    def _start_signature_inspection(self, sess, doc, on_complete=None):
+        """Run digital signature inspection on a background worker and update the session/banner on the main thread."""
+        if sess is None or doc is None:
+            return
+        token = getattr(sess, "sig_inspection_token", 0) + 1
+        sess.sig_inspection_token = token
+        sess.sig_inspection_in_progress = True
+        sess.digital_signatures = None
+        sess._sig_inspection_on_complete = on_complete
+
+        if getattr(self, "_active_session", None) is sess:
+            self._update_signature_banner(None, verifying=True)
+
+        def _worker():
+            try:
+                if getattr(doc, "is_closed", False):
+                    return
+                sigs = pdf_handler.inspect_document_signatures(doc)
+            except Exception:
+                sigs = []
+            GLib.idle_add(self._apply_signature_inspection_result, sess, doc, token, sigs)
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+
+    def _apply_signature_inspection_result(self, sess, doc, token: int, sigs: List[Dict[str, Any]]):
+        """Main-thread completion callback for background signature inspection with stale-result guards."""
+        if sess is None or doc is None:
+            return GLib.SOURCE_REMOVE
+        sessions = getattr(self, "sessions", None)
+        if sessions is not None and sess not in sessions:
+            return GLib.SOURCE_REMOVE
+        if getattr(sess, "doc", None) is not doc:
+            return GLib.SOURCE_REMOVE
+        if getattr(doc, "is_closed", False):
+            return GLib.SOURCE_REMOVE
+        if getattr(sess, "sig_inspection_token", 0) != token:
+            return GLib.SOURCE_REMOVE
+
+        sess.sig_inspection_in_progress = False
+        sess.digital_signatures = sigs if sigs is not None else []
+        cb = getattr(sess, "_sig_inspection_on_complete", None)
+        sess._sig_inspection_on_complete = None
+
+        if getattr(self, "_active_session", None) is sess:
+            self._update_signature_banner(sess.digital_signatures, verifying=False)
+
+        if callable(cb):
+            cb(sess.digital_signatures)
+        return GLib.SOURCE_REMOVE
+
+    def _update_signature_banner(self, sigs: Optional[List[Dict[str, Any]]], verifying: bool = False):
         """Update top signature notification banner based on active document signatures."""
         if not hasattr(self, 'signature_banner') or not self.signature_banner:
             return
+        if verifying:
+            self.signature_banner_label.set_text(_("sig_banner_verifying"))
+            self.signature_banner_icon.set_from_icon_name("content-loading-symbolic")
+            if hasattr(self, "signature_banner_btn") and self.signature_banner_btn:
+                self.signature_banner_btn.set_visible(False)
+            self.signature_banner.set_visible(True)
+            return
+
+        if hasattr(self, "signature_banner_btn") and self.signature_banner_btn:
+            self.signature_banner_btn.set_visible(True)
+
         if not sigs:
             self.signature_banner.set_visible(False)
             return

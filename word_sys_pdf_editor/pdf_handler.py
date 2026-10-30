@@ -1196,7 +1196,7 @@ def load_pdf_document(filepath, password=None):
 def close_pdf_document(doc):
     """Close PDF document and run generational garbage collection."""
     if doc is not None:
-        release_doc_lock(doc)
+        lock = get_doc_lock(doc)
         try:
             doc_id = id(doc)
             invalidate_page_cache(doc)
@@ -1204,10 +1204,18 @@ def close_pdf_document(doc):
                 keys_to_del = [k for k in _stale_page_cache if k[0] == doc_id]
                 for k in keys_to_del:
                     _stale_page_cache.pop(k, None)
-            doc.close()
+            if lock is not None:
+                with lock:
+                    if not getattr(doc, "is_closed", False):
+                        doc.close()
+            else:
+                if not getattr(doc, "is_closed", False):
+                    doc.close()
             gc.collect(1)
         except Exception as e:
             print(f"Error closing PDF document: {e}")
+        finally:
+            release_doc_lock(doc)
 
 def get_page_count(doc):
     """Get the page count."""
@@ -5613,7 +5621,17 @@ def inspect_document_signatures(doc_or_bytes_or_path) -> List[Dict[str, Any]]:
 
     if hasattr(doc_or_bytes_or_path, "tobytes"):
         try:
-            return inspect_pdf_signatures(doc_or_bytes_or_path.tobytes())
+            lock = get_doc_lock(doc_or_bytes_or_path)
+            if lock is not None:
+                with lock:
+                    if getattr(doc_or_bytes_or_path, "is_closed", False):
+                        return []
+                    pdf_bytes = doc_or_bytes_or_path.tobytes()
+            else:
+                if getattr(doc_or_bytes_or_path, "is_closed", False):
+                    return []
+                pdf_bytes = doc_or_bytes_or_path.tobytes()
+            return inspect_pdf_signatures(pdf_bytes)
         except Exception:
             return []
 

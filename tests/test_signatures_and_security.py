@@ -1675,6 +1675,201 @@ class TestSignatureUI(unittest.TestCase):
         doc.close()
         win.destroy()
 
+    def test_non_blocking_signature_inspection_on_document_open_and_banner_update(self):
+        """Verify signed document opens without blocking, shows verifying banner, and updates on completion."""
+        import threading
+        from gi.repository import GLib
+        from word_sys_pdf_editor.window import PdfEditorWindow
+        from word_sys_pdf_editor.i18n import _ as tr
+
+        win = PdfEditorWindow()
+        doc = fitz.open()
+        doc.new_page(width=595.0, height=842.0)
+
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+        scheduled_callbacks = []
+
+        fake_sigs = [
+            {
+                "field_name": "Sig1",
+                "intact": True,
+                "valid": True,
+                "trusted": True,
+                "signer_cn": "Alice Verified",
+            }
+        ]
+
+        def slow_inspect(_doc):
+            worker_started.set()
+            release_worker.wait(timeout=5.0)
+            return fake_sigs
+
+        orig_idle_add = GLib.idle_add
+
+        def capture_idle_add(func, *args, **kwargs):
+            if getattr(func, "__name__", "") == "_apply_signature_inspection_result":
+                scheduled_callbacks.append((func, args))
+                return 1
+            return orig_idle_add(func, *args, **kwargs)
+
+        try:
+            with patch("word_sys_pdf_editor.pdf_handler.inspect_document_signatures", side_effect=slow_inspect), \
+                 patch.object(win, "_load_thumbnails"), \
+                 patch.object(win, "_load_page"), \
+                 patch("gi.repository.GLib.idle_add", side_effect=capture_idle_add):
+                sess = win._active_session
+                win._finish_loading(doc, None, "signed_test.pdf", 0, sess)
+
+                # _finish_loading returned before slow_inspect finished
+                self.assertTrue(worker_started.wait(timeout=2.0))
+                self.assertTrue(sess.sig_inspection_in_progress)
+                self.assertIsNone(sess.digital_signatures)
+
+                # Banner shows lightweight verifying state
+                self.assertTrue(win.signature_banner.get_visible())
+                self.assertEqual(win.signature_banner_label.get_text(), tr("sig_banner_verifying"))
+                self.assertFalse(win.signature_banner_btn.get_visible())
+
+                # Let worker complete and run main-thread callback
+                release_worker.set()
+                for _idx in range(50):
+                    if scheduled_callbacks:
+                        break
+                    threading.Event().wait(0.02)
+
+                self.assertEqual(len(scheduled_callbacks), 1)
+                cb_func, cb_args = scheduled_callbacks[0]
+                cb_func(*cb_args)
+
+                self.assertFalse(sess.sig_inspection_in_progress)
+                self.assertEqual(sess.digital_signatures, fake_sigs)
+                self.assertTrue(win.signature_banner.get_visible())
+                self.assertEqual(
+                    win.signature_banner_label.get_text(),
+                    tr("sig_banner_single_valid", "Alice Verified"),
+                )
+                self.assertTrue(win.signature_banner_btn.get_visible())
+        finally:
+            release_worker.set()
+            if not doc.is_closed:
+                doc.close()
+            win.destroy()
+
+    def test_signature_inspection_discards_closed_tab_or_stale_document_result(self):
+        """Verify background signature inspection results are ignored if the tab closed or document changed."""
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        win = PdfEditorWindow()
+        doc1 = fitz.open()
+        doc1.new_page(width=595.0, height=842.0)
+        doc2 = fitz.open()
+        doc2.new_page(width=595.0, height=842.0)
+
+        fake_sigs = [
+            {
+                "field_name": "Sig1",
+                "intact": True,
+                "valid": True,
+                "trusted": True,
+                "signer_cn": "Stale Signer",
+            }
+        ]
+
+        try:
+            sess = win._active_session
+            sess.doc = doc1
+            sess.sig_inspection_token = 7
+            sess.sig_inspection_in_progress = True
+
+            # Case 1: Document in session changed to doc2 before doc1 inspection completed
+            sess.doc = doc2
+            win._update_signature_banner(None)
+            win._apply_signature_inspection_result(sess, doc1, 7, fake_sigs)
+            self.assertIsNone(sess.digital_signatures)
+            self.assertFalse(win.signature_banner.get_visible())
+
+            # Case 2: Session was removed (tab closed) before inspection completed
+            closed_sess = win.create_session()
+            closed_sess.doc = doc1
+            closed_sess.sig_inspection_token = 1
+            closed_sess.sig_inspection_in_progress = True
+            if closed_sess in win.sessions:
+                win.sessions.remove(closed_sess)
+            win._apply_signature_inspection_result(closed_sess, doc1, 1, fake_sigs)
+            self.assertIsNone(closed_sess.digital_signatures)
+            self.assertTrue(closed_sess.sig_inspection_in_progress)
+
+            # Case 3: Document was closed via session.close() before callback ran
+            sess.doc = doc1
+            sess.sig_inspection_token = 10
+            sess.sig_inspection_in_progress = True
+            sess.close()
+            win._apply_signature_inspection_result(sess, doc1, 10, fake_sigs)
+            self.assertIsNone(sess.digital_signatures)
+            self.assertFalse(win.signature_banner.get_visible())
+        finally:
+            if not doc1.is_closed:
+                doc1.close()
+            if not doc2.is_closed:
+                doc2.close()
+            win.destroy()
+
+    def test_on_inspect_digital_signatures_non_blocking_when_uninspected(self):
+        """Verify on_inspect_digital_signatures triggers async inspection when signatures are not yet cached."""
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        win = PdfEditorWindow()
+        doc = fitz.open()
+        doc.new_page(width=595.0, height=842.0)
+
+        fake_sigs = [
+            {
+                "field_name": "Sig1",
+                "intact": True,
+                "valid": True,
+                "trusted": True,
+                "signer_cn": "Async Inspector",
+            }
+        ]
+
+        try:
+            sess = win._active_session
+            sess.doc = doc
+            sess.digital_signatures = None
+
+            def fake_start(target_sess, target_doc, on_complete=None):
+                target_sess.sig_inspection_token = 1
+                target_sess.sig_inspection_in_progress = True
+                target_sess._sig_inspection_on_complete = on_complete
+                win._apply_signature_inspection_result(target_sess, target_doc, 1, fake_sigs)
+
+            with patch.object(win, "_start_signature_inspection", side_effect=fake_start) as mock_start, \
+                 patch.object(SignatureDetailsDialog, "present") as mock_present:
+                win.on_inspect_digital_signatures()
+                mock_start.assert_called_once()
+                self.assertEqual(sess.digital_signatures, fake_sigs)
+                mock_present.assert_called_once()
+        finally:
+            if not doc.is_closed:
+                doc.close()
+            win.destroy()
+
+    def test_sig_banner_verifying_localization(self):
+        """Ensure sig_banner_verifying key exists across all supported locales."""
+        dicts = [
+            ("en", _STRINGS["en"]),
+            ("tr", _STRINGS["tr"]),
+            ("fr", STRINGS_FR),
+            ("de", STRINGS_DE),
+            ("es", STRINGS_ES),
+            ("it", STRINGS_IT),
+            ("ru", STRINGS_RU),
+        ]
+        for lang, d in dicts:
+            self.assertIn("sig_banner_verifying", d, f"Missing sig_banner_verifying in {lang}")
+            self.assertTrue(len(d["sig_banner_verifying"]) > 0)
+
 
 if __name__ == "__main__":
     unittest.main()
