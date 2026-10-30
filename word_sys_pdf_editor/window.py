@@ -36,7 +36,8 @@ from .welcome_view import WelcomeView
 from .models import (
     PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke,
     DocumentSession, AcroFormField, ScaleCalibration, PRESET_SCALES, MeasurementObject,
-    StickyNoteObject, PatchObject, RedactionMark, measure_text_width, snapshot_object_state
+    StickyNoteObject, PatchObject, RedactionMark, measure_text_width, snapshot_object_state,
+    simplify_stroke_points
 )
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_info_dialog, show_confirm_dialog,
@@ -14535,6 +14536,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 stroke_to_add = self.temp_stroke
                 self.temp_stroke = None
                 if stroke_to_add.points:
+                    rdp_tol = min(0.5, 0.5 / max(getattr(self, 'zoom_level', 1.0), 1.0))
+                    stroke_to_add.simplify(tolerance=rdp_tol)
                     stroke_to_add.recalculate_bbox()
                     stroke_to_add.original_bbox = stroke_to_add.bbox
                     self.selected_stroke = stroke_to_add

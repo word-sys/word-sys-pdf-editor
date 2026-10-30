@@ -1999,6 +1999,162 @@ class TestPart77UndoHistoryMemoryReduction(unittest.TestCase):
         self.assertEqual(snap_stroke["points"], [(10.0, 10.0), (20.0, 20.0)])
 
 
+class TestPart76RDPStrokeSimplification(unittest.TestCase):
+    """Verify Part 76 Ramer-Douglas-Peucker vector stroke simplification."""
+
+    def test_dense_input_point_count_reduction_and_endpoint_preservation(self):
+        """Verify RDP decimation reduces dense point counts significantly while preserving exact endpoints."""
+        import math
+        from word_sys_pdf_editor.models import simplify_stroke_points
+
+        # Edge cases
+        self.assertEqual(simplify_stroke_points([]), [])
+        self.assertEqual(simplify_stroke_points([(12.5, 34.5)]), [(12.5, 34.5)])
+        self.assertEqual(
+            simplify_stroke_points([(10.0, 20.0), (30.0, 40.0)]),
+            [(10.0, 20.0), (30.0, 40.0)],
+        )
+
+        # 500-point near-collinear line with sub-0.3px hand jitter -> collapses to 2 endpoints
+        jitter_line = [
+            (50.0 + i * 0.5, 100.0 + (0.25 * math.sin(i * 0.7) if 0 < i < 499 else 0.0))
+            for i in range(500)
+        ]
+        simplified_line = simplify_stroke_points(jitter_line, tolerance=0.5)
+        self.assertEqual(len(simplified_line), 2)
+        self.assertEqual(simplified_line[0], jitter_line[0])
+        self.assertEqual(simplified_line[-1], jitter_line[-1])
+
+        # 1,000-point dense sine wave -> >85% point reduction and exact endpoint preservation
+        dense_wave = [
+            (20.0 + i * 0.4, 200.0 + 40.0 * math.sin(i * 2.0 * math.pi / 250.0))
+            for i in range(1000)
+        ]
+        simplified_wave = simplify_stroke_points(dense_wave, tolerance=0.5)
+        self.assertEqual(simplified_wave[0], dense_wave[0])
+        self.assertEqual(simplified_wave[-1], dense_wave[-1])
+        self.assertLess(len(simplified_wave), 100, f"Expected < 100 points from 1,000, got {len(simplified_wave)}")
+        self.assertGreater(len(simplified_wave), 10)
+
+        # Closed loop where start == end
+        closed_circle = [
+            (200.0 + 50.0 * math.cos(2.0 * math.pi * i / 360.0),
+             200.0 + 50.0 * math.sin(2.0 * math.pi * i / 360.0))
+            for i in range(361)
+        ]
+        closed_circle[-1] = closed_circle[0]
+        simplified_circle = simplify_stroke_points(closed_circle, tolerance=0.5)
+        self.assertEqual(simplified_circle[0], closed_circle[0])
+        self.assertEqual(simplified_circle[-1], closed_circle[-1])
+        self.assertLess(len(simplified_circle), 50)
+        self.assertGreater(len(simplified_circle), 8)
+
+    def test_maximum_deviation_strictly_within_tolerance(self):
+        """Verify every original point lies within <= tolerance Euclidean distance of simplified segments."""
+        import math
+        from word_sys_pdf_editor.models import simplify_stroke_points
+        from word_sys_pdf_editor.utils import point_to_segment_distance
+
+        raw_points = [
+            (
+                30.0 + i * 0.6,
+                150.0 + 35.0 * math.sin(i * 0.03) + 12.0 * math.cos(i * 0.11),
+            )
+            for i in range(800)
+        ]
+
+        for tol in (0.5, 0.25):
+            simplified = simplify_stroke_points(raw_points, tolerance=tol)
+            self.assertEqual(simplified[0], raw_points[0])
+            self.assertEqual(simplified[-1], raw_points[-1])
+
+            max_err = 0.0
+            for px, py in raw_points:
+                min_seg_dist = min(
+                    point_to_segment_distance(px, py, simplified[j][0], simplified[j][1], simplified[j + 1][0], simplified[j + 1][1])
+                    for j in range(len(simplified) - 1)
+                )
+                if min_seg_dist > max_err:
+                    max_err = min_seg_dist
+
+            self.assertLessEqual(
+                max_err,
+                tol + 1e-9,
+                f"Max deviation {max_err:.6f} exceeded tolerance {tol}",
+            )
+
+    def test_simplified_stroke_commit_pdf_size_and_undo_redo(self):
+        """Verify simplified stroke reduces PDF content stream size and supports exact undo/redo."""
+        import math
+        from word_sys_pdf_editor.models import snapshot_object_state
+        from word_sys_pdf_editor.undo_manager import AddObjectCommand, EditObjectCommand
+
+        raw_pts = [
+            (40.0 + i * 0.5, 120.0 + 25.0 * math.sin(i * 0.025))
+            for i in range(600)
+        ]
+
+        # Compare PDF stream size for raw vs simplified stroke
+        doc_raw, _ = pdf_handler.create_new_pdf(width=595, height=842, num_pages=1)
+        stroke_raw = EditableStroke(points=list(raw_pts), stroke_color=(0.1, 0.2, 0.8), stroke_width=2.5, page_number=0, is_new=True)
+        pdf_handler.apply_object_edit(doc_raw, stroke_raw)
+        raw_stream_len = len(doc_raw[0].read_contents())
+        doc_raw.close()
+
+        doc, _ = pdf_handler.create_new_pdf(width=595, height=842, num_pages=1)
+        win = MockWindow(doc)
+        win._load_page(0, reload_objects=True)
+
+        stroke = EditableStroke(points=list(raw_pts), stroke_color=(0.1, 0.2, 0.8), stroke_width=2.5, page_number=0, is_new=True)
+        stroke.simplify(tolerance=0.5)
+        simplified_count = len(stroke.points)
+        self.assertLess(simplified_count, 60)
+        simplified_pts_initial = list(stroke.points)
+        initial_bbox = stroke.bbox
+
+        add_cmd = AddObjectCommand(win, stroke)
+        add_cmd.execute()
+        win.undo_manager.add_command(add_cmd)
+
+        simp_stream_len = len(doc[0].read_contents())
+        self.assertLess(simp_stream_len, raw_stream_len * 0.25, f"Expected simplified stream ({simp_stream_len}B) < 25% of raw ({raw_stream_len}B)")
+
+        # Move simplified stroke and record EditObjectCommand
+        old_props = snapshot_object_state(stroke)
+        stroke.set_position(stroke.x + 30.0, stroke.y + 40.0)
+        stroke.original_bbox = stroke.bbox
+        moved_pts = list(stroke.points)
+        moved_bbox = stroke.bbox
+        new_props = snapshot_object_state(stroke)
+        stroke.__dict__.update(old_props)
+
+        move_cmd = EditObjectCommand(win, stroke, old_props, new_props)
+        move_cmd.execute()
+        win.undo_manager.add_command(move_cmd)
+
+        self.assertEqual(stroke.points, moved_pts)
+        self.assertEqual(stroke.bbox, moved_bbox)
+
+        # Undo move
+        win.undo_manager.undo()
+        self.assertEqual(stroke.points, simplified_pts_initial)
+        self.assertEqual(stroke.bbox, initial_bbox)
+
+        # Undo add
+        win.undo_manager.undo()
+        self.assertNotIn(stroke, win.editable_strokes)
+
+        # Redo add and move
+        win.undo_manager.redo()
+        self.assertIn(stroke, win.editable_strokes)
+        self.assertEqual(stroke.points, simplified_pts_initial)
+
+        win.undo_manager.redo()
+        self.assertEqual(stroke.points, moved_pts)
+        self.assertEqual(stroke.bbox, moved_bbox)
+        doc.close()
+
+
 if __name__ == "__main__":
     unittest.main()
 

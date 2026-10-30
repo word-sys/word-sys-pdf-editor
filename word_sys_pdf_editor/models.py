@@ -786,6 +786,73 @@ class EditableShape:
         clone.__dict__.update(snapshot_object_state(self.__dict__))
         return clone
 
+def simplify_stroke_points(points: List[Tuple[float, float]], tolerance: float = 0.5) -> List[Tuple[float, float]]:
+    """Simplify a 2D polyline using iterative Ramer-Douglas-Peucker (RDP) decimation.
+
+    Preserves the first and last endpoints exactly and guarantees that every discarded
+    intermediate point lies within `tolerance` Euclidean distance of the simplified polyline.
+    """
+    if not points:
+        return []
+    pts = [(float(p[0]), float(p[1])) for p in points]
+    n = len(pts)
+    if n <= 2 or tolerance < 0.0:
+        return pts
+
+    tol_sq = float(tolerance) * float(tolerance)
+    keep = [False] * n
+    keep[0] = True
+    keep[n - 1] = True
+    stack = [(0, n - 1)]
+
+    while stack:
+        start_idx, end_idx = stack.pop()
+        if end_idx - start_idx <= 1:
+            continue
+        sx, sy = pts[start_idx]
+        ex, ey = pts[end_idx]
+        dx = ex - sx
+        dy = ey - sy
+        seg_len_sq = dx * dx + dy * dy
+
+        max_dist_sq = -1.0
+        max_idx = -1
+
+        if seg_len_sq == 0.0:
+            for i in range(start_idx + 1, end_idx):
+                px, py = pts[i]
+                ddx = px - sx
+                ddy = py - sy
+                dist_sq = ddx * ddx + ddy * ddy
+                if dist_sq > max_dist_sq:
+                    max_dist_sq = dist_sq
+                    max_idx = i
+        else:
+            for i in range(start_idx + 1, end_idx):
+                px, py = pts[i]
+                t = ((px - sx) * dx + (py - sy) * dy) / seg_len_sq
+                if t <= 0.0:
+                    ddx = px - sx
+                    ddy = py - sy
+                elif t >= 1.0:
+                    ddx = px - ex
+                    ddy = py - ey
+                else:
+                    ddx = px - (sx + t * dx)
+                    ddy = py - (sy + t * dy)
+                dist_sq = ddx * ddx + ddy * ddy
+                if dist_sq > max_dist_sq:
+                    max_dist_sq = dist_sq
+                    max_idx = i
+
+        if max_dist_sq > tol_sq and max_idx != -1:
+            keep[max_idx] = True
+            stack.append((start_idx, max_idx))
+            stack.append((max_idx, end_idx))
+
+    return [pts[i] for i in range(n) if keep[i]]
+
+
 class EditableStroke:
     """Data model representing freehand pen and highlighter vector drawings."""
     TOOL_PEN = "pen"
@@ -820,6 +887,13 @@ class EditableStroke:
         """Add point to stroke and recalculate bbox."""
         self.points.append((float(x), float(y)))
         self.recalculate_bbox()
+
+    def simplify(self, tolerance: float = 0.5) -> List[Tuple[float, float]]:
+        """Simplify stroke points in-place using Ramer-Douglas-Peucker decimation."""
+        if len(self.points) > 2:
+            self.points = simplify_stroke_points(self.points, tolerance=tolerance)
+            self.recalculate_bbox()
+        return self.points
 
     def recalculate_bbox(self):
         """Recalculate bounding box from points with stroke width padding."""
