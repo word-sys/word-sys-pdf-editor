@@ -2595,6 +2595,8 @@ def save_document(doc, save_path, incremental=False):
     # garbage=4/clean=True renumber xrefs and rewrite streams IN MEMORY, which leaves the
     # live editor document out of sync with its page snapshots and XObject bindings (later
     # edits then drop strokes/images/stamps). Run the rewrite on a throw-away copy instead.
+    # Note: PyMuPDF reports is_encrypted=False once a password is authenticated, so only an
+    # unauthenticated (unusable) document ever takes the in-place fallback below.
     work_doc = doc
     copy_doc = None
     try:

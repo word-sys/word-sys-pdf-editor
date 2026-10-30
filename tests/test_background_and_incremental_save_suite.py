@@ -384,3 +384,53 @@ def test_full_rewrite_does_not_mutate_live_document(tmp_path):
     finally:
         pdf_handler.release_page_snapshots(doc)
         doc.close()
+
+
+def test_encrypted_document_save_then_edit_keeps_objects_and_encryption(tmp_path):
+    pdf_handler, doc, path, text, lists = _build_edit_after_save_fixture(tmp_path)
+    pdf_handler.release_page_snapshots(doc)
+    doc.close()
+    plain = fitz.open(path)
+    enc_path = str(tmp_path / "enc_edit_after_save.pdf")
+    plain.save(enc_path, encryption=fitz.PDF_ENCRYPT_AES_256, user_pw="u", owner_pw="o")
+    plain.close()
+
+    edoc, err = pdf_handler.load_pdf_document(enc_path, password="u")
+    assert edoc is not None, err
+    try:
+        pdf_handler.save_page_snapshot(edoc, 0)
+        text.page_number = 0
+        text.is_new = True
+        text.text = "New Text"
+        pdf_handler.rebuild_page(edoc, 0, **lists)
+        baseline = _ink(edoc)
+        xref_len = edoc.xref_length()
+        for incr in (False, True, False):
+            ok, e = pdf_handler.save_document(edoc, enc_path, incremental=incr)
+            assert ok, e
+            text.text = text.text + "x"
+            pdf_handler.rebuild_page(edoc, 0, **lists)
+            assert len(edoc[0].get_images()) >= 1
+            assert _ink(edoc) >= baseline - 50
+        reopened = fitz.open(enc_path)
+        assert reopened.needs_pass
+        assert reopened.authenticate("u")
+        assert len(reopened[0].get_images()) >= 1
+        reopened.close()
+    finally:
+        pdf_handler.release_page_snapshots(edoc)
+        edoc.close()
+
+
+def test_full_rewrite_without_stored_password_never_mutates_unencrypted_live_doc(tmp_path):
+    """Owner-only/empty-user-password docs report is_encrypted False and use the copy path."""
+    pdf_handler, doc, path, text, lists = _build_edit_after_save_fixture(tmp_path)
+    try:
+        assert not doc.is_encrypted
+        before = doc.xref_length()
+        ok, e = pdf_handler.save_document(doc, path, incremental=False)
+        assert ok, e
+        assert doc.xref_length() == before
+    finally:
+        pdf_handler.release_page_snapshots(doc)
+        doc.close()
