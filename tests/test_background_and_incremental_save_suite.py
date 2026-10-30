@@ -313,3 +313,74 @@ def test_concurrent_save_and_editing_guards():
     finally:
         win.is_saving = False
         doc.close()
+
+
+def _build_edit_after_save_fixture(tmp_path):
+    from word_sys_pdf_editor import pdf_handler
+    from word_sys_pdf_editor.models import (
+        EditableText, EditableShape, EditableStroke, EditableImage,
+    )
+    path = str(tmp_path / "edit_after_save.pdf")
+    base = fitz.open()
+    base.new_page().insert_text((72, 72), "Hello base")
+    base.save(path)
+    base.close()
+    doc, _err = pdf_handler.load_pdf_document(path)
+    pdf_handler.save_page_snapshot(doc, 0)
+    text = EditableText(100, 200, "New Text", font_size=14, is_new=True)
+    text.page_number = 0
+    shape = EditableShape("ellipse", (100, 300, 200, 360), page_number=0, is_new=True)
+    stroke = EditableStroke(
+        [(100, 400), (150, 420), (200, 400)], stroke_color=(1, 1, 0),
+        stroke_width=8, opacity=0.5, page_number=0, is_new=True,
+    )
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 40, 40), False)
+    pix.set_rect(pix.irect, (255, 0, 0))
+    image = EditableImage((300, 300, 360, 360), 0, 0, pix.tobytes("png"), is_new=True, rotation=30.0)
+    lists = dict(all_texts=[text], all_shapes=[shape], all_images=[image], all_strokes=[stroke])
+    pdf_handler.rebuild_page(doc, 0, **lists)
+    return pdf_handler, doc, path, text, lists
+
+
+def _ink(doc):
+    samples = doc[0].get_pixmap().samples
+    return len(samples) - samples.count(255)
+
+
+@pytest.mark.parametrize("sequence", [
+    [True, True, True], [False, False], [True, False, True], [False, True],
+])
+def test_editing_after_save_keeps_all_objects(tmp_path, sequence):
+    """Regression: stroke/image/stamp vanished when editing after a save."""
+    pdf_handler, doc, path, text, lists = _build_edit_after_save_fixture(tmp_path)
+    try:
+        baseline = _ink(doc)
+        for i, incr in enumerate(sequence):
+            ok, err = pdf_handler.save_document(doc, path, incremental=incr)
+            assert ok, err
+            text.text = text.text + "x"
+            pdf_handler.rebuild_page(doc, 0, **lists)
+            assert len(doc[0].get_images()) >= 1
+            assert len(doc[0].get_drawings()) >= 2
+            assert _ink(doc) >= baseline - 50
+    finally:
+        pdf_handler.release_page_snapshots(doc)
+        doc.close()
+
+
+def test_full_rewrite_does_not_mutate_live_document(tmp_path):
+    """Full rewrite (garbage/clean) must not renumber xrefs of the live document."""
+    pdf_handler, doc, path, text, lists = _build_edit_after_save_fixture(tmp_path)
+    try:
+        before_len = doc.xref_length()
+        before_imgs = doc.get_page_images(0)
+        ok, err = pdf_handler.save_document(doc, path, incremental=False)
+        assert ok, err
+        assert doc.xref_length() == before_len
+        assert doc.get_page_images(0) == before_imgs
+        reopened = fitz.open(path)
+        assert len(reopened[0].get_images()) >= 1
+        reopened.close()
+    finally:
+        pdf_handler.release_page_snapshots(doc)
+        doc.close()

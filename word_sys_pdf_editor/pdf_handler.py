@@ -2592,7 +2592,21 @@ def save_document(doc, save_path, incremental=False):
     thread_id = getattr(threading, 'get_ident', lambda: 0)()
     temp_path = f"{save_path}.tmp_save_{os.getpid()}_{thread_id}"
 
+    # garbage=4/clean=True renumber xrefs and rewrite streams IN MEMORY, which leaves the
+    # live editor document out of sync with its page snapshots and XObject bindings (later
+    # edits then drop strokes/images/stamps). Run the rewrite on a throw-away copy instead.
+    work_doc = doc
+    copy_doc = None
     try:
+        if not (getattr(doc, 'is_encrypted', False) and not has_custom_encryption):
+            try:
+                copy_doc = fitz.open("pdf", doc.tobytes(encryption=fitz.PDF_ENCRYPT_NONE))
+                work_doc = copy_doc
+            except Exception as copy_err:
+                print(f"Warning: could not snapshot document for safe rewrite: {copy_err}")
+                copy_doc = None
+                work_doc = doc
+
         if has_custom_encryption:
             save_kwargs = {
                 "garbage": 4,
@@ -2605,22 +2619,33 @@ def save_document(doc, save_path, incremental=False):
             }
             if perms is not None:
                 save_kwargs["permissions"] = permissions_to_bitmask(perms)
-            doc.save(temp_path, **save_kwargs)
+            work_doc.save(temp_path, **save_kwargs)
         else:
-            enc = fitz.PDF_ENCRYPT_KEEP if getattr(doc, 'is_encrypted', False) else fitz.PDF_ENCRYPT_NONE
-            doc.save(
+            if copy_doc is not None:
+                enc = fitz.PDF_ENCRYPT_NONE
+            else:
+                enc = fitz.PDF_ENCRYPT_KEEP if getattr(doc, 'is_encrypted', False) else fitz.PDF_ENCRYPT_NONE
+            work_doc.save(
                 temp_path,
                 garbage=4,
                 deflate=True,
                 clean=True,
-                incremental=False,  
+                incremental=False,
                 encryption=enc
             )
+        if copy_doc is not None:
+            copy_doc.close()
+            copy_doc = None
 
         os.replace(temp_path, save_path)
         return True, None
 
     except Exception as e:
+        if copy_doc is not None:
+            try:
+                copy_doc.close()
+            except Exception:
+                pass
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
