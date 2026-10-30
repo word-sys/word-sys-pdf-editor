@@ -2841,6 +2841,16 @@ def get_image_rgba_bytes(doc, xref):
             except Exception:
                 pass
 
+        # Fast-path for standard RGB/Grayscale images with no soft mask or alpha channel:
+        # return compressed stream bytes directly without decoding a full-resolution fitz.Pixmap
+        # (prevents 36–144 MB temporary allocations per 12–48 MP photo during page load).
+        cs_name = str(image_data.get("colorspace", "")).upper()
+        n_comp = image_data.get("colorspace", 0)
+        ext_lower = str(image_data.get("ext", "")).lower()
+        is_cmyk = (n_comp == 4) or ("CMYK" in cs_name) or ("DEVICE_CMYK" in cs_name)
+        if not smask_xref and not is_cmyk and ext_lower in ("jpeg", "jpg"):
+            return image_data["image"]
+
         base_pix = fitz.Pixmap(doc, xref)
 
         # If soft mask (alpha transparency) is present
@@ -2994,9 +3004,17 @@ def add_image_to_page(doc, page_number, image_path, rect):
         return False, _("err_placing_image", e)
 
 def get_image_pixel_dimensions(image_bytes: bytes) -> Tuple[int, int]:
-    """Extract intrinsic pixel width and height from image bytes."""
+    """Extract intrinsic pixel width and height from image bytes without full pixel decoding when possible."""
     if not image_bytes:
         return 200, 200
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            w, h = int(img.width), int(img.height)
+            if w > 0 and h > 0:
+                return w, h
+    except Exception:
+        pass
     try:
         pix = fitz.Pixmap(image_bytes)
         w, h = int(pix.width), int(pix.height)
@@ -3013,12 +3031,6 @@ def get_image_pixel_dimensions(image_bytes: bytes) -> Tuple[int, int]:
         pb = loader.get_pixbuf()
         if pb:
             return int(pb.get_width()), int(pb.get_height())
-    except Exception:
-        pass
-    try:
-        from PIL import Image
-        with Image.open(io.BytesIO(image_bytes)) as img:
-            return int(img.width), int(img.height)
     except Exception:
         pass
     return 200, 200
@@ -3122,13 +3134,24 @@ def fit_image_to_aspect_ratio(image_bytes: bytes, target_bbox: Tuple[float, floa
         if img_aspect > box_aspect:
             canvas_w = img_w
             canvas_h = max(1, int(round(img_w / box_aspect)))
-            x_offset = 0
-            y_offset = (canvas_h - img_h) // 2
         else:
             canvas_h = img_h
             canvas_w = max(1, int(round(img_h * box_aspect)))
-            x_offset = (canvas_w - img_w) // 2
-            y_offset = 0
+
+        # Bound canvas pixel dimensions (default max 4096 px longest side) so extreme aspect-ratio
+        # replacements of 12-48 MP photos cannot allocate hundreds of megabytes of RGBA padding
+        max_canvas_dim = 4096
+        longest_canvas = max(canvas_w, canvas_h)
+        if longest_canvas > max_canvas_dim:
+            scale = max_canvas_dim / float(longest_canvas)
+            img_w = max(1, int(round(img_w * scale)))
+            img_h = max(1, int(round(img_h * scale)))
+            im = im.resize((img_w, img_h), Image.Resampling.LANCZOS)
+            canvas_w = max(1, int(round(canvas_w * scale)))
+            canvas_h = max(1, int(round(canvas_h * scale)))
+
+        x_offset = (canvas_w - img_w) // 2
+        y_offset = (canvas_h - img_h) // 2
 
         canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
         im_rgba = im.convert("RGBA") if im.mode != "RGBA" else im

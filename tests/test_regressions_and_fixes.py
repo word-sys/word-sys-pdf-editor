@@ -2302,3 +2302,94 @@ class TestPart98DecodedImageCache:
             cache.get(data)
         warm = (time.perf_counter() - t0) / 100
         assert warm < cold / 20
+
+
+class TestPart80LargeImageMemoryBounding:
+    @staticmethod
+    def _make_photo_jpeg(w=4000, h=3000):
+        import io
+        from PIL import Image
+        img = Image.new("RGB", (w, h), (120, 160, 200))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+
+    def test_extract_editable_images_skips_full_pixmap_decode_for_rgb_jpeg(self):
+        import fitz
+        from unittest.mock import patch
+        from word_sys_pdf_editor import pdf_handler
+        jpeg_bytes = self._make_photo_jpeg(3000, 2000)
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_image(fitz.Rect(50, 50, 350, 250), stream=jpeg_bytes)
+        try:
+            with patch.object(fitz, "Pixmap", wraps=fitz.Pixmap) as spy_pixmap:
+                imgs, err = pdf_handler.extract_editable_images(doc, 0)
+                assert err is None and len(imgs) == 1
+                assert imgs[0].image_bytes == jpeg_bytes
+                assert spy_pixmap.call_count == 0
+        finally:
+            doc.close()
+
+    def test_get_image_pixel_dimensions_reads_header_without_full_decode(self):
+        import fitz
+        from unittest.mock import patch
+        from word_sys_pdf_editor import pdf_handler
+        jpeg_bytes = self._make_photo_jpeg(4000, 3000)
+        with patch.object(fitz, "Pixmap", wraps=fitz.Pixmap) as spy_pixmap:
+            w, h = pdf_handler.get_image_pixel_dimensions(jpeg_bytes)
+            assert (w, h) == (4000, 3000)
+            assert spy_pixmap.call_count == 0
+
+    def test_multi_photo_document_keeps_compressed_bytes_and_exports_full_resolution(self, tmp_path):
+        import fitz
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.utils import DecodedPixbufCache
+        jpeg_bytes = self._make_photo_jpeg(4000, 3000)  # 12 MP (~36 MB uncompressed RGB)
+        doc = fitz.open()
+        for _ in range(5):
+            p = doc.new_page()
+            p.insert_image(fitz.Rect(50, 50, 450, 350), stream=jpeg_bytes)
+        try:
+            extracted_all = []
+            for pno in range(5):
+                imgs, err = pdf_handler.extract_editable_images(doc, pno)
+                assert err is None and len(imgs) == 1
+                extracted_all.append(imgs[0])
+            # Stored compressed bytes across all 5 12-MP photos are < 2 MB (vs ~180 MB decoded)
+            total_stored_bytes = sum(len(im.image_bytes) for im in extracted_all)
+            assert total_stored_bytes < 2 * 1024 * 1024
+
+            # Display copy in DecodedPixbufCache is bounded to <= 2560 px longest side
+            cache = DecodedPixbufCache(max_dimension=2560)
+            pb = cache.get(extracted_all[0].image_bytes)
+            assert (pb.get_width(), pb.get_height()) == (2560, 1920)
+
+            # Moving and rebuilding preserves the original 4000x3000 resolution on export
+            extracted_all[0].bbox = (60, 60, 460, 360)
+            extracted_all[0].is_new = True
+            pdf_handler.save_page_snapshot(doc, 0)
+            pdf_handler.rebuild_page(doc, 0, all_texts=[], all_shapes=[], all_images=[extracted_all[0]])
+            out_path = str(tmp_path / "out_full_res.pdf")
+            ok, err = pdf_handler.save_document(doc, out_path, incremental=False)
+            assert ok, err
+            reopened = fitz.open(out_path)
+            try:
+                info = reopened[0].get_image_info(xrefs=True)
+                assert any(i.get("width") == 4000 and i.get("height") == 3000 for i in info)
+            finally:
+                reopened.close()
+        finally:
+            pdf_handler.release_page_snapshots(doc)
+            doc.close()
+
+    def test_fit_image_to_aspect_ratio_bounds_extreme_canvas_dimensions(self):
+        import io
+        from PIL import Image
+        from word_sys_pdf_editor import pdf_handler
+        jpeg_bytes = self._make_photo_jpeg(4000, 3000)
+        # 1:4 target aspect ratio would otherwise create a 4000x16000 (256 MB RGBA) canvas
+        fitted = pdf_handler.fit_image_to_aspect_ratio(jpeg_bytes, (0, 0, 100, 400))
+        with Image.open(io.BytesIO(fitted)) as out_im:
+            assert max(out_im.size) <= 4096
+            assert abs((out_im.width / out_im.height) - 0.25) < 0.01
