@@ -252,6 +252,49 @@ def extract_font_properties(font_name: str, flags: int = 0) -> Dict[str, Any]:
     return decompose_font_name(font_name, flags)
 
 
+SHARED_STATE_KEYS = frozenset({
+    'image_bytes',
+    'raw_image_bytes',
+    'patch_bytes',
+    'pixel_data',
+    'span_data',
+    'font_properties',
+    'linked_patch',
+    'linked_text',
+    '_cached_pixbuf',
+    '_cached_surface',
+    'widget',
+    'label_widget',
+})
+
+
+def snapshot_object_state(obj_or_dict: Any) -> Optional[Dict[str, Any]]:
+    """Create a lightweight state dictionary for undo/redo snapshots.
+
+    Shares large immutable payloads (such as image_bytes, raw_image_bytes,
+    span_data, font_properties) and cross-object references (linked_patch,
+    linked_text) by reference while copying small mutable state.
+    """
+    if obj_or_dict is None:
+        return None
+    src = obj_or_dict if isinstance(obj_or_dict, dict) else getattr(obj_or_dict, '__dict__', {})
+    out: Dict[str, Any] = {}
+    for k, v in src.items():
+        if k in SHARED_STATE_KEYS or v is None or isinstance(v, (int, float, str, bool, bytes, tuple)):
+            out[k] = v
+        elif k == 'char_boxes' and isinstance(v, list):
+            out[k] = [dict(cb) for cb in v]
+        elif k in ('points', 'original_points') and isinstance(v, list):
+            out[k] = list(v)
+        elif isinstance(v, list):
+            out[k] = list(v)
+        elif isinstance(v, dict):
+            out[k] = dict(v)
+        else:
+            out[k] = copy.copy(v)
+    return out
+
+
 class EditableText:
     """Data model representing extracted or newly added editable text on a PDF page."""
     def __init__(self, x, y, text, font_size=11, font_family="Liberation Sans",
@@ -589,6 +632,15 @@ class EditableText:
 
         return parts
 
+    def __deepcopy__(self, memo):
+        if id(self) in memo:
+            return memo[id(self)]
+        cls = self.__class__
+        clone = cls.__new__(cls)
+        memo[id(self)] = clone
+        clone.__dict__.update(snapshot_object_state(self.__dict__))
+        return clone
+
 class EditableImage:
     """Data model representing an extracted or inserted image, rubber stamp, or texture clone patch on a PDF page."""
     def __init__(self, bbox, page_number, xref, image_bytes, is_new=False, rotation=0.0,
@@ -614,6 +666,15 @@ class EditableImage:
         """Set rotation in degrees (0-360)."""
         self.rotation = float(angle) % 360.0
         self.original_rotation = self.rotation
+
+    def __deepcopy__(self, memo):
+        if id(self) in memo:
+            return memo[id(self)]
+        cls = self.__class__
+        clone = cls.__new__(cls)
+        memo[id(self)] = clone
+        clone.__dict__.update(snapshot_object_state(self.__dict__))
+        return clone
 
 class PatchObject(EditableImage):
     """Specialized EditableImage representing a background texture clone patch."""
@@ -716,6 +777,15 @@ class EditableShape:
             ((x2 - 0.18 * w, y1 + 0.18 * h), (x1 + 0.18 * w, y2 - 0.18 * h))
         ]
 
+    def __deepcopy__(self, memo):
+        if id(self) in memo:
+            return memo[id(self)]
+        cls = self.__class__
+        clone = cls.__new__(cls)
+        memo[id(self)] = clone
+        clone.__dict__.update(snapshot_object_state(self.__dict__))
+        return clone
+
 class EditableStroke:
     """Data model representing freehand pen and highlighter vector drawings."""
     TOOL_PEN = "pen"
@@ -811,6 +881,15 @@ class EditableStroke:
         """Set rotation in degrees (0-360)."""
         self.rotation = float(angle) % 360.0
         self.original_rotation = self.rotation
+
+    def __deepcopy__(self, memo):
+        if id(self) in memo:
+            return memo[id(self)]
+        cls = self.__class__
+        clone = cls.__new__(cls)
+        memo[id(self)] = clone
+        clone.__dict__.update(snapshot_object_state(self.__dict__))
+        return clone
 
 
 class MeasurementObject:
@@ -956,6 +1035,15 @@ class MeasurementObject:
             rotation=data.get("rotation", 0.0),
             label=data.get("label")
         )
+
+    def __deepcopy__(self, memo):
+        if id(self) in memo:
+            return memo[id(self)]
+        cls = self.__class__
+        clone = cls.__new__(cls)
+        memo[id(self)] = clone
+        clone.__dict__.update(snapshot_object_state(self.__dict__))
+        return clone
 
 
 @dataclass

@@ -1815,6 +1815,190 @@ class TestStartupLazyModuleLoading(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, f"Lazy anyconvert verification failed: {proc.stderr}")
 
 
+class TestPart77UndoHistoryMemoryReduction(unittest.TestCase):
+    """Verify Part 77 undo history memory reduction and reference sharing."""
+
+    def test_image_edit_undo_shares_binary_payload_and_reduces_memory(self):
+        """Verify 20 sequential edits on a 5 MB image share image_bytes by reference (<100 KB overhead)."""
+        import io
+        import cairo
+        import tracemalloc
+        from word_sys_pdf_editor.models import snapshot_object_state, PatchObject
+        from word_sys_pdf_editor.undo_manager import UndoManager, EditObjectCommand
+
+        doc, _ = pdf_handler.create_new_pdf(width=595, height=842, num_pages=1)
+        win = MockWindow(doc)
+        win._load_page(0, reload_objects=True)
+
+        # Create a valid PNG image buffer padded to ~5 MB bytearray payload
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 20, 20)
+        buf = io.BytesIO()
+        surf.write_to_png(buf)
+        png_header = buf.getvalue()
+        large_payload = bytearray(png_header + b"\x00" * (5 * 1024 * 1024))
+
+        img = EditableImage(
+            bbox=(50.0, 50.0, 150.0, 150.0),
+            page_number=0,
+            xref=None,
+            image_bytes=large_payload,
+            is_new=True,
+        )
+        img.is_baked = True
+        win.editable_images.append(img)
+
+        tracemalloc.start()
+        snap_before = tracemalloc.take_snapshot()
+
+        for i in range(20):
+            old_props = snapshot_object_state(img)
+            new_bbox = (50.0 + (i + 1) * 5.0, 50.0 + (i + 1) * 2.0, 150.0 + (i + 1) * 5.0, 150.0 + (i + 1) * 2.0)
+            img.bbox = new_bbox
+            img.x, img.y = new_bbox[0], new_bbox[1]
+            new_props = snapshot_object_state(img)
+            img.__dict__.update(old_props)
+            cmd = EditObjectCommand(win, img, old_props, new_props)
+            cmd.execute()
+            win.undo_manager.add_command(cmd)
+
+        snap_after = tracemalloc.take_snapshot()
+        tracemalloc.stop()
+
+        stats = snap_after.compare_to(snap_before, "lineno")
+        undo_mem_bytes = sum(s.size_diff for s in stats if "undo_manager.py" in str(s.traceback) or "models.py" in str(s.traceback))
+        self.assertLess(undo_mem_bytes, 100 * 1024, f"Undo stack allocated {undo_mem_bytes} bytes, expected < 100 KB")
+
+        self.assertEqual(len(win.undo_manager.undo_stack), 20)
+        for cmd in win.undo_manager.undo_stack:
+            self.assertIs(cmd.old_properties["image_bytes"], large_payload)
+            self.assertIs(cmd.new_properties["image_bytes"], large_payload)
+
+        # Verify full undo and redo behavioral equivalence
+        self.assertEqual(img.bbox, (150.0, 90.0, 250.0, 190.0))
+        for _ in range(20):
+            win.undo_manager.undo()
+        self.assertEqual(img.bbox, (50.0, 50.0, 150.0, 150.0))
+        for _ in range(20):
+            win.undo_manager.redo()
+        self.assertEqual(img.bbox, (150.0, 90.0, 250.0, 190.0))
+        doc.close()
+
+    def test_linked_text_and_patch_edit_avoids_cyclic_deepcopy_bloat(self):
+        """Verify editing text linked to a 2 MB PatchObject shares linked_patch and span_data by reference."""
+        import io
+        import cairo
+        import tracemalloc
+        from word_sys_pdf_editor.models import snapshot_object_state, PatchObject
+        from word_sys_pdf_editor.undo_manager import EditObjectCommand
+
+        doc, _ = pdf_handler.create_new_pdf(width=595, height=842, num_pages=1)
+        win = MockWindow(doc)
+        win._load_page(0, reload_objects=True)
+
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 10, 10)
+        buf = io.BytesIO()
+        surf.write_to_png(buf)
+        patch_payload = bytearray(buf.getvalue() + b"\x00" * (2 * 1024 * 1024))
+
+        patch_obj = PatchObject(
+            bbox=(40.0, 40.0, 240.0, 80.0),
+            page_number=0,
+            image_bytes=patch_payload,
+            is_new=True,
+        )
+        patch_obj.is_baked = True
+        span_meta = {"raw_font_stream": bytearray(b"F" * (256 * 1024)), "flags": 4}
+        char_boxes = [
+            {"char": c, "index": idx, "bbox": (40.0 + idx * 6.0, 40.0, 46.0 + idx * 6.0, 55.0), "origin": (40.0 + idx * 6.0, 52.0)}
+            for idx, c in enumerate("Sample Linked Text Block")
+        ]
+        txt = EditableText(
+            x=40.0,
+            y=40.0,
+            text="Sample Linked Text Block",
+            page_number=0,
+            is_new=True,
+            span_data=span_meta,
+        )
+        txt.is_baked = True
+        txt.char_boxes = char_boxes
+        txt.bbox = (40.0, 40.0, 184.0, 55.0)
+        txt.linked_patch = patch_obj
+        patch_obj.linked_text = txt
+        win.editable_images.append(patch_obj)
+        win.editable_texts.append(txt)
+
+        tracemalloc.start()
+        snap_before = tracemalloc.take_snapshot()
+
+        for i in range(25):
+            old_props = snapshot_object_state(txt)
+            txt.x = 40.0 + (i + 1) * 3.0
+            txt.y = 40.0 + (i + 1) * 2.0
+            txt.bbox = (txt.x, txt.y, txt.x + 144.0, txt.y + 15.0)
+            txt.sync_char_boxes_to_bbox()
+            new_props = snapshot_object_state(txt)
+            txt.__dict__.update(old_props)
+            cmd = EditObjectCommand(win, txt, old_props, new_props)
+            cmd.execute()
+            win.undo_manager.add_command(cmd)
+
+        snap_after = tracemalloc.take_snapshot()
+        tracemalloc.stop()
+
+        stats = snap_after.compare_to(snap_before, "lineno")
+        undo_mem_bytes = sum(s.size_diff for s in stats if "undo_manager.py" in str(s.traceback) or "models.py" in str(s.traceback))
+        # 25 text edits with 24 char_boxes should use < 250 KB (vs >100 MB with cyclic deepcopy)
+        self.assertLess(undo_mem_bytes, 250 * 1024, f"Undo stack allocated {undo_mem_bytes} bytes, expected < 250 KB")
+
+        for cmd in win.undo_manager.undo_stack:
+            self.assertIs(cmd.old_properties["linked_patch"], patch_obj)
+            self.assertIs(cmd.new_properties["linked_patch"], patch_obj)
+            self.assertIs(cmd.old_properties["span_data"], span_meta)
+            self.assertIs(cmd.new_properties["span_data"], span_meta)
+
+        for _ in range(25):
+            win.undo_manager.undo()
+        self.assertEqual(txt.bbox, (40.0, 40.0, 184.0, 55.0))
+        self.assertIs(txt.linked_patch, patch_obj)
+        self.assertIs(patch_obj.linked_text, txt)
+        self.assertAlmostEqual(txt.char_boxes[0]["bbox"][0], 40.0, places=3)
+
+        for _ in range(25):
+            win.undo_manager.redo()
+        self.assertEqual(txt.bbox, (115.0, 90.0, 259.0, 105.0))
+        self.assertIs(txt.linked_patch, patch_obj)
+        self.assertIs(patch_obj.linked_text, txt)
+        doc.close()
+
+    def test_stroke_and_char_boxes_shallow_copy_isolation(self):
+        """Verify mutating char_boxes or stroke points after snapshot does not corrupt saved state."""
+        from word_sys_pdf_editor.models import snapshot_object_state
+
+        txt = EditableText(
+            x=10.0,
+            y=20.0,
+            text="Ab",
+            page_number=0,
+        )
+        txt.char_boxes = [
+            {"char": "A", "index": 0, "bbox": (10.0, 20.0, 20.0, 32.0)},
+            {"char": "b", "index": 1, "bbox": (20.0, 20.0, 30.0, 32.0)},
+        ]
+        txt.bbox = (10.0, 20.0, 30.0, 32.0)
+        snap_txt = snapshot_object_state(txt)
+        txt.char_boxes[0]["bbox"] = (99.0, 99.0, 109.0, 111.0)
+        txt.char_boxes.append({"char": "c", "index": 2, "bbox": (30.0, 20.0, 40.0, 32.0)})
+        self.assertEqual(len(snap_txt["char_boxes"]), 2)
+        self.assertEqual(snap_txt["char_boxes"][0]["bbox"], (10.0, 20.0, 20.0, 32.0))
+
+        stroke = EditableStroke(points=[(10.0, 10.0), (20.0, 20.0)], page_number=0)
+        snap_stroke = snapshot_object_state(stroke)
+        stroke.points.append((30.0, 30.0))
+        stroke.points[0] = (99.0, 99.0)
+        self.assertEqual(snap_stroke["points"], [(10.0, 10.0), (20.0, 20.0)])
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -36,7 +36,7 @@ from .welcome_view import WelcomeView
 from .models import (
     PdfPage, EditableText, BASE14_FALLBACK_MAP, EditableImage, EditableShape, EditableStroke,
     DocumentSession, AcroFormField, ScaleCalibration, PRESET_SCALES, MeasurementObject,
-    StickyNoteObject, PatchObject, RedactionMark, measure_text_width
+    StickyNoteObject, PatchObject, RedactionMark, measure_text_width, snapshot_object_state
 )
 from .ui_components import (
     PageThumbnailFactory, show_error_dialog, show_info_dialog, show_confirm_dialog,
@@ -1782,7 +1782,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._fallback_selected_text = val
         if val is not None:
             self.pending_format_change_obj = val
-            self.before_format_change_state = copy.deepcopy(val.__dict__)
+            self.before_format_change_state = snapshot_object_state(val)
         else:
             self.pending_format_change_obj = None
             self.before_format_change_state = None
@@ -9577,7 +9577,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if isinstance(selected_obj, EditableText):
             self.selected_text = selected_obj
             self.pending_format_change_obj = selected_obj
-            self.before_format_change_state = copy.deepcopy(selected_obj.__dict__)
+            self.before_format_change_state = snapshot_object_state(selected_obj)
             self._update_text_format_controls(selected_obj)
 
     def on_rotate_object_ccw_clicked(self, button=None):
@@ -9597,7 +9597,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if isinstance(selected_obj, EditableText):
             self.selected_text = selected_obj
             self.pending_format_change_obj = selected_obj
-            self.before_format_change_state = copy.deepcopy(selected_obj.__dict__)
+            self.before_format_change_state = snapshot_object_state(selected_obj)
             self._update_text_format_controls(selected_obj)
 
     def on_rotate_object_reset_clicked(self, button=None):
@@ -9618,7 +9618,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if isinstance(selected_obj, EditableText):
             self.selected_text = selected_obj
             self.pending_format_change_obj = selected_obj
-            self.before_format_change_state = copy.deepcopy(selected_obj.__dict__)
+            self.before_format_change_state = snapshot_object_state(selected_obj)
             self._update_text_format_controls(selected_obj)
 
     def on_object_rotation_spin_changed(self, spin_button):
@@ -9641,7 +9641,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if isinstance(selected_obj, EditableText):
             self.selected_text = selected_obj
             self.pending_format_change_obj = selected_obj
-            self.before_format_change_state = copy.deepcopy(selected_obj.__dict__)
+            self.before_format_change_state = snapshot_object_state(selected_obj)
             self._update_text_format_controls(selected_obj)
 
     def _apply_inline_editor_style(self):
@@ -9902,7 +9902,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
 
         text_obj_to_apply = self.inline_editor_text_obj
-        old_properties = copy.deepcopy(text_obj_to_apply.__dict__)
+        old_properties = snapshot_object_state(text_obj_to_apply)
 
         buf = self.inline_editor_tv.get_buffer()
         new_text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
@@ -9961,7 +9961,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.pdf_view.queue_draw()
                 return
 
-            new_properties = copy.deepcopy(text_obj_to_apply.__dict__)
+            new_properties = snapshot_object_state(text_obj_to_apply)
             new_properties['text'] = new_text
             if not getattr(text_obj_to_apply, 'original_bbox', None):
                 text_obj_to_apply.original_bbox = old_properties.get('original_bbox', old_properties.get('bbox'))
@@ -9994,7 +9994,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if text_obj_to_apply:
             self.selected_text = text_obj_to_apply
             self.pending_format_change_obj = text_obj_to_apply
-            self.before_format_change_state = copy.deepcopy(text_obj_to_apply.__dict__)
+            self.before_format_change_state = snapshot_object_state(text_obj_to_apply)
             self._update_text_format_controls(text_obj_to_apply)
 
         if hasattr(self, '_invalidate_spatial_index'):
@@ -11937,7 +11937,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.selected_text:
             self.word_selection_mode = False
             self.pending_format_change_obj = self.selected_text
-            self.before_format_change_state = copy.deepcopy(self.selected_text.__dict__)
+            self.before_format_change_state = snapshot_object_state(self.selected_text)
             if hasattr(self, '_update_text_format_controls'):
                 self._update_text_format_controls(self.selected_text)
         elif self.selected_stroke:
@@ -12568,8 +12568,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             if start_char == 0 and end_char == len(target_obj.text):
                 # Target is already an isolated word span
-                old_props = copy.deepcopy(target_obj.__dict__)
-                new_props = copy.deepcopy(target_obj.__dict__)
+                old_props = snapshot_object_state(target_obj)
+                new_props = snapshot_object_state(target_obj)
                 if font_family_key:
                     new_props['font_family_base'] = font_family_key
                 elif getattr(self, '_last_font_family', None):
@@ -12659,7 +12659,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.undo_manager.add_command(batch_cmd)
 
                 self.pending_format_change_obj = target_obj
-                self.before_format_change_state = copy.deepcopy(target_obj.__dict__)
+                self.before_format_change_state = snapshot_object_state(target_obj)
                 self.selected_word_bbox = target_obj.bbox
                 if hasattr(self, '_update_text_format_controls'):
                     self._update_text_format_controls(target_obj)
@@ -12743,7 +12743,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.before_format_change_state = None
                 self.selected_text = mid_span
                 self.pending_format_change_obj = mid_span
-                self.before_format_change_state = copy.deepcopy(mid_span.__dict__)
+                self.before_format_change_state = snapshot_object_state(mid_span)
 
                 self.selected_word_start_char = 0
                 self.selected_word_end_char = len(mid_span.text)
@@ -12763,7 +12763,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if self.pending_format_change_obj:
                     self.commit_pending_format_change()
                 self.pending_format_change_obj = target_text
-                self.before_format_change_state = copy.deepcopy(target_text.__dict__)
+                self.before_format_change_state = snapshot_object_state(target_text)
             changed = False
 
             if font_family_key and self.pending_format_change_obj.font_family_base != font_family_key:
@@ -12839,12 +12839,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if self.inline_editor_widget is not None:
                     self._apply_and_hide_editor(force_apply=True)
                 else:
-                    new_properties = copy.deepcopy(obj.__dict__)
+                    new_properties = snapshot_object_state(obj)
                     obj.__dict__.update(self.before_format_change_state)
                     command = EditObjectCommand(self, obj, self.before_format_change_state, new_properties)
                     command.execute()
                     self.undo_manager.add_command(command)
-                    self.before_format_change_state = copy.deepcopy(obj.__dict__)
+                    self.before_format_change_state = snapshot_object_state(obj)
                     self.pdf_view.queue_draw()
                     self._update_ui_state()
         else:
@@ -12867,7 +12867,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.next_shape_transparent = is_transparent
 
         if self.selected_shape:
-            old_properties = copy.deepcopy(self.selected_shape.__dict__)
+            old_properties = snapshot_object_state(self.selected_shape)
             changed = False
             if self.selected_shape.fill_color != fill_color:
                 self.selected_shape.fill_color = fill_color
@@ -12883,7 +12883,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 changed = True
 
             if changed:
-                new_properties = copy.deepcopy(self.selected_shape.__dict__)
+                new_properties = snapshot_object_state(self.selected_shape)
                 self.selected_shape.__dict__.update(old_properties)
                 
                 command = EditObjectCommand(self, self.selected_shape, old_properties, new_properties)
@@ -12906,7 +12906,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pen_width = stroke_width
 
         if self.selected_stroke:
-            old_properties = copy.deepcopy(self.selected_stroke.__dict__)
+            old_properties = snapshot_object_state(self.selected_stroke)
             changed = False
             if self.selected_stroke.stroke_color != stroke_color:
                 self.selected_stroke.stroke_color = stroke_color
@@ -12917,7 +12917,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 changed = True
 
             if changed:
-                new_properties = copy.deepcopy(self.selected_stroke.__dict__)
+                new_properties = snapshot_object_state(self.selected_stroke)
                 self.selected_stroke.__dict__.update(old_properties)
 
                 command = EditObjectCommand(self, self.selected_stroke, old_properties, new_properties)
@@ -13180,7 +13180,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 orig_lt = getattr(selected_obj, 'linked_text', None)
                 orig_lp = getattr(selected_obj, 'linked_patch', None)
 
-                old_properties = copy.deepcopy(selected_obj.__dict__)
+                old_properties = snapshot_object_state(selected_obj)
                 if orig_lt is not None:
                     old_properties['linked_text'] = orig_lt
                 if orig_lp is not None:
@@ -13221,7 +13221,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     selected_obj.x = selected_obj.bbox[0]
                     selected_obj.y = selected_obj.bbox[1]
 
-                new_properties = copy.deepcopy(selected_obj.__dict__)
+                new_properties = snapshot_object_state(selected_obj)
                 if orig_lt is not None:
                     new_properties['linked_text'] = orig_lt
                 if orig_lp is not None:
@@ -13236,7 +13236,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 lt = orig_lt
                 if lt and lt in getattr(self, 'editable_texts', []):
                     orig_lt_patch = getattr(lt, 'linked_patch', None)
-                    old_lt_props = copy.deepcopy(lt.__dict__)
+                    old_lt_props = snapshot_object_state(lt)
                     if orig_lt_patch is not None:
                         old_lt_props['linked_patch'] = orig_lt_patch
 
@@ -13248,7 +13248,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         lx1, ly1, lx2, ly2 = lt.bbox
                         lt.bbox = (lx1 + dx, ly1 + dy, lx2 + dx, ly2 + dy)
 
-                    new_lt_props = copy.deepcopy(lt.__dict__)
+                    new_lt_props = snapshot_object_state(lt)
                     if orig_lt_patch is not None:
                         new_lt_props['linked_patch'] = orig_lt_patch
 
@@ -13770,7 +13770,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.drag_threshold_passed = True
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)
                 self.drag_start_pos = (start_x, start_y)
-                self.drag_begin_state = copy.deepcopy(selected_obj.__dict__)
+                self.drag_begin_state = snapshot_object_state(selected_obj)
 
                 if resize_handle == "rotate" and not isinstance(selected_obj, AcroFormField) and not hasattr(selected_obj, 'field_name'):
                     x1, y1, x2, y2 = selected_obj.bbox
@@ -13921,7 +13921,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.drag_threshold_passed = False
                     gesture.set_state(Gtk.EventSequenceState.CLAIMED)
                     self.drag_start_pos = (start_x, start_y)
-                    self.drag_begin_state = copy.deepcopy(clicked_form_field.__dict__)
+                    self.drag_begin_state = snapshot_object_state(clicked_form_field)
                     if not hasattr(clicked_form_field, 'original_bbox') or not clicked_form_field.original_bbox:
                         clicked_form_field.original_bbox = clicked_form_field.bbox
                     x1, y1, _, _ = clicked_form_field.bbox
@@ -13965,7 +13965,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.drag_threshold_passed = False
                     gesture.set_state(Gtk.EventSequenceState.CLAIMED)
                     self.drag_start_pos = (start_x, start_y)
-                    self.drag_begin_state = copy.deepcopy(clicked_m.__dict__)
+                    self.drag_begin_state = snapshot_object_state(clicked_m)
                 else:
                     self.dragged_object = None
                     self._can_drag_object = False
@@ -14051,7 +14051,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.drag_start_pos = (start_x, start_y)
             orig_lt = getattr(self.dragged_object, 'linked_text', None)
             orig_lp = getattr(self.dragged_object, 'linked_patch', None)
-            self.drag_begin_state = copy.deepcopy(self.dragged_object.__dict__)
+            self.drag_begin_state = snapshot_object_state(self.dragged_object)
             if orig_lt is not None:
                 self.drag_begin_state['linked_text'] = orig_lt
             if orig_lp is not None:
@@ -14059,7 +14059,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if orig_lt is not None:
                 lt = orig_lt
                 orig_lt_patch = getattr(lt, 'linked_patch', None)
-                self.linked_drag_begin_state = copy.deepcopy(lt.__dict__)
+                self.linked_drag_begin_state = snapshot_object_state(lt)
                 if orig_lt_patch is not None:
                     self.linked_drag_begin_state['linked_patch'] = orig_lt_patch
                 self.linked_drag_start_pos = (lt.x, lt.y)
@@ -14975,7 +14975,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         if isinstance(self.dragged_object, EditableText):
             self.dragged_object.sync_char_boxes_to_bbox()
-        new_properties = copy.deepcopy(self.dragged_object.__dict__)
+        new_properties = snapshot_object_state(self.dragged_object)
 
         dragged_obj_ref = self.dragged_object
         self.dragged_object = None
@@ -15062,7 +15062,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 del self.linked_drag_start_pos
 
             if lt and lt_old_props and lt in getattr(self, 'editable_texts', []):
-                cmd2 = EditObjectCommand(self, lt, lt_old_props, copy.deepcopy(lt.__dict__))
+                cmd2 = EditObjectCommand(self, lt, lt_old_props, snapshot_object_state(lt))
                 command = CompositeCommand(self, [cmd1, cmd2])
             else:
                 command = cmd1
@@ -15075,7 +15075,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_shape = None
             self.selected_stroke = None
             self.pending_format_change_obj = self.selected_text
-            self.before_format_change_state = copy.deepcopy(self.selected_text.__dict__)
+            self.before_format_change_state = snapshot_object_state(self.selected_text)
             self._update_text_format_controls(self.selected_text)
         elif isinstance(dragged_obj_ref, EditableImage):
             self.selected_image = dragged_obj_ref
@@ -15227,7 +15227,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not active:
             return
 
-        current_state = copy.deepcopy(target_obj.__dict__)
+        current_state = snapshot_object_state(target_obj)
 
         # Ignore internal runtime/render state flags that do not represent user formatting changes
         ignore_keys = {
@@ -15840,8 +15840,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._handle_delete_with_confirmation(text_obj, "delete_text_confirm")
             return
 
-        old_state = copy.deepcopy(text_obj.__dict__)
-        new_state = copy.deepcopy(text_obj.__dict__)
+        old_state = snapshot_object_state(text_obj)
+        new_state = snapshot_object_state(text_obj)
         new_state['text'] = new_text
 
         new_w = measure_text_width(new_text, text_obj.font_family_base, text_obj.font_size, text_obj.is_bold, text_obj.is_italic, text_obj)
@@ -16205,7 +16205,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             self.selected_text = mid_span
             self.pending_format_change_obj = mid_span
-            self.before_format_change_state = copy.deepcopy(mid_span.__dict__)
+            self.before_format_change_state = snapshot_object_state(mid_span)
             self.selected_word_start_char = 0
             self.selected_word_end_char = len(mid_span.text)
             self.selected_word_bbox = mid_span.bbox
@@ -16232,8 +16232,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.before_format_change_state = None
 
         if start_char == 0 and end_char == len(text_obj.text):
-            old_props = copy.deepcopy(text_obj.__dict__)
-            new_props = copy.deepcopy(text_obj.__dict__)
+            old_props = snapshot_object_state(text_obj)
+            new_props = snapshot_object_state(text_obj)
             if style_name == "bold":
                 new_props['is_bold'] = not text_obj.is_bold
             elif style_name == "italic":
@@ -16322,7 +16322,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.undo_manager.record(batch_cmd)
 
             self.pending_format_change_obj = text_obj
-            self.before_format_change_state = copy.deepcopy(text_obj.__dict__)
+            self.before_format_change_state = snapshot_object_state(text_obj)
             self.selected_word_bbox = text_obj.bbox
             if hasattr(self, '_update_text_format_controls'):
                 self._update_text_format_controls(text_obj)
@@ -16403,7 +16403,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.before_format_change_state = None
             self.selected_text = mid_span
             self.pending_format_change_obj = mid_span
-            self.before_format_change_state = copy.deepcopy(mid_span.__dict__)
+            self.before_format_change_state = snapshot_object_state(mid_span)
             self.selected_word_start_char = 0
             self.selected_word_end_char = len(mid_span.text)
             self.selected_word_bbox = mid_span.bbox
@@ -16476,7 +16476,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self.selected_word_bbox = self.get_selected_word_bbox()
                         self.word_selection_mode = True
                         self.pending_format_change_obj = clicked_text
-                        self.before_format_change_state = copy.deepcopy(clicked_text.__dict__)
+                        self.before_format_change_state = snapshot_object_state(clicked_text)
                         self.pdf_view.queue_draw()
                         self._update_ui_state()
                         return
@@ -16513,7 +16513,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self.selected_word_bbox = self.get_selected_word_bbox()
                         self.word_selection_mode = True
                         self.pending_format_change_obj = clicked_text
-                        self.before_format_change_state = copy.deepcopy(clicked_text.__dict__)
+                        self.before_format_change_state = snapshot_object_state(clicked_text)
                         self.pdf_view.queue_draw()
                         self._update_ui_state()
                         return
@@ -16528,7 +16528,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.selected_word_bbox = self.get_selected_word_bbox()
                     self.word_selection_mode = True
                     self.pending_format_change_obj = clicked_text
-                    self.before_format_change_state = copy.deepcopy(clicked_text.__dict__)
+                    self.before_format_change_state = snapshot_object_state(clicked_text)
                     self.pdf_view.queue_draw()
                     self._update_ui_state()
 

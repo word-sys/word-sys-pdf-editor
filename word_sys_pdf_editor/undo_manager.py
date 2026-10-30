@@ -10,7 +10,11 @@ import gi
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk
 from . import pdf_handler
-from .models import EditableText, EditableShape, EditableStroke, EditableImage, AcroFormField, MeasurementObject, StickyNoteObject
+from .models import (
+    EditableText, EditableShape, EditableStroke, EditableImage,
+    AcroFormField, MeasurementObject, StickyNoteObject,
+    SHARED_STATE_KEYS, snapshot_object_state,
+)
 from .i18n import _
 
 def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=None, session=None):
@@ -353,6 +357,25 @@ class UndoManager:
 
     def add_command(self, command):
         """Add a command to the undo stack and clear redo stack."""
+        if self.undo_stack and isinstance(command, EditObjectCommand):
+            prev = self.undo_stack[-1]
+            if isinstance(prev, EditObjectCommand) and prev.target_object is command.target_object:
+                if isinstance(prev.new_properties, dict) and isinstance(command.old_properties, dict):
+                    for k in ('image_bytes', 'raw_image_bytes', 'char_boxes', 'points', 'original_points', 'span_data', 'font_properties'):
+                        if k in prev.new_properties and k in command.old_properties:
+                            if prev.new_properties[k] is not command.old_properties[k] and prev.new_properties[k] == command.old_properties[k]:
+                                command.old_properties[k] = prev.new_properties[k]
+                                if isinstance(command.new_properties, dict) and k in command.new_properties:
+                                    if command.new_properties[k] is not command.old_properties[k] and command.new_properties[k] == command.old_properties[k]:
+                                        command.new_properties[k] = command.old_properties[k]
+                    if ('char_boxes' in prev.new_properties and 'char_boxes' in command.old_properties
+                            and prev.new_properties['char_boxes'] is not command.old_properties['char_boxes']
+                            and EditObjectCommand._is_pure_char_boxes_translation(prev.new_properties, command.old_properties)):
+                        shared_New = (isinstance(command.new_properties, dict)
+                                      and command.new_properties.get('char_boxes') is command.old_properties.get('char_boxes'))
+                        command.old_properties['char_boxes'] = prev.new_properties['char_boxes']
+                        if shared_New:
+                            command.new_properties['char_boxes'] = command.old_properties['char_boxes']
         self.undo_stack.append(command)
         self.redo_stack.clear()
         self._update_ui_callback()
@@ -435,11 +458,46 @@ class UndoManager:
 
 class EditObjectCommand(Command):
     """Command for object modifications (position, bounds, formatting, colors)."""
+    @staticmethod
+    def _is_pure_char_boxes_translation(props_a: dict, props_b: dict) -> bool:
+        """Check whether two text state dicts differ only by position translation for char_boxes."""
+        cbs_a = props_a.get('char_boxes')
+        cbs_b = props_b.get('char_boxes')
+        if not isinstance(cbs_a, list) or not isinstance(cbs_b, list) or len(cbs_a) != len(cbs_b):
+            return False
+        for k in ('text', 'font_size', 'is_bold', 'is_italic', 'font_family_base'):
+            if props_a.get(k) != props_b.get(k):
+                return False
+        ba = props_a.get('bbox')
+        bb = props_b.get('bbox')
+        if not ba or not bb or len(ba) < 4 or len(bb) < 4:
+            return False
+        if abs((ba[2] - ba[0]) - (bb[2] - bb[0])) > 1e-4 or abs((ba[3] - ba[1]) - (bb[3] - bb[1])) > 1e-4:
+            return False
+        return True
+
     def __init__(self, window, target_object, old_properties, new_properties):
         super().__init__(window)
         self.target_object = target_object
-        self.old_properties = old_properties
-        self.new_properties = new_properties
+        self.old_properties = snapshot_object_state(old_properties) if isinstance(old_properties, dict) else old_properties
+        self.new_properties = snapshot_object_state(new_properties) if isinstance(new_properties, dict) else new_properties
+        if isinstance(self.old_properties, dict) and isinstance(self.new_properties, dict):
+            obj_dict = getattr(target_object, '__dict__', None)
+            for k in SHARED_STATE_KEYS:
+                if obj_dict and k in obj_dict:
+                    if k in self.old_properties and self.old_properties[k] == obj_dict[k]:
+                        self.old_properties[k] = obj_dict[k]
+                    if k in self.new_properties and self.new_properties[k] == obj_dict[k]:
+                        self.new_properties[k] = obj_dict[k]
+                if k in self.old_properties and k in self.new_properties and self.old_properties[k] == self.new_properties[k]:
+                    self.new_properties[k] = self.old_properties[k]
+            for k in ('char_boxes', 'points', 'original_points'):
+                if k in self.old_properties and k in self.new_properties and self.old_properties[k] == self.new_properties[k]:
+                    self.new_properties[k] = self.old_properties[k]
+            if ('char_boxes' in self.old_properties and 'char_boxes' in self.new_properties
+                    and self.old_properties['char_boxes'] is not self.new_properties['char_boxes']
+                    and self._is_pure_char_boxes_translation(self.old_properties, self.new_properties)):
+                self.new_properties['char_boxes'] = self.old_properties['char_boxes']
 
     def _erase_ghost_if_needed(self, page_num, properties_to_clear):
         """Erase ghost if needed."""
@@ -467,7 +525,7 @@ class EditObjectCommand(Command):
 
         if isinstance(self.target_object, EditableStroke):
             temp_obj = copy.deepcopy(self.target_object)
-            temp_obj.__dict__.update(copy.deepcopy(properties_to_apply))
+            temp_obj.__dict__.update(snapshot_object_state(properties_to_apply))
             temp_obj.original_bbox = properties_to_clear.get('bbox', temp_obj.bbox)
             if page_num is not None:
                 pdf_handler.rebuild_page(
@@ -489,7 +547,7 @@ class EditObjectCommand(Command):
 
         if isinstance(self.target_object, EditableShape):
             temp_obj = copy.deepcopy(self.target_object)
-            temp_obj.__dict__.update(copy.deepcopy(properties_to_apply))
+            temp_obj.__dict__.update(snapshot_object_state(properties_to_apply))
             temp_obj.original_bbox = properties_to_clear['bbox']
             if page_num is not None:
                 pdf_handler.rebuild_page(
@@ -510,7 +568,7 @@ class EditObjectCommand(Command):
             return success
             
         temp_obj_for_pdf = copy.deepcopy(self.target_object)
-        temp_obj_for_pdf.__dict__.update(copy.deepcopy(properties_to_apply))
+        temp_obj_for_pdf.__dict__.update(snapshot_object_state(properties_to_apply))
         temp_obj_for_pdf.original_bbox = properties_to_clear.get('bbox', getattr(self.target_object, 'original_bbox', temp_obj_for_pdf.bbox))
         
         page_num_fallback = getattr(self.target_object, 'page_number', None)
@@ -538,7 +596,9 @@ class EditObjectCommand(Command):
         """Update live object."""
         orig_lt = getattr(self.target_object, 'linked_text', None)
         orig_lp = getattr(self.target_object, 'linked_patch', None)
-        self.target_object.__dict__.update(copy.deepcopy(properties_to_apply))
+        self.target_object.__dict__.update(snapshot_object_state(properties_to_apply))
+        if hasattr(self.target_object, 'sync_char_boxes_to_bbox'):
+            self.target_object.sync_char_boxes_to_bbox()
         if orig_lt is not None:
             self.target_object.linked_text = orig_lt
         if orig_lp is not None:
@@ -1056,7 +1116,7 @@ class RotateObjectCommand(Command):
         if self._is_session_active():
             if getattr(self.window, 'selected_text', None) == self.target_object:
                 self.window.pending_format_change_obj = self.target_object
-                self.window.before_format_change_state = copy.deepcopy(self.target_object.__dict__)
+                self.window.before_format_change_state = snapshot_object_state(self.target_object)
                 if hasattr(self.window, '_update_text_format_controls'):
                     self.window._update_text_format_controls(self.target_object)
             if hasattr(self.window, '_update_rotation_controls'):
