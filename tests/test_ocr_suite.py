@@ -957,7 +957,7 @@ def test_ocr_text_embedding_with_overlay_extraction():
 # SECTION: test_ocr_search_selection.py
 # ============================================================================
 
-"""Automated unit tests for Part 62: Scanned Document Text Selection, Copy & Search Integration."""
+"""Automated unit tests for Scanned Document Text Selection, Copy & Search Integration."""
 
 import fitz
 import pytest
@@ -1385,7 +1385,7 @@ def test_search_engine_accent_diacritics_normalization():
 # SECTION: test_ocr_text_layer.py
 # ============================================================================
 
-"""Automated unit tests for Part 61: Transparent Searchable Text Layer Embedding."""
+"""Automated unit tests for Transparent Searchable Text Layer Embedding."""
 
 import fitz
 import pytest

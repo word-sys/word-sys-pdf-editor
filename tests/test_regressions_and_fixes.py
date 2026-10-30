@@ -1815,8 +1815,8 @@ class TestStartupLazyModuleLoading(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, f"Lazy anyconvert verification failed: {proc.stderr}")
 
 
-class TestPart77UndoHistoryMemoryReduction(unittest.TestCase):
-    """Verify Part 77 undo history memory reduction and reference sharing."""
+class TestUndoHistoryMemoryReduction(unittest.TestCase):
+    """Verify undo history memory reduction and reference sharing."""
 
     def test_image_edit_undo_shares_binary_payload_and_reduces_memory(self):
         """Verify 20 sequential edits on a 5 MB image share image_bytes by reference (<100 KB overhead)."""
@@ -1999,8 +1999,8 @@ class TestPart77UndoHistoryMemoryReduction(unittest.TestCase):
         self.assertEqual(snap_stroke["points"], [(10.0, 10.0), (20.0, 20.0)])
 
 
-class TestPart76RDPStrokeSimplification(unittest.TestCase):
-    """Verify Part 76 Ramer-Douglas-Peucker vector stroke simplification."""
+class TestRDPStrokeSimplification(unittest.TestCase):
+    """Verify Ramer-Douglas-Peucker vector stroke simplification."""
 
     def test_dense_input_point_count_reduction_and_endpoint_preservation(self):
         """Verify RDP decimation reduces dense point counts significantly while preserving exact endpoints."""
@@ -2160,7 +2160,7 @@ if __name__ == "__main__":
 
 
 
-class TestPart97FontNameDecompositionCache:
+class TestFontNameDecompositionCache:
     NAMES = [
         None, "", "Helvetica", "Arial-BoldMT", "ABCDEF+TimesNewRomanPS-BoldItalicMT",
         "CourierNewPSMT", "LiberationSans-Regular", "DejaVuSerif,Bold", "Calibri-Italic",
@@ -2224,7 +2224,7 @@ class TestPart97FontNameDecompositionCache:
         doc.close()
 
 
-class TestPart98DecodedImageCache:
+class TestDecodedImageCache:
     @staticmethod
     def _png(w, h, color=(200, 30, 30)):
         import fitz
@@ -2304,7 +2304,7 @@ class TestPart98DecodedImageCache:
         assert warm < cold / 20
 
 
-class TestPart80LargeImageMemoryBounding:
+class TestLargeImageMemoryBounding:
     @staticmethod
     def _make_photo_jpeg(w=4000, h=3000):
         import io

@@ -1426,7 +1426,7 @@ def test_certify_level_2_counter_signing_and_byte_range_integrity():
 # SECTION: test_sandboxed_license.py
 # ============================================================================
 # -*- coding: utf-8 -*-
-"""Comprehensive test suite for Part 35: Sandboxed License Asset Embedding.
+"""Comprehensive test suite for Sandboxed License Asset Embedding.
 
 Verifies:
 - get_application_license_text() returns the complete, official GNU General Public License v3 text.

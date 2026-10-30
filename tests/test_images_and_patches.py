@@ -1088,7 +1088,7 @@ if __name__ == "__main__":
 # SECTION: test_patch_covering_and_layer_ordering.py
 # ============================================================================
 """
-Tests for Part 55: Texture Matching, In-Place Covering & Layer Ordering.
+Tests for Texture Matching, In-Place Covering & Layer Ordering.
 Validates PatchObject representation, auto-placement, layer reordering (bring to front/back/forward/backward),
 undo/redo integration, and localization across all supported languages.
 """
@@ -1299,8 +1299,8 @@ class TestPasteClonePatch(unittest.TestCase):
         self.assertFalse(res)
 
 
-class TestPart55Localization(unittest.TestCase):
-    """Ensure all 7 locales have complete translations for Part 55."""
+class TestPatchAndLayerLocalization(unittest.TestCase):
+    """Ensure all 7 locales have complete translations for patch and layer ordering."""
 
     REQUIRED_KEYS = [
         "patch_placed_status",
@@ -1320,12 +1320,12 @@ class TestPart55Localization(unittest.TestCase):
         "guide_sc_layer_backward",
     ]
 
-    def test_all_locales_have_part55_keys(self):
+    def test_all_locales_have_patch_and_layer_keys(self):
         for lang, trans in _STRINGS.items():
             for key in self.REQUIRED_KEYS:
                 self.assertIn(
                     key, trans,
-                    f"Language '{lang}' missing required Part 55 localization key '{key}'"
+                    f"Language '{lang}' missing required localization key '{key}'"
                 )
                 self.assertTrue(
                     len(trans[key].strip()) > 0,

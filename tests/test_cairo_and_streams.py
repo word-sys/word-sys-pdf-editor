@@ -412,7 +412,7 @@ def has_screen_display():
 
 
 class TestContentStreamReplacement(unittest.TestCase):
-    """Test suite for Part 28 Content Stream Text Replacement and editor enhancements."""
+    """Test suite for Content Stream Text Replacement and editor enhancements."""
 
     @classmethod
     def setUpClass(cls):
@@ -1034,7 +1034,7 @@ def test_window_draw_pdf_page_culls_offscreen_images_shapes_and_strokes():
 # ============================================================================
 # SECTION: test_font_cache.py
 # ============================================================================
-"""Tests for Part 66: Instant App Launch & Persistent Fontconfig Disk I/O Cache."""
+"""Tests for Instant App Launch & Persistent Fontconfig Disk I/O Cache."""
 
 import os
 import json

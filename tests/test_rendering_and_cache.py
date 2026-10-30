@@ -561,7 +561,7 @@ if __name__ == '__main__':
 # ============================================================================
 # SECTION: test_thumbnail_virtualization.py
 # ============================================================================
-"""Tests for virtualized Gtk.ListView thumbnail ribbon and widget recycling (Part 63)."""
+"""Tests for virtualized Gtk.ListView thumbnail ribbon and widget recycling."""
 
 import unittest
 from unittest.mock import MagicMock

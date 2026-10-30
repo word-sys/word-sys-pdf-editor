@@ -608,7 +608,7 @@ def test_stamp_verification_dialog_cancellation():
 # SECTION: test_sticky_notes.py
 # ============================================================================
 # -*- coding: utf-8 -*-
-"""Comprehensive test suite for Part 34: Sticky Notes & Comments Engine in View Mode.
+"""Comprehensive test suite for Sticky Notes & Comments Engine in View Mode.
 
 Verifies:
 - StickyNoteObject data model properties, hit-testing, bbox calculations, and serialization.
@@ -923,7 +923,7 @@ if __name__ == "__main__":
 # SECTION: test_annotations_sidebar.py
 # ============================================================================
 # -*- coding: utf-8 -*-
-"""Test suite for Part 33: Annotations Tree List Sidebar.
+"""Test suite for Annotations Tree List Sidebar.
 
 Verifies:
 - AnnotationListItem model properties and formatting.
@@ -1022,7 +1022,7 @@ class SidebarDummyWindow:
 
 
 class TestAnnotationsSidebar(unittest.TestCase):
-    """Test suite covering Part 33 Annotations Tree List Sidebar functionality."""
+    """Test suite covering Annotations Tree List Sidebar functionality."""
 
     @classmethod
     def setUpClass(cls):

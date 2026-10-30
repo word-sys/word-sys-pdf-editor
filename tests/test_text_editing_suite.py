@@ -8,7 +8,7 @@ word-level isolation, per-word styling/coloring/rotation, and typography state s
 # SECTION: test_inline_text_editor.py
 # ============================================================================
 """
-Test suite for Part 27: Inline Canvas Text Editor Overlay.
+Test suite for Inline Canvas Text Editor Overlay.
 Verifies pixel-perfect positioning, typography matching, double-click triggering,
 keyboard ergonomics (Escape, Enter, Shift+Enter, Ctrl+Enter, F2), dynamic widening,
 focus-leave committing, and zoom synchronization.
@@ -457,7 +457,7 @@ if __name__ == "__main__":
 # SECTION: test_inplace_text_correction_workflow.py
 # ============================================================================
 """
-Tests for Part 56: Scanned Document In-Place Text Correction Workflow.
+Tests for Scanned Document In-Place Text Correction Workflow.
 Validates:
 1. PatchObject and EditableText bidirectional linkage.
 2. PDF stream baking and underlying OCR text purge under patches.
@@ -465,7 +465,7 @@ Validates:
 4. Initiate text over patch workflow (double-click, Enter/T shortcuts, context menu).
 5. Synchronized co-movement of patch and linked text (drag and arrow nudge).
 6. Undo/Redo cycles with CompositeCommand for co-movement and co-deletion.
-7. Localization coverage for Part 56 strings across all 7 supported locales.
+7. Localization coverage across all 7 supported locales.
 """
 
 import os
@@ -911,7 +911,7 @@ class TestSynchronizedCoMovementAndUndo(unittest.TestCase):
 
 
 class TestLocalizationAllLocales(unittest.TestCase):
-    """Test localization completeness for Part 56 across all 7 locales."""
+    """Test localization completeness for in-place text correction across all 7 locales."""
 
     REQUIRED_KEYS = [
         "menu_type_over_patch",
@@ -944,7 +944,7 @@ class TestLocalizationAllLocales(unittest.TestCase):
 
 
 class TestWindowInteractions(unittest.TestCase):
-    """Test window-level interactions for Part 56: shortcuts, double-click, and nudge."""
+    """Test window-level interactions for in-place text correction: shortcuts, double-click, and nudge."""
 
     def setUp(self):
         from gi.repository import Gdk

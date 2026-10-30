@@ -372,8 +372,8 @@ class TestTextHitTesting(unittest.TestCase):
         page = doc.new_page(width=500, height=700)
         # Line 1: (50, 100) "Hello World"
         page.insert_text((50, 100), "Hello World", fontname="helv", fontsize=12)
-        # Line 2: (50, 150) "Testing Part 26 Engine"
-        page.insert_text((50, 150), "Testing Part 26 Engine", fontname="tiro", fontsize=14)
+        # Line 2: (50, 150) "Testing Hit Test Engine"
+        page.insert_text((50, 150), "Testing Hit Test Engine", fontname="tiro", fontsize=14)
         doc.save(self.pdf_path)
         doc.close()
         self.doc = fitz.open(self.pdf_path)
@@ -467,7 +467,7 @@ class TestTextHitTesting(unittest.TestCase):
 
         hit_line = pdf_handler.hit_test_text_line_at_pos(self.doc, (mid_x, mid_y), page_index=0)
         self.assertIsNotNone(hit_line)
-        self.assertEqual(hit_line["text"], "Testing Part 26 Engine")
+        self.assertEqual(hit_line["text"], "Testing Hit Test Engine")
         self.assertAlmostEqual(hit_line["baseline"], 150.0, places=1)
         self.assertEqual(hit_line["primary_font"], "Times-Roman")
         self.assertTrue(hit_line["primary_font_properties"]["is_serif"])
