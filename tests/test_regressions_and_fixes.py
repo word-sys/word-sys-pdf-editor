@@ -2158,3 +2158,67 @@ class TestPart76RDPStrokeSimplification(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class TestPart97FontNameDecompositionCache:
+    NAMES = [
+        None, "", "Helvetica", "Arial-BoldMT", "ABCDEF+TimesNewRomanPS-BoldItalicMT",
+        "CourierNewPSMT", "LiberationSans-Regular", "DejaVuSerif,Bold", "Calibri-Italic",
+        "Minion Pro", "SomeUnknownFont", "ABCDEF+Consolas",
+    ]
+
+    def test_cached_output_identical_to_uncached(self):
+        from word_sys_pdf_editor import models
+        for name in self.NAMES:
+            for flags in (0, 2, 16, 18, 1 << 4 | 1 << 1):
+                assert models.decompose_font_name(name, flags) == \
+                    models._decompose_font_name_uncached(name, flags), (name, flags)
+
+    def test_returned_dict_mutation_does_not_corrupt_cache(self):
+        from word_sys_pdf_editor import models
+        first = models.decompose_font_name("ABCDEF+Arial-BoldMT", 0)
+        original = dict(first)
+        first["is_bold"] = not first["is_bold"]
+        first["matched_family"] = "Mutated"
+        first["injected"] = 1
+        second = models.decompose_font_name("ABCDEF+Arial-BoldMT", 0)
+        assert second == original
+        assert second is not first
+
+    def test_repeated_calls_hit_the_cache(self):
+        from word_sys_pdf_editor import models
+        models._decompose_font_name_cached.cache_clear()
+        for _ in range(50):
+            models.decompose_font_name("ABCDEF+Arial-BoldMT", 20)
+        info = models._decompose_font_name_cached.cache_info()
+        assert info.misses == 1 and info.hits == 49
+
+    def test_unhashable_arguments_behave_like_uncached(self):
+        from word_sys_pdf_editor import models
+        def outcome(fn):
+            try:
+                return ("ok", fn(["x"], 0))
+            except Exception as exc:
+                return ("err", type(exc))
+        assert outcome(models.decompose_font_name) == outcome(models._decompose_font_name_uncached)
+
+    def test_text_extraction_unchanged_with_cache(self):
+        import fitz
+        from word_sys_pdf_editor import models, pdf_handler
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Alpha", fontname="helv")
+        page.insert_text((72, 100), "Beta", fontname="tiro")
+        page.insert_text((72, 130), "Gamma", fontname="cour")
+        models._decompose_font_name_cached.cache_clear()
+        cached_run, _ = pdf_handler.extract_editable_text(doc, 0)
+        props_cached = [(t.text, dict(t.font_properties)) for t in cached_run]
+        real = models._decompose_font_name_cached
+        try:
+            models._decompose_font_name_cached = models._decompose_font_name_uncached
+            uncached_run, _ = pdf_handler.extract_editable_text(doc, 0)
+        finally:
+            models._decompose_font_name_cached = real
+        props_uncached = [(t.text, dict(t.font_properties)) for t in uncached_run]
+        assert props_cached == props_uncached and len(props_cached) >= 3
+        doc.close()
