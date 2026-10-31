@@ -16,28 +16,47 @@ Lisans: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Önerilen Kararlı Sürüm: v1.11.2** — En kararlı deneyim için **1.11.2** sürümünü kullanmanız önemle tavsiye edilir. Kurulum ayrıntıları için aşağıdaki bölümleri inceleyebilirsiniz.
+> **Önerilen Kararlı Sürüm: v1.12.0** — En kararlı deneyim için **1.12.0** sürümünü kullanmanız önemle tavsiye edilir. Kurulum ayrıntıları için aşağıdaki bölümleri inceleyebilirsiniz.
 
 ---
 
 ## Ekran Görüntüleri
 
-| **PDF Düzenleme ve Açıklama Tuvali** | **Başlangıç Ekranı ve Belge Merkezi** |
+| **PDF Düzenleme Tuvali ve Kesintisiz Kaydırma** | **Başlangıç Ekranı ve Belge Merkezi** |
 | :---: | :---: |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" alt="PDF Düzenleme Tuvali" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" alt="Başlangıç Ekranı" width="450"/></a> |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" alt="PDF Düzenleme Tuvali ve Kesintisiz Kaydırma" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" alt="Başlangıç Ekranı ve Belge Merkezi" width="450"/></a> |
 | **Yeni Belge Oluşturma Penceresi** | **Etkileşimli Hızlı Başlangıç Kılavuzu ve Rehber** |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png" alt="Yeni Belge Penceresi" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png" alt="Hızlı Başlangıç Kılavuzu" width="450"/></a> |
-| **Görsel Belge Birleştirme Çalışma Alanı** | **Çoklu Format Dışa Aktarma ve Sekmeler** |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png" alt="Görsel Belge Birleştirme Çalışma Alanı" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png" alt="Çoklu Format Dışa Aktarma ve Sekmeler" width="450"/></a> |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png" alt="Yeni Belge Oluşturma Penceresi" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png" alt="Etkileşimli Hızlı Başlangıç Kılavuzu ve Rehber" width="450"/></a> |
+| **Görsel Belge Birleştirme Çalışma Alanı** | **Çoklu Belge Sekmeleri ve Doğrulanmış Dijital İmza Çubuğu** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png" alt="Görsel Belge Birleştirme Çalışma Alanı" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png" alt="Çoklu Belge Sekmeleri ve Doğrulanmış Dijital İmza Çubuğu" width="450"/></a> |
+| **Şifreli Belge Parola Çözme Penceresi** | **PAdES Dijital İmza ve Donanım Anahtarı Penceresi** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot7.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot7.png" alt="Şifreli Belge Parola Çözme Penceresi" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot8.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot8.png" alt="PAdES Dijital İmza ve Donanım Anahtarı Penceresi" width="450"/></a> |
+| **Kriptografik İmza Doğrulama ve Sertifika Ayrıntıları** | **Optik Karakter Tanıma (OCR) Motoru ve Metin Katmanı** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot9.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot9.png" alt="Kriptografik İmza Doğrulama ve Sertifika Ayrıntıları" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot10.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot10.png" alt="Optik Karakter Tanıma Motoru ve Metin Katmanı" width="450"/></a> |
 
 ---
 
 ## Temel Özellikler
 
+*   Görünüm alanı kırpması (viewport culling), yönlü önbellekleme ve kesirli ölçeklendirme (HiDPI / 4K / Retina) ile kesintisiz dikey sayfa kaydırma
+*   Etkileşimli AcroForm Motoru: Görüntüleme modunda metin alanlarını, onay kutularını, radyo gruplarını ve açılır menüleri doğrudan doldurma ve vektör düzleştirme (flattening)
+*   Yeni AcroForm alanları oluşturmak, hizalamak ve biçimlendirmek için etkileşimli Form Oluşturucu Aracı (`B`)
+*   PKCS#12 yazılım sertifikaları ve PKCS#11 donanım güvenlik anahtarları / akıllı kartlar (HSM) ile PAdES Baseline dijital imzalama
+*   Özel TSA kimlik doğrulaması destekli RFC 3161 kriptografik zaman damgası entegrasyonu
+*   Belge açılışında durum çubuğu ve X.509 sertifika inceleyicisi ile engellemesiz dijital imza doğrulama
+*   Otomatik hassas veri (PII: TCKN/SSN, kredi kartı, e-posta, telefon, özel regex) arama ve derin belge arındırma ile kalıcı kriptografik karartma (`Shift+R`)
+*   Canlı ilerleme, duraklatma/sürdürme ve 7 sinirsel dil modeli ile çok iş parçacıklı akışkan Optik Karakter Tanıma (OCR) motoru
+*   Anında metin çıkarma için OCR Bölge Aracı (`O`) ve güven düzeyi metin katmanı inceleyicisi (`Ctrl+Alt+O`)
+*   Özelleştirilebilir renkler, yazar bilgileri, yanıt dizileri ve açıklamalar kenar çubuğu ile yapışkan notlar
+*   Vektör onay damgaları (Onaylandı, Gizli, Taslak, dinamik kullanıcı/tarih damgaları)
+*   Hassas ölçüm araçları: Ölçek kalibrasyonlu Mesafe Cetveli (`U`) ve Çokgen Alanı ölçümü (`A`)
+*   Hedef Boyut Çözücüsü ve yan yana görsel kalite önizlemesi ile akıllı PDF sıkıştırma
+*   AES-256 belge parola şifreleme ve yerel güvenli parola kasası
+*   Temiz arka plan örnekleme ve anında üzerine yazma (`Enter` / `T`) özellikli Klonlama ve Yama Aracı (`C`)
+*   4 sekmeli, araç kısayolları ve anlık canlı arama filtrelemeli Etkileşimli Hızlı Başlangıç Kılavuzu (`F1` / `Ctrl+F`)
 *   Özelleştirilebilir sayfa boyutları ve otomatik birim dönüştürme (mm, cm, in, pt, px) ile sıfırdan PDF oluşturma
 *   PDF dosyalarını açma ve görüntüleme
-*   PDF dosyalarını birleştirme
-*   Etkileşimli Hızlı Başlangıç Kılavuzu ve klavye kısayolları tablosu (`F1`)
+*   PDF dosyalarını görsel sürükle-bırak sayfa sıralaması ile birleştirme
 *   Sayfadaki mevcut metin bloklarını seçme
 *   Seçilen metni düzenleme veya silme
 *   Sayfaya yeni metin blokları ekleme
@@ -49,15 +68,12 @@ Lisans: **GPL-3.0-or-later**
 *   Şekiller ekleme (Dikdörtgen, Elips, Onay İşareti, Çarpı)
 *   Bézier eğri yumuşatma ve vektör ölçeklendirme ile serbest çizim Kalem ve Vurgulayıcı
 *   Özel karakterler ve simgeler
-*   Düzenlenen PDF dosyalarını kaydetme
-*   Hızlı Kaydetme (`Ctrl + S`)
+*   Düzenlenen PDF dosyalarını kaydetme ve Hızlı Kaydetme (`Ctrl + S`)
 *   PDF belgelerini DOCX, PPTX, ODT, ODP ve TXT formatlarına yerel anyconvert motoru ile aktarma
-*   Küçük resim sürükle-bırak ile canlı sayfa yeniden sıralama
-*   Güvenli Kaydetme (Safe Save)
-*   Kısıtlı Mod (Güvenli Mod)
+*   Güvenli Kaydetme (Safe Save) ve Kısıtlı Mod (Güvenli Mod)
 *   Tam çok düzeyli Geri Al / Yinele geçmişi (`Ctrl + Z` / `Ctrl + Y`)
 *   İmleç odaklı hassas yakınlaştırma (`Ctrl + Fare Tekerleği` ve `Ctrl + + / - / 0`)
-*   PDF belgelerine sayfa ekleme ve çıkarma
+*   PDF belgelerine sayfa ekleme, çıkarma ve 90 derece döndürme
 
 ### Yerel Belge Dışa Aktarma (anyconvert)
 
@@ -107,16 +123,16 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 Pardus, Debian ve Ubuntu tabanlı dağıtımlar için en kolay paket kurulum yöntemidir.
 
-1.  [**GitHub Sürümleri**](https://github.com/word-sys/word-sys-pdf-editor/releases) sayfasından en güncel `.deb` paketini indirin. Dosya adı `word-sys-pdf-editor_1.11.2_amd64.deb` (veya ARM64 için `_arm64.deb`) şeklindedir.
+1.  [**GitHub Sürümleri**](https://github.com/word-sys/word-sys-pdf-editor/releases) sayfasından en güncel `.deb` paketini indirin. Dosya adı `word-sys-pdf-editor_1.12.0_amd64.deb` (veya ARM64 için `_arm64.deb`) şeklindedir.
 
     > [!TIP]
-    > En kararlı deneyim için **1.11.2 sürümünü** tercih edin: Sürümler sayfasında `word-sys-pdf-editor_1.11.2_amd64.deb` dosyasını bulun.
+    > En kararlı deneyim için **1.12.0 sürümünü** tercih edin: Sürümler sayfasında `word-sys-pdf-editor_1.12.0_amd64.deb` dosyasını bulun.
 
 2.  `.deb` dosyasını indirdiğiniz dizinde bir uçbirim (terminal) açın.
 3.  Paketi kurmak için aşağıdaki komutu çalıştırın:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.11.2_amd64.deb
+    sudo apt install ./word-sys-pdf-editor_1.12.0_amd64.deb
     ```
     *(Not: İndirdiğiniz dosya adı farklıysa komuttaki dosya adını güncelleyin.)*
 4.  Kurulum sırasında bağımlılık sorunu yaşarsanız eksik paketleri gidermek için şu komutu çalıştırın:
@@ -133,7 +149,7 @@ Tüm Linux dağıtımlarında kurulum yapmadan doğrudan çalıştırmak için u
 
 1.  [**GitHub Sürümleri**](https://github.com/word-sys/word-sys-pdf-editor/releases) sayfasından `.AppImage` veya `*-linux-*.tar.gz` paketini indirin (`word-sys-pdf-editor-x86_64.AppImage` veya `word-sys-pdf-editor-linux-x86_64.tar.gz`).
 
-    > En kararlı sürüm için sürümler sayfasındaki `v1.11.2` etiketini kullanın.
+    > En kararlı sürüm için sürümler sayfasındaki `v1.12.0` etiketini kullanın.
 
 #### A. AppImage ile Çalıştırma
 
@@ -180,7 +196,7 @@ Tüm Linux dağıtımlarında kurulum yapmadan doğrudan çalıştırmak için u
 Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda bulunmak isteyenler için uygundur.
 
 > [!TIP]
-> Kararlı bir deneyim için klonlarken **v1.11.2** etiketini kullanın. Geliştirme aşamasındaki en son değişiklikleri denemek isterseniz doğrudan `main` dalını klonlayabilirsiniz.
+> Kararlı bir deneyim için klonlarken **v1.12.0** etiketini kullanın. Geliştirme aşamasındaki en son değişiklikleri denemek isterseniz doğrudan `main` dalını klonlayabilirsiniz.
 
 ---
 
@@ -198,9 +214,9 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 2.  **Kaynak Kodu İndirin:**
 
-    **Önerilen (kararlı v1.11.2):**
+    **Önerilen (kararlı v1.12.0):**
     ```bash
-    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -243,9 +259,9 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 2.  **Kaynak Kodu İndirin:**
 
-    **Önerilen (kararlı v1.11.2):**
+    **Önerilen (kararlı v1.12.0):**
     ```bash
-    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -277,9 +293,9 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 1.  **Kaynak Kodu İndirin:**
 
-    **Önerilen (kararlı v1.11.2):**
+    **Önerilen (kararlı v1.12.0):**
     ```bash
-    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 

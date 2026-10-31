@@ -1,3 +1,24 @@
+word-sys-pdf-editor (1.12.0) bookworm; urgency=medium
+
+  * Grand Release v1.12.0: Unified major release consolidating corporate, enterprise, and accessibility enhancements
+  * Added Interactive AcroForms engine: field filling, interactive form builder (B), and AcroForm flattening
+  * Added PAdES Baseline Digital Signatures with PKCS#12 software certificates and PKCS#11 hardware smart cards/tokens
+  * Added Non-blocking Signature Verification banner and certificate trust inspection dialog
+  * Added Permanent Cryptographic Redaction (Shift+R) with automated PII search and document sanitization
+  * Added Hardware-accelerated Continuous Scrolling with tiled high-DPI fractional rendering and directional prefetch
+  * Added Streaming Optical Character Recognition (OCR) engine with Pause/Resume, live ETA, and dark-background inversion
+  * Added Multi-Language OCR model manager supporting 7 neural models (EN, TR, DE, FR, ES, IT, RU) with bilingual recognition
+  * Added Sticky Notes and Threaded Comments engine with dedicated Annotations Sidebar
+  * Added Vector Approval Stamps, dynamic metadata stamps, and precision measurement tools (Distance Ruler and Polygon Area)
+  * Added PDF Compression engine with automated target-size solver and side-by-side quality comparison preview
+  * Added AES-256 Document Encryption with permission policies and secure local Password Vault
+  * Added Background Clone & Patch tool (C) with instant over-patch text typing
+  * Added Full-Document Search & Replace with diacritic/accent normalization and circular matching
+  * Redesigned interactive Quick Start Guide & Manual with live search filter and 4 comprehensive tabs
+  * Updated UI screenshots and documentation across all 7 regional languages (EN, TR, DE, FR, ES, IT, RU)
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Sat, 31 Oct 2026 12:00:00 +0300
+
 word-sys-pdf-editor (1.11.2) bookworm; urgency=medium
 
   * Updated anyconvert document conversion engine to v0.1.9

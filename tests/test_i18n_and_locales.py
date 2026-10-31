@@ -1003,3 +1003,68 @@ class TestLocaleDetectionAndPersistence(unittest.TestCase):
             # State should remain unchanged
             self.assertEqual(get_language(), orig_lang)
 
+    def test_quick_guide_dialog_tabs_search_and_localization(self):
+        from word_sys_pdf_editor.quick_guide_dialog import QuickGuideDialog
+
+        new_guide_keys = [
+            "guide_search_placeholder",
+            "guide_search_tooltip",
+            "guide_tab_security_ocr",
+            "guide_tool_clone_title",
+            "guide_tool_clone_desc",
+            "guide_grp_annotations_forms",
+            "guide_tool_notes_title",
+            "guide_tool_stamps_title",
+            "guide_tool_measure_title",
+            "guide_tool_forms_title",
+            "guide_nav_continuous_title",
+            "guide_nav_search_title",
+            "guide_split_title",
+            "guide_compress_title",
+            "guide_headers_watermarks_title",
+            "guide_grp_ocr",
+            "guide_ocr_streaming_title",
+            "guide_ocr_region_title",
+            "guide_ocr_languages_title",
+            "guide_grp_security",
+            "guide_sec_signatures_title",
+            "guide_sec_redaction_title",
+            "guide_sec_encryption_title",
+            "guide_sc_find",
+            "guide_sc_replace",
+            "guide_sc_ocr",
+            "guide_sc_quick_guide",
+            "guide_sc_copy_paste_dup",
+            "guide_sc_tool_stamp",
+            "guide_sc_tool_note",
+            "guide_sc_tool_ruler",
+            "guide_sc_tool_area",
+            "guide_sc_tool_signature",
+            "guide_sc_tool_ocr_region",
+            "guide_sc_tool_form_builder",
+        ]
+        for lang_code, _ in get_supported_languages():
+            table = i18n._STRINGS[lang_code]
+            for key in new_guide_keys:
+                self.assertIn(key, table, f"Missing guide key '{key}' in '{lang_code}'")
+                self.assertTrue(len(table[key].strip()) > 0)
+
+        dlg = QuickGuideDialog(None)
+        for tab_id in ("tools", "canvas", "security_ocr", "shortcuts"):
+            self.assertIsNotNone(dlg.view_stack.get_child_by_name(tab_id))
+            self.assertTrue(len(dlg._tab_groups[tab_id]) >= 2)
+
+        # Verify live search filters rows and switches to matching tab when current tab has 0 matches
+        dlg.view_stack.set_visible_child_name("tools")
+        dlg.search_entry.set_text("PKCS#11")
+        dlg._on_search_changed(dlg.search_entry)
+        self.assertEqual(dlg.view_stack.get_visible_child_name(), "security_ocr")
+        visible_rows = [r for r in dlg._filter_records if r["row"].get_visible()]
+        self.assertGreaterEqual(len(visible_rows), 1)
+
+        # Clearing search restores all rows
+        dlg.search_entry.set_text("")
+        dlg._on_search_changed(dlg.search_entry)
+        self.assertTrue(all(r["row"].get_visible() for r in dlg._filter_records))
+        dlg.destroy()
+

@@ -16,28 +16,47 @@
 ---
 
 > [!TIP]
-> **Рекомендуемая стабильная версия: v1.11.2** — Для наиболее стабильной работы настоятельно рекомендуется использовать версию **1.11.2**. Инструкции по установке приведены ниже.
+> **Рекомендуемая стабильная версия: v1.12.0** — Для наиболее стабильной работы настоятельно рекомендуется использовать версию **1.12.0**. Инструкции по установке приведены ниже.
 
 ---
 
 ## Скриншоты
 
-| **Холст редактирования и аннотаций PDF** | **Стартовый экран и центр документов** |
+| **Холст редактирования PDF и непрерывная прокрутка** | **Стартовый экран и центр документов** |
 | :---: | :---: |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" alt="Холст редактирования PDF" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" alt="Стартовый экран" width="450"/></a> |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" alt="Холст редактирования PDF и непрерывная прокрутка" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" alt="Стартовый экран и центр документов" width="450"/></a> |
 | **Окно создания нового документа** | **Интерактивное руководство и справка** |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png" alt="Создание нового документа" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png" alt="Интерактивное руководство" width="450"/></a> |
-| **Визуальное объединение документов** | **Диалог экспорта и вкладки** |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png" alt="Визуальная рабочая область объединения документов" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png" alt="Диалог экспорта и вкладки документов" width="450"/></a> |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png" alt="Окно создания нового документа" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png" alt="Интерактивное руководство и справка" width="450"/></a> |
+| **Визуальное объединение документов** | **Вкладки документов и панель проверенной цифровой подписи** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png" alt="Визуальное объединение документов" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png" alt="Вкладки документов и панель цифровой подписи" width="450"/></a> |
+| **Диалог ввода пароля для зашифрованного документа** | **Цифровая подпись PAdES и аппаратный токен** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot7.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot7.png" alt="Диалог ввода пароля для зашифрованного документа" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot8.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot8.png" alt="Цифровая подпись PAdES и аппаратный токен" width="450"/></a> |
+| **Проверка криптографической подписи и сведения о сертификате** | **Распознавание текста (OCR) и инспектор текстового слоя** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot9.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot9.png" alt="Проверка криптографической подписи и сведения" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot10.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot10.png" alt="Распознавание текста (OCR) и инспектор текстового слоя" width="450"/></a> |
 
 ---
 
 ## Основные возможности
 
+*   Непрерывная вертикальная прокрутка страниц с оптимизированным рендерингом (viewport culling), упреждающей загрузкой и поддержкой дробного масштабирования (HiDPI / 4K / Retina)
+*   Интерактивный движок AcroForms: прямое заполнение текстовых полей, флажков, радиокнопок и выпадающих списков в режиме просмотра, а также векторное уплощение (flattening)
+*   Интерактивный конструктор форм (`B`) для создания, выравнивания и настройки новых полей AcroForm
+*   Цифровые подписи PAdES Baseline с использованием программных сертификатов PKCS#12 и аппаратных токенов безопасности PKCS#11 / смарт-карт (HSM)
+*   Интеграция криптографических меток времени RFC 3161 с поддержкой пользовательской аутентификации TSA
+*   Неблокирующая проверка цифровых подписей при открытии документа с информационной панелью и инспектором сертификатов X.509
+*   Постоянное криптографическое скрытие данных (`Shift+R`) с автоматическим поиском персональных данных (банковские карты, email, телефоны, регулярные выражения) и глубокой санитаризацией документов
+*   Многопоточный фоновый движок оптического распознавания текста (OCR) с отображением прогресса и 7 нейросетевыми языковыми моделями
+*   Инструмент области OCR (`O`) для мгновенного извлечения текста и инспектор уровня уверенности распознавания (`Ctrl+Alt+O`)
+*   Заметки-стикеры с настраиваемыми цветами, метаданными авторов, цепочками ответов и боковой панелью аннотаций
+*   Векторные штампы согласования (Одобрено, Конфиденциально, Черновик, динамические штампы пользователя и даты)
+*   Инструменты точных измерений: линейка расстояний (`U`) с калибровкой масштаба и измерение площади полигонов (`A`)
+*   Интеллектуальное сжатие PDF с подбором целевого размера и сравнительным визуальным предпросмотром качества
+*   Шифрование документов паролем AES-256 и локальное защищенное хранилище паролей
+*   Инструмент клонирования и заплатки (`C`) с чистым сэмплированием фона и мгновенным вводом замещающего текста (`Enter` / `T`)
+*   Интерактивное руководство пользователя с 4 вкладками, горячими клавишами инструментов и живым поисковым фильтром (`F1` / `Ctrl+F`)
 *   Создание PDF-документов с настраиваемыми размерами страниц и автоконвертацией единиц (мм, см, дюймы, pt, px)
 *   Открытие и просмотр PDF-файлов
-*   Объединение PDF-файлов
-*   Интерактивное руководство пользователя и памятка горячих клавиш (`F1`)
+*   Объединение PDF-файлов с визуальным перетаскиванием страниц
 *   Выделение существующих текстовых блоков на странице
 *   Редактирование и удаление выбранного текста
 *   Добавление новых текстовых блоков на страницы
@@ -49,10 +68,12 @@
 *   Добавление векторных фигур (Прямоугольники, Эллипсы, Галочки, Крестики)
 *   Свободное рисование пером и маркером со сглаживанием Безье и векторным масштабированием
 *   Специальные символы и знаки
-*   Сохранение измененных PDF-документов
-*   Быстрое сохранение (`Ctrl + S`)
+*   Сохранение измененных PDF-документов и быстрое сохранение (`Ctrl + S`)
 *   Экспорт PDF в форматы DOCX, PPTX, ODT, ODP и TXT с помощью встроенного движка anyconvert
-*   Интуитивный интерфейс с перетаскиванием миниатюр страниц (drag-and-drop)
+*   Безопасное сохранение (Safe Save) и Ограниченный режим (Безопасный режим)
+*   Полная многоуровневая история Отмены и Повтора (`Ctrl + Z` / `Ctrl + Y`)
+*   Высокоточное фокальное масштабирование (`Ctrl + Колесо мыши` и `Ctrl + + / - / 0`)
+*   Добавление, удаление страниц и поворот на 90 градусов в PDF
 *   Безопасное сохранение (Safe Save)
 *   Безопасный режим (Safe Mode)
 *   Многоуровневая история отмены и повтора действий (`Ctrl + Z` / `Ctrl + Y`)
@@ -107,16 +128,16 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 Наиболее простой способ установки пакета для дистрибутивов на базе Debian, Ubuntu и Pardus.
 
-1.  Скачайте свежий пакет `.deb` со страницы [**Релизы GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). Имя файла: `word-sys-pdf-editor_1.11.2_amd64.deb` (или `_arm64.deb` для ARM64).
+1.  Скачайте свежий пакет `.deb` со страницы [**Релизы GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). Имя файла: `word-sys-pdf-editor_1.12.0_amd64.deb` (или `_arm64.deb` для ARM64).
 
     > [!TIP]
-    > **Используйте версию 1.11.2** для максимальной стабильности: найдите файл `word-sys-pdf-editor_1.11.2_amd64.deb` на странице релизов.
+    > **Используйте версию 1.12.0** для максимальной стабильности: найдите файл `word-sys-pdf-editor_1.12.0_amd64.deb` на странице релизов.
 
 2.  Откройте терминал в папке с загруженным `.deb` пакетом.
 3.  Выполните команду установки:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.11.2_amd64.deb
+    sudo apt install ./word-sys-pdf-editor_1.12.0_amd64.deb
     ```
     *(Примечание: укажите точное имя загруженного файла, если оно отличается.)*
 4.  При возникновении ошибок зависимостей выполните команду исправления:
@@ -133,7 +154,7 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 1.  Скачайте пакет `.AppImage` или архив `*-linux-*.tar.gz` со страницы [**Релизы GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases) (`word-sys-pdf-editor-x86_64.AppImage` или `word-sys-pdf-editor-linux-x86_64.tar.gz`).
 
-    > **Используйте версию 1.11.2** для максимальной надежности: ориентируйтесь на тег `v1.11.2`.
+    > **Используйте версию 1.12.0** для максимальной надежности: ориентируйтесь на тег `v1.12.0`.
 
 #### A. Установка AppImage
 
@@ -180,7 +201,7 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 Подходит для тех, кто хочет запускать приложение непосредственно из исходников или участвовать в разработке.
 
 > [!TIP]
-> Для стабильной работы используйте тег **v1.11.2** при клонировании. Для тестирования актуальных разработок клонируйте ветку `main` (может быть менее стабильной).
+> Для стабильной работы используйте тег **v1.12.0** при клонировании. Для тестирования актуальных разработок клонируйте ветку `main` (может быть менее стабильной).
 
 ---
 
@@ -198,9 +219,9 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 2.  **Загрузка исходного кода:**
 
-    **Рекомендуется (стабильная v1.11.2):**
+    **Рекомендуется (стабильная v1.12.0):**
     ```bash
-    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -243,9 +264,9 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 2.  **Загрузка исходного кода:**
 
-    **Рекомендуется (стабильная v1.11.2):**
+    **Рекомендуется (стабильная v1.12.0):**
     ```bash
-    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -277,9 +298,9 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 1.  **Загрузка исходного кода:**
 
-    **Рекомендуется (стабильная v1.11.2):**
+    **Рекомендуется (стабильная v1.12.0):**
     ```bash
-    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 

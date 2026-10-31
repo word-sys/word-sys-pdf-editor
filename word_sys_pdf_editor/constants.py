@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "word-sys PDF Editor"
-APP_VERSION = "1.11.2"
+APP_VERSION = "1.12.0"
 
 
 def get_application_license_text() -> str:

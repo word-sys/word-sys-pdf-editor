@@ -28,7 +28,7 @@ If applicable, add screenshots to help explain your problem.
  - OS & Distribution: [e.g. Ubuntu 22.04, Fedora 40, Arch]
  - Desktop Environment / Display Server: [e.g. GNOME 42 (Wayland / X11)]
  - Installation Method: [e.g. Flatpak (Flathub), Git Clone / Source, Pip]
- - Application Version: [e.g. 1.11.2]
+ - Application Version: [e.g. 1.12.0]
  - Python & PyMuPDF / GTK Version: [if running from source]
 
 **Terminal / Error Output**

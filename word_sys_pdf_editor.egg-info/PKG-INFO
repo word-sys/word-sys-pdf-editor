@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: word-sys-pdf-editor
-Version: 1.11.0
+Version: 1.12.0
 Summary: An open-source tool for editing content in PDF files on Linux
 Author: Barın Güzeldemirci (word-sys)
 License-Expression: GPL-3.0-or-later
@@ -11,10 +11,17 @@ Project-URL: Releases, https://github.com/word-sys/word-sys-pdf-editor/releases
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 License-File: LICENSE
-Requires-Dist: PyMuPDF
+Requires-Dist: PyMuPDF<2.0.0,>=1.24.0
 Requires-Dist: numpy
 Requires-Dist: pygobject
-Requires-Dist: anyconvert>=0.1.0
+Requires-Dist: anyconvert>=0.1.11
+Requires-Dist: cryptography>=41.0.0
+Requires-Dist: pyhanko[image-support,opentype]>=0.25.0
+Requires-Dist: pyhanko-certvalidator>=0.24.0
+Requires-Dist: python-pkcs11>=0.7.0
+Requires-Dist: asn1crypto>=1.5.1
+Requires-Dist: Pillow>=9.0.0
+Requires-Dist: certifi
 Dynamic: license-file
 
 **Languages:** [English](README.md) | [Türkçe](README.tr.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Italiano](README.it.md) | [Русский](README.ru.md)
@@ -25,6 +32,7 @@ Dynamic: license-file
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPLv3+-blue.svg)](LICENSE)
 [![GitHub All Releases](https://img.shields.io/github/downloads/word-sys/word-sys-pdf-editor/total)](https://github.com/word-sys/word-sys-pdf-editor/releases)
+[![Flathub](https://img.shields.io/flathub/v/io.github.word_sys.word-sys-pdf-editor?logo=flathub)](https://flathub.org/apps/io.github.word_sys.word-sys-pdf-editor)
 
 **word-sys's PDF Editor** is a simple and user-friendly tool developed for Pardus, Debian and other Linux distributions, focused on editing text, image and object content in PDF files. Developed from scratch in the spirit of #MilliTeknolojiHamlesi and TEKNOFEST 2025 to meet the need for a simple, free, open-source PDF editor in the Linux ecosystem, word-sys's PDF Editor serves both corporate and individual users, does most of the important and common jobs that other paid PDF Editors does and has lots of features which are easy to use, including those who prefer the Turkish language interface — and been the **FIRST PLACE** winner of the TEKNOFEST 2025 Pardus Development Competition.
 
@@ -34,26 +42,47 @@ License: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Recommended Stable Release: v1.11.0** — For the most stable experience, it is strongly recommended to use version **1.11.0**. See the installation sections below for details on how to install this version.
+> **Recommended Stable Release: v1.12.0** — For the most stable experience, it is strongly recommended to use version **1.12.0**. See the installation sections below for details on how to install this version.
 
 ---
 
 ## Screenshots
 
-| **PDF Editing & Annotation Canvas** | **Welcome Screen & Document Hub** |
+| **PDF Editing Canvas & Continuous Scroll** | **Welcome Screen & Document Hub** |
 | :---: | :---: |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" alt="PDF Editing Canvas" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" alt="Welcome Screen" width="450"/></a> |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" alt="PDF Editing Canvas & Continuous Scroll" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" alt="Welcome Screen & Document Hub" width="450"/></a> |
 | **New Document Creation Dialog** | **Interactive Quick Start Guide & Manual** |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png" alt="New Document Creation Dialog" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png" alt="Quick Start Guide & Manual" width="450"/></a> |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png" alt="New Document Creation Dialog" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png" alt="Interactive Quick Start Guide & Manual" width="450"/></a> |
+| **Visual Document Merging Workspace** | **Multi-Document Tabs & Verified Digital Signature Banner** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png" alt="Visual Document Merging Workspace" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png" alt="Multi-Document Tabs & Verified Signature Banner" width="450"/></a> |
+| **Encrypted Document Password Unlock Dialog** | **PAdES Digital Signature & Hardware Token Dialog** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot7.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot7.png" alt="Encrypted Document Password Unlock Dialog" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot8.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot8.png" alt="PAdES Digital Signature & Hardware Token Dialog" width="450"/></a> |
+| **Cryptographic Signature Verification & Details** | **Optical Character Recognition (OCR) Engine & Text Layer** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot9.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot9.png" alt="Cryptographic Signature Verification & Details" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot10.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot10.png" alt="Optical Character Recognition Engine & Text Layer" width="450"/></a> |
 
-
+---
 
 ## Key Features
 
+*   Continuous vertical page scrolling with viewport-culled rendering, directional prefetching, and fractional scaling (HiDPI / 4K / Retina)
+*   Interactive AcroForms Engine: fill text fields, checkboxes, radio groups, and dropdowns directly in View Mode, plus vector flattening
+*   Interactive Form Builder Tool (`B`) to create, align, style, and configure new AcroForm fields
+*   PAdES Baseline digital signatures using PKCS#12 software certificates and PKCS#11 hardware security tokens / smartcards (HSMs)
+*   RFC 3161 cryptographic timestamping integration with custom TSA authentication
+*   Non-blocking signature verification on document open with status banner and X.509 certificate inspector
+*   Permanent cryptographic redaction (`Shift+R`) with automated PII search (SSN, credit cards, emails, phones, regex) and deep document sanitization
+*   Multi-threaded streaming Optical Character Recognition (OCR) engine with live progress, pause/resume, and 7 neural language models
+*   OCR Region Tool (`O`) for instant area text extraction and confidence layer inspector (`Ctrl+Alt+O`)
+*   Sticky notes with customizable colors, author metadata, threaded replies, and annotations sidebar
+*   Vector approval stamps (Approved, Confidential, Draft, dynamic user/date stamps)
+*   Precision measurement tools: Distance Ruler (`U`) with scale calibrations and Polygon Area measurement (`A`)
+*   PDF compression with Target Size solver and side-by-side visual quality comparison
+*   AES-256 document password encryption and local secure password vault
+*   Clone & Patch Tool (`C`) with clean background sampling and instant type-over text entry (`Enter` / `T`)
+*   Interactive Quick Start Guide & Manual with 4 tabs, tool hotkeys, and instant live search filtering (`F1` / `Ctrl+F`)
 *   Create PDF files with customizable page dimensions and unit auto-conversion (mm, cm, in, pt, px)
 *   Open and view PDF files
-*   Merge PDFs
-*   Interactive Quick Start Guide & Manual with keyboard shortcuts cheatsheet (`F1`)
+*   Merge PDFs with visual drag-and-drop page ordering
 *   Select existing text blocks within a page
 *   Edit or delete selected text
 *   Add new text blocks to a page
@@ -65,39 +94,73 @@ License: **GPL-3.0-or-later**
 *   Add shapes to PDFs (Rectangles, Ellipses, Checkmarks, Crosses)
 *   Draw freehand Pen and Highlighter strokes with Bézier smoothing and vector scaling
 *   Special Characters, Symbols & Emojis
-*   Save edited PDFs
-*   Quick Save (`Ctrl + S`)
-*   Export PDFs to DOCX, PPTX, ODT, ODP, and TXT formats using the native AnyConvert engine
-*   User-friendly interface with live thumbnail drag-and-drop reordering
-*   Safe Save
-*   Restricted Mode (Safe Mode)
+*   Save edited PDFs and Quick Save (`Ctrl + S`)
+*   Export PDFs to DOCX, PPTX, ODT, ODP, and TXT formats using the native anyconvert engine
+*   Safe Save and Restricted Mode (Safe Mode)
 *   Full multi-level Undo/Redo tracking (`Ctrl + Z` / `Ctrl + Y`)
 *   Precision pointer-centered focal zoom (`Ctrl + Scroll` and `Ctrl + + / - / 0`)
-*   Add/remove pages in PDFs
+*   Add/remove pages and rotate pages in PDFs
 
+### Native Document Export (anyconvert)
+
+word-sys's PDF Editor includes the pure-Python [anyconvert](https://github.com/word-sys/anyconvert) ([PyPI](https://pypi.org/project/anyconvert/)) document engine for exporting PDFs without external dependencies such as LibreOffice.
+
+Supported formats:
+*   **Microsoft Word (`.docx`)**
+*   **Microsoft PowerPoint (`.pptx`)**
+*   **OpenDocument Text (`.odt`)**
+*   **OpenDocument Presentation (`.odp`)**
+*   **Plain Text (`.txt`)**
+
+Conversion modes:
+*   **Pixel-Accurate Canvas (`mode='canvas'`)**: Preserves exact 1:1 visual positions of text, shapes, and images. Recommended for edited PDFs.
+*   **Semantic Flow (`mode='flow'`)**: Reconstructs headings, paragraphs, and reflowable text structure.
+
+anyconvert can also be run independently from the command line:
+```bash
+anyconvert input.pdf -f docx -m canvas -o output.docx
+```
 
 ---
 
 ## Installation
 
-There are many ways to install word-sys's PDF Editor on your system:
+There are several ways to install word-sys's PDF Editor on your system:
 
-### 1. Automatic Installation (Recommended Method)
+### 1. Flatpak / Flathub (Recommended Method)
 
-This method is the easiest installation path for Linux distributions.
+word-sys's PDF Editor is officially available on [Flathub](https://flathub.org/apps/io.github.word_sys.word-sys-pdf-editor).
 
-1.  Download the latest `.deb` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named something like `word-sys-pdf-editor_1.11.0_all.deb`.
+<a href="https://flathub.org/apps/io.github.word_sys.word-sys-pdf-editor"><img src="https://dl.flathub.org/assets/badges/flathub-badge-en.svg" alt="Download on Flathub" width="190"/></a>
+
+Install using Flatpak:
+```bash
+flatpak install flathub io.github.word_sys.word-sys-pdf-editor
+```
+
+Run the application:
+```bash
+flatpak run io.github.word_sys.word-sys-pdf-editor
+```
+
+---
+
+### 2. Debian / Ubuntu / Pardus Package (.deb)
+
+This method is the easiest installation path for Debian, Ubuntu, and Pardus distributions.
+
+1.  Download the latest `.deb` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named `word-sys-pdf-editor_1.12.0_amd64.deb` (or `_arm64.deb` for ARM64).
 
     > [!TIP]
-    > **Use version 1.11.0** for the most stable experience: look for `word-sys-pdf-editor_1.11.0_all.deb` on the releases page.
+    > **Use version 1.12.0** for the most stable experience: look for `word-sys-pdf-editor_1.12.0_amd64.deb` on the releases page.
 
 2.  Open a terminal in the directory where you downloaded the `.deb` file.
 3.  Run the following command to install the package:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.11.0_all.deb
+    sudo apt install ./word-sys-pdf-editor_1.12.0_amd64.deb
     ```
-    *(Note: Replace `word-sys-pdf-editor_1.11.0_all.deb` with the exact filename you downloaded if different.)*
+    *(Note: Replace `word-sys-pdf-editor_1.12.0_amd64.deb` with the exact filename you downloaded if different, such as `arm64`.)*
 4.  If you encounter a dependency error during installation, it may happens because of you existing broken system, firstly try running the following command to fix missing dependencies or problems on your other packages:
     ```bash
     sudo apt --fix-broken install
@@ -106,35 +169,35 @@ This method is the easiest installation path for Linux distributions.
 
 ---
 
-### 2. AppImage and Binary Release (Second Recommended Method)
+### 3. AppImage and Binary Release
 
 This method is the easiest usable path for all Linux distributions.
 
-1.  Download the latest `.AppImage` or `*-linux-x64.tar.gz` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named something like `word-sys-pdf-editor.AppImage` or `word-sys-pdf-editor-linux-x64.tar.gz`.
+1.  Download the latest `.AppImage` or `*-linux-*.tar.gz` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named `word-sys-pdf-editor-x86_64.AppImage` (or `-aarch64.AppImage`) or `word-sys-pdf-editor-linux-x86_64.tar.gz`.
 
-    > **Use version 1.11.0** for the most stable experience: look for `v1.11.0` tag on the releases page.
+    > **Use version 1.12.0** for the most stable experience: look for `v1.12.0` tag on the releases page.
 
 #### A. AppImage Installation
 
-1. Open a terminal in the directory where you downloaded the `word-sys-pdf-editor.AppImage` file.
+1. Open a terminal in the directory where you downloaded the `word-sys-pdf-editor-x86_64.AppImage` file.
 
 2. Run this command to make it executable:
     ```bash
-    chmod +x word-sys-pdf-editor.AppImage
+    chmod +x word-sys-pdf-editor-x86_64.AppImage
     ```
 
 3. Double-click the AppImage file or run in terminal:
     ```bash
-    ./word-sys-pdf-editor.AppImage
+    ./word-sys-pdf-editor-x86_64.AppImage
     ```
 
 #### B. Binary Release Installation (tar.gz)
 
-1. Open a terminal in the directory where you downloaded the `word-sys-pdf-editor-linux-x64.tar.gz` file.
+1. Open a terminal in the directory where you downloaded the `word-sys-pdf-editor-linux-x86_64.tar.gz` file.
 
 2. Unzip the archive:
     ```bash
-    tar -xzf word-sys-pdf-editor-linux-x64.tar.gz
+    tar -xzf word-sys-pdf-editor-linux-x86_64.tar.gz
     ```
 
 3. Navigate to the extracted directory:
@@ -154,12 +217,12 @@ This method is the easiest usable path for all Linux distributions.
 
 ---
 
-### 3. Manual Installation (For Developers or Those Who Want to Build from Source)
+### 4. Manual Installation (For Developers or Those Who Want to Build from Source)
 
 This method is suitable for users who want to run the application directly from source code or contribute to development.
 
 > [!TIP]
-> For a stable experience, use the **v1.11.0** tag when cloning. If you want to test the latest development changes, you can clone the `main` branch directly — but note that it may be less stable.
+> For a stable experience, use the **v1.12.0** tag when cloning. If you want to test the latest development changes, you can clone the `main` branch directly — but note that it may be less stable.
 
 ---
 
@@ -171,16 +234,16 @@ This method is suitable for users who want to run the application directly from 
     sudo apt update
     sudo apt install python3 python3-pip python3-venv \
                      python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 libgirepository1.0-dev \
-                     python3-numpy \
+                     python3-numpy python3-cryptography \
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
     ```
 
 2.  **Download the Source Code:**
 
-    **Recommended (stable v1.11.0):**
+    **Recommended (stable v1.12.0):**
     ```bash
-    git clone --branch v1.11.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -199,9 +262,9 @@ This method is suitable for users who want to run the application directly from 
     *(You can use `deactivate` later to exit the virtual environment.)*
 
 4.  **Install Python Dependencies:**
-    Install the core Python dependencies (PyMuPDF, numpy, and anyconvert):
+    Install the core Python dependencies (PyMuPDF, numpy, anyconvert, cryptography, Pillow, pyhanko, python-pkcs11, and certifi):
     ```bash
-    pip install PyMuPDF numpy anyconvert pygobject==3.50.0
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
     ```
 
 5.  **Run the Application:**
@@ -219,16 +282,16 @@ This method is suitable for users who want to run the application directly from 
     sudo apt update
     sudo apt install python3 python3-pip python3-venv \
                      python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 libgirepository-2.0-dev \
-                     python3-numpy \
+                     python3-numpy python3-cryptography \
                      python3-dev libcairo2-dev build-essential \
                      fonts-noto-core fonts-liberation2
     ```
 
 2.  **Download the Source Code:**
 
-    **Recommended (stable v1.11.0):**
+    **Recommended (stable v1.12.0):**
     ```bash
-    git clone --branch v1.11.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -247,7 +310,7 @@ This method is suitable for users who want to run the application directly from 
 
 4.  **Install Python Dependencies:**
     ```bash
-    pip install PyMuPDF numpy anyconvert pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 5.  **Run the Application:**
@@ -261,9 +324,9 @@ This method is suitable for users who want to run the application directly from 
 
 1.  **Download the Source Code:**
 
-    **Recommended (stable v1.11.0):**
+    **Recommended (stable v1.12.0):**
     ```bash
-    git clone --branch v1.11.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -283,7 +346,7 @@ This method is suitable for users who want to run the application directly from 
 
 3.  **Install Python Dependencies:**
     ```bash
-    pip install PyMuPDF numpy anyconvert pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 4.  **Run the Application:**

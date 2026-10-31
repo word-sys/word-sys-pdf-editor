@@ -26,31 +26,52 @@
   <screenshots>
     <screenshot type="default">
       <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot1.png</image>
-      <caption>Editing text and annotations in a PDF file</caption>
+      <caption>PDF editing canvas with continuous page scrolling, text editing, and vector shapes</caption>
     </screenshot>
     <screenshot>
       <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot2.png</image>
-      <caption>Welcome screen and document hub</caption>
+      <caption>Welcome screen and document hub with quick actions and recent files</caption>
     </screenshot>
     <screenshot>
       <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot3.png</image>
-      <caption>Customizable New Document creation dialog</caption>
+      <caption>Customizable New Document creation dialog with dimension presets</caption>
     </screenshot>
     <screenshot>
       <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot4.png</image>
-      <caption>Interactive Quick Start Guide and keyboard shortcuts cheatsheet</caption>
+      <caption>Interactive Quick Start Guide and keyboard shortcuts cheatsheet with live search</caption>
     </screenshot>
     <screenshot>
       <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot5.png</image>
-      <caption>Visual Document Merging Workspace</caption>
+      <caption>Visual Document Merging Workspace with drag-and-drop page ordering</caption>
     </screenshot>
     <screenshot>
       <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot6.png</image>
-      <caption>Multi-format document export dialog and multi-document tabs</caption>
+      <caption>Multi-document tabs with verified digital signature status banner</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot7.png</image>
+      <caption>Encrypted document password unlock dialog with AES security verification</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot8.png</image>
+      <caption>PAdES digital signature creation dialog supporting PKCS#12 credentials and hardware tokens</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot9.png</image>
+      <caption>Cryptographic signature verification details and X.509 certificate inspector</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/main/screenshots/screenshot10.png</image>
+      <caption>Optical Character Recognition (OCR) engine dialog with searchable text layer generation</caption>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="1.12.0" date="2026-10-31">
+      <description>
+        <p>Major feature release introducing continuous vertical scrolling with viewport culling, interactive AcroForm filling and form builder, PAdES digital signatures with PKCS#11 hardware security tokens, permanent cryptographic redaction with automated PII detection and deep document sanitization, multi-language streaming OCR with neural models and region recognition, sticky notes and threaded comments, precision distance and area measurement tools, PDF compression with target size solver, AES-256 document encryption and password vault, clone and patch tool, modernized Quick Start Guide with live search, and an updated 10-screenshot visual showcase.</p>
+      </description>
+    </release>
     <release version="1.11.2" date="2026-10-05">
       <description>
         <p>Updated anyconvert conversion engine to 0.1.9, improved vector icon rendering and desktop shell window tracking, and separated amd64 and arm64 architecture packages.</p>

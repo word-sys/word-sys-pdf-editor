@@ -16,28 +16,47 @@ Licencia: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Versión estable recomendada: v1.11.2** — Para disfrutar de la mayor estabilidad, se recomienda encarecidamente utilizar la versión **1.11.2**. Consulte las secciones de instalación a continuación para obtener más información.
+> **Versión estable recomendada: v1.12.0** — Para disfrutar de la mayor estabilidad, se recomienda encarecidamente utilizar la versión **1.12.0**. Consulte las secciones de instalación a continuación para obtener más información.
 
 ---
 
 ## Capturas de pantalla
 
-| **Lienzo de edición y anotación PDF** | **Pantalla de bienvenida y gestión documental** |
+| **Lienzo de edición PDF y desplazamiento continuo** | **Pantalla de bienvenida y gestión documental** |
 | :---: | :---: |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" alt="Lienzo de edición PDF" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" alt="Pantalla de bienvenida" width="450"/></a> |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot1.png" alt="Lienzo de edición PDF y desplazamiento continuo" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot2.png" alt="Pantalla de bienvenida y gestión documental" width="450"/></a> |
 | **Diálogo de creación de nuevo documento** | **Guía interactiva y manual de usuario** |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png" alt="Creación de nuevo documento" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png" alt="Guía interactiva y manual" width="450"/></a> |
-| **Espacio visual para fusionar documentos** | **Diálogo de exportación y pestañas** |
-| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png" alt="Espacio visual para fusionar documentos" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png" alt="Diálogo de exportación y pestañas" width="450"/></a> |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot3.png" alt="Diálogo de creación de nuevo documento" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot4.png" alt="Guía interactiva y manual de usuario" width="450"/></a> |
+| **Espacio visual para fusionar documentos** | **Pestañas multidocumento y barra de firma digital verificada** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot5.png" alt="Espacio visual para fusionar documentos" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot6.png" alt="Pestañas multidocumento y barra de firma digital" width="450"/></a> |
+| **Diálogo de desbloqueo de contraseña de documento cifrado** | **Diálogo de firma digital PAdES y token de hardware** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot7.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot7.png" alt="Diálogo de desbloqueo de contraseña" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot8.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot8.png" alt="Diálogo de firma digital PAdES y token de hardware" width="450"/></a> |
+| **Verificación de firma criptográfica y detalles** | **Motor de reconocimiento óptico (OCR) y capa de texto** |
+| <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot9.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot9.png" alt="Verificación de firma criptográfica y detalles" width="450"/></a> | <a href="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot10.png"><img src="https://raw.githubusercontent.com/word-sys/word-sys-pdf-editor/refs/heads/main/screenshots/screenshot10.png" alt="Motor de reconocimiento óptico (OCR) y capa de texto" width="450"/></a> |
 
 ---
 
 ## Características principales
 
+*   Desplazamiento vertical continuo de páginas con renderizado optimizado (viewport culling), precarga direccional y escalado fraccionario (HiDPI / 4K / Retina)
+*   Motor interactivo de AcroForms: rellenado directo de campos de texto, casillas de verificación, botones de radio y listas desplegables en modo visualización, y acoplado vectorial
+*   Herramienta interactiva de creación de formularios (`B`) para diseñar, alinear y configurar nuevos campos AcroForm
+*   Firmas digitales PAdES Baseline mediante certificados de software PKCS#12 y tokens de seguridad de hardware PKCS#11 / tarjetas inteligentes (HSM)
+*   Integración de sellado de tiempo criptográfico RFC 3161 con autenticación TSA personalizada
+*   Verificación no bloqueante de firmas al abrir con barra interactiva de estado e inspector de certificados X.509
+*   Redacción criptográfica permanente (`Shift+R`) con detección automática de datos confidenciales (tarjetas, correos, teléfonos, regex) y desinfección profunda
+*   Motor de reconocimiento óptico de caracteres (OCR) multifilamento en segundo plano con progreso en vivo y 7 modelos neuronales
+*   Herramienta de región OCR (`O`) para extracción instantánea de texto e inspector de nivel de confianza (`Ctrl+Alt+O`)
+*   Notas adhesivas con colores personalizables, metadatos de autor, hilos de respuesta y barra lateral de anotaciones
+*   Sellos vectoriales de aprobación (Aprobado, Confidencial, Borrador, sellos dinámicos de usuario/fecha)
+*   Herramientas de medición de precisión: Regla de distancia (`U`) con escalas calibradas y medición de área poligonal (`A`)
+*   Compresión inteligente de PDF con optimizador de tamaño objetivo y comparativa visual lado a lado
+*   Cifrado de documentos mediante contraseña AES-256 y baúl seguro local de contraseñas
+*   Herramienta de clonación y parcheado (`C`) con muestreo limpio de fondo e inserción de texto directo (`Enter` / `T`)
+*   Guía interactiva de inicio rápido con 4 pestañas, atajos de herramientas y filtrado de búsqueda en directo (`F1` / `Ctrl+F`)
 *   Crear archivos PDF con dimensiones de página personalizadas y conversión automática de unidades (mm, cm, in, pt, px)
 *   Abrir y visualizar documentos PDF
-*   Combinar y unir archivos PDF
-*   Guía interactiva de inicio rápido y tabla de atajos de teclado (`F1`)
+*   Combinar y unir archivos PDF con ordenación visual mediante arrastrar y soltar
 *   Seleccionar bloques de texto existentes en una página
 *   Editar o eliminar texto seleccionado
 *   Añadir nuevos bloques de texto en cualquier página
@@ -49,10 +68,12 @@ Licencia: **GPL-3.0-or-later**
 *   Añadir formas vectoriales (Rectángulos, Elipses, Marcas de verificación, Cruces)
 *   Trazado libre de lápiz y resaltador con suavizado de Bézier y escalado vectorial
 *   Caracteres especiales y símbolos
-*   Guardar documentos PDF modificados
-*   Guardado rápido (`Ctrl + S`)
+*   Guardar documentos PDF modificados y Guardado rápido (`Ctrl + S`)
 *   Exportar PDF a DOCX, PPTX, ODT, ODP y TXT con el motor nativo anyconvert
-*   Interfaz intuitiva con reordenación de páginas por arrastrar y soltar miniaturas en tiempo real
+*   Guardado seguro (Safe Save) y Modo Restringido (Modo Seguro)
+*   Historial completo de Deshacer / Rehacer multinivel (`Ctrl + Z` / `Ctrl + Y`)
+*   Zoom focal de precisión centrado en el cursor (`Ctrl + Rueda del ratón` y `Ctrl + + / - / 0`)
+*   Añadir/eliminar páginas y rotar páginas 90 grados en archivos PDF
 *   Guardado seguro (Safe Save)
 *   Modo restringido (Safe Mode)
 *   Historial multinivel completo de Deshacer/Rehacer (`Ctrl + Z` / `Ctrl + Y`)
@@ -107,18 +128,18 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 Es la vía de paquetes más sencilla para distribuciones basadas en Debian, Ubuntu y Pardus.
 
-1.  Descargue el paquete `.deb` más reciente desde la página de [**Versiones de GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). El archivo se llama `word-sys-pdf-editor_1.11.2_amd64.deb` (o `_arm64.deb` para ARM64).
+1.  Descargue el paquete `.deb` más reciente desde la página de [**Versiones de GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). El archivo se llama `word-sys-pdf-editor_1.12.0_amd64.deb` (o `_arm64.deb` para ARM64).
 
     > [!TIP]
-    > **Utilice la versión 1.11.2** para la mejor estabilidad: busque `word-sys-pdf-editor_1.11.2_amd64.deb` en la página de versiones.
+    > **Utilice la versión 1.12.0** para la mejor estabilidad: busque `word-sys-pdf-editor_1.12.0_amd64.deb` en la página de versiones.
 
 2.  Abra un terminal en el directorio donde descargó el paquete `.deb`.
 3.  Ejecute el siguiente comando para instalarlo:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.11.2_amd64.deb
+    sudo apt install ./word-sys-pdf-editor_1.12.0_amd64.deb
     ```
-    *(Nota: Sustituya `word-sys-pdf-editor_1.11.2_amd64.deb` por el nombre exacto del archivo que haya descargado si difiere.)*
+    *(Nota: Sustituya `word-sys-pdf-editor_1.12.0_amd64.deb` por el nombre exacto del archivo que haya descargado si difiere.)*
 4.  Si se presenta un error de dependencias, ejecute el siguiente comando para solucionarlo:
     ```bash
     sudo apt --fix-broken install
@@ -133,7 +154,7 @@ Este método funciona de inmediato en prácticamente cualquier distribución Lin
 
 1.  Descargue el paquete `.AppImage` o `*-linux-*.tar.gz` desde la página de [**Versiones de GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases) (`word-sys-pdf-editor-x86_64.AppImage` o `word-sys-pdf-editor-linux-x86_64.tar.gz`).
 
-    > **Utilice la versión 1.11.2** para máxima estabilidad: busque la etiqueta `v1.11.2` en la página de lanzamientos.
+    > **Utilice la versión 1.12.0** para máxima estabilidad: busque la etiqueta `v1.12.0` en la página de lanzamientos.
 
 #### A. Instalación de AppImage
 
@@ -180,7 +201,7 @@ Este método funciona de inmediato en prácticamente cualquier distribución Lin
 Este método es ideal para quienes deseen ejecutar la aplicación directamente desde el código fuente o contribuir al desarrollo.
 
 > [!TIP]
-> Para una versión estable, clone la etiqueta **v1.11.2**. Si desea probar los cambios de desarrollo más recientes, clone la rama `main` (que puede presentar menor estabilidad).
+> Para una versión estable, clone la etiqueta **v1.12.0**. Si desea probar los cambios de desarrollo más recientes, clone la rama `main` (que puede presentar menor estabilidad).
 
 ---
 
@@ -198,9 +219,9 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 2.  **Descargar el código fuente:**
 
-    **Recomendado (versión estable v1.11.2):**
+    **Recomendado (versión estable v1.12.0):**
     ```bash
-    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -243,9 +264,9 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 2.  **Descargar el código fuente:**
 
-    **Recomendado (versión estable v1.11.2):**
+    **Recomendado (versión estable v1.12.0):**
     ```bash
-    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -277,9 +298,9 @@ Este método es ideal para quienes deseen ejecutar la aplicación directamente d
 
 1.  **Descargar el código fuente:**
 
-    **Recomendado (versión estable v1.11.2):**
+    **Recomendado (versión estable v1.12.0):**
     ```bash
-    git clone --branch v1.11.2 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 

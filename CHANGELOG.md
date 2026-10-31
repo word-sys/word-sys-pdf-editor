@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.12.0] - 2026-10-31
+
+### Added
+- **Interactive AcroForms Engine & Form Builder**:
+  - Full support for interactive PDF AcroForms: fill text fields, checkboxes, radio groups, and dropdowns directly in View Mode with native Cairo rendering and instant value synchronization.
+  - Interactive Form Builder Tool (`B`) allows creating, configuring, aligning, and resizing new form fields across document pages with property inspectors and undo/redo support.
+  - AcroForm Flattening and Export allows permanently baking filled form fields into standard static PDF vector content.
+- **PAdES Digital Signatures & PKCS#11 Hardware Tokens**:
+  - PAdES Baseline profile digital signing using PKCS#12 (`.pfx` / `.p12`) software certificates with SHA-256 cryptographic hashes and Adobe Acrobat-compliant visible signature stamps.
+  - Native hardware token support (`PKCS#11`) for cryptographic smart cards and USB hardware security modules (HSMs) with PIN entry and token slot enumeration.
+  - RFC 3161 cryptographic timestamping integration with custom TSA server authentication support.
+  - Non-blocking signature verification on document open, displaying an interactive signature status banner with detailed certificate chain and timestamp inspection.
+- **Permanent Cryptographic Redaction & Document Sanitization**:
+  - Dedicated Redaction Tool (`Shift+R`) allowing users to mark sensitive text and visual regions for permanent cryptographic redaction.
+  - Automated PII Search & Auto-Redaction for detecting and batch-redacting sensitive patterns including Social Security Numbers (SSN), credit cards, emails, phone numbers, and custom regex expressions.
+  - Deep Document Sanitization: completely purges XMP metadata, embedded file attachments, annotations/comments, hidden layers (OCGs), orphaned bookmarks, cached thumbnails, embedded JavaScript, and unique document IDs.
+- **Continuous Scrolling & High-DPI Fractional Scaling**:
+  - Seamless continuous vertical page scrolling with viewport-culled rendering, directional prefetching, and instant page transitions.
+  - Fractional scaling support with device scale factor normalization for crystal-clear text and graphics on 4K, Retina, and HiDPI displays.
+  - Dual View/Edit architecture enabling effortless mode toggling between interactive reading/text selection and precise object manipulation.
+- **Streaming Optical Character Recognition (OCR) Engine**:
+  - Multi-threaded background OCR processing pipeline with live progress, pause/resume controls, and dynamic ETA estimation.
+  - OCR preprocessing filters: adaptive dark-background inversion, auto-deskew correction, and auto-rotation orientation detection.
+  - OCR Region Tool (`O`) for instant area text extraction and clipboard copying, plus an OCR Text Layer Confidence Inspector (`Ctrl+Alt+O`).
+  - In-app Multi-Language Model Manager supporting download and storage of 7 neural Tesseract models (English, Turkish, German, French, Spanish, Italian, Russian) with compound bilingual recognition support.
+- **Sticky Notes, Threaded Comments & Vector Stamps**:
+  - Sticky notes with customizable colors, author metadata, threaded comment replies, and a dedicated Annotations Sidebar.
+  - Vector approval stamps (Approved, Confidential, Draft, Final) and dynamic vector stamps embedding live user and date/time metadata.
+- **Precision Measurement Tools**:
+  - Distance Ruler Tool (`U`) for measuring point-to-point distances with customizable unit scales (pt, mm, cm, in).
+  - Polygon Area Measurement Tool (`A`) for calculating closed planar surface areas with interactive vertex placement.
+- **PDF Compression & Target Size Solver**:
+  - Smart compression presets (Balanced, Maximum, Grayscale, Pure 1-bit B&W, Lossless) and an automated Target Size Solver with side-by-side visual quality comparison preview.
+- **AES-256 Encryption & Local Password Vault**:
+  - Document encryption with AES-256 passwords, user/owner permission policies, and a secure local Password Vault for seamless credential management.
+- **Clone & Patch Tool (`C`)**:
+  - Clean background sampling to seamlessly cover outdated text or graphics, with instant type-over text entry (`Enter` / `T`).
+- **Comprehensive 10-Screenshot Visual Tour**:
+  - Expanded screenshot documentation showcasing the editing canvas, welcome screen, new document dialog, quick guide, visual merge workspace, signed document banner, password dialog, digital signature dialog, verification details, and streaming OCR engine.
+- **Modernized Quick Start Guide & Manual**:
+  - 4-tab interactive guide with instant live search filtering (`Ctrl+F`), tool hotkeys, and keyboard navigation.
+
+### Changed
+- **Packaging & Dependency Modernization**:
+  - Enforced `"PyMuPDF>=1.24.0,<2.0.0"` across all manifests and build pipelines.
+  - Bundled `tessdata-fast` language models and set `TESSDATA_PREFIX=/app/share/tessdata` in Flatpak manifests and AppImage bundles.
+  - Added optional OCR runtime packages (`tesseract-ocr`) and language packs to Debian packaging recommendations.
+  - Upgraded all Python dependencies to modern releases (`anyconvert>=0.1.11`, `Pillow>=13.0.0`, `pyhanko>=0.38.0`, `cryptography>=50.0.2`).
+
+---
+
 ## [1.11.2] - 2026-10-05
 
 ### Changed

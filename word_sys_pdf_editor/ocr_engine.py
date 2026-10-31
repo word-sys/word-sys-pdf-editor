@@ -302,7 +302,7 @@ def download_language_model(
 
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "word-sys-pdf-editor/1.11.2 (X11; Linux)"},
+        headers={"User-Agent": "word-sys-pdf-editor/1.12.0 (X11; Linux)"},
     )
 
     try:
