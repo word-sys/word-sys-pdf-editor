@@ -1931,6 +1931,111 @@ class EmbedOCRTextCommand(Command):
                 for p in pages:
                     cache2.pop(p, None)
 
+    def record_streamed_page(
+        self,
+        page_num: int,
+        ocr_words: Optional[List[Dict[str, Any]]] = None,
+        ocr_doc: Any = None,
+        pre_snapshot: Optional[bytes] = None,
+    ) -> Dict[str, Any]:
+        """Incrementally apply and record a single page's OCR result as part of this batch command."""
+        doc = self._get_doc()
+        if not doc or not (0 <= page_num < len(doc)):
+            return {"success": False, "page_num": page_num, "words_embedded": 0}
+
+        if page_num not in self.page_indices:
+            self.page_indices.append(page_num)
+
+        if pre_snapshot is None and page_num not in self.pre_snapshots:
+            pdf_handler.save_page_snapshot(doc, page_num, force=True)
+            pre_snapshot = pdf_handler._page_snapshots.get((id(doc), page_num))
+
+        if pre_snapshot is not None and page_num not in self.pre_snapshots:
+            self.pre_snapshots[page_num] = pre_snapshot
+            pdf_handler._page_pre_ocr_snapshots[(id(doc), page_num)] = pre_snapshot
+
+        if ocr_words is None and ocr_doc is not None:
+            try:
+                ocr_words = pdf_handler.extract_ocr_words_for_page(doc[page_num], ocr_doc)
+            finally:
+                if hasattr(ocr_doc, "close"):
+                    try:
+                        ocr_doc.close()
+                    except Exception:
+                        pass
+        elif ocr_doc is not None and hasattr(ocr_doc, "close"):
+            try:
+                ocr_doc.close()
+            except Exception:
+                pass
+
+        if ocr_words is not None:
+            self.ocr_words_by_page[page_num] = copy.deepcopy(ocr_words)
+
+        res = pdf_handler.embed_ocr_text_layer_on_page(
+            doc,
+            page_num=page_num,
+            ocr_words=self.ocr_words_by_page.get(page_num),
+            language=self.language,
+            dpi=self.dpi,
+            replace_existing=True,
+            auto_deskew=False,
+            auto_rotate=False,
+            auto_invert=self.auto_invert,
+            enhance_contrast=self.enhance_contrast,
+        )
+
+        if page_num not in self.ocr_words_by_page:
+            self.ocr_words_by_page[page_num] = pdf_handler.extract_ocr_words_for_page(doc[page_num], doc[page_num])
+
+        per_page = self.last_result.setdefault("per_page", {})
+        per_page[page_num] = res
+        self.last_result["pages_processed"] = sum(1 for r in per_page.values() if r.get("success"))
+        self.last_result["total_words_embedded"] = sum(int(r.get("words_embedded", 0)) for r in per_page.values())
+        self.last_result["success"] = self.last_result["pages_processed"] > 0
+
+        self._invalidate_objects_cache([page_num])
+
+        sess = self._get_target_session()
+        curr_page = getattr(
+            sess, 'current_page_index', getattr(self.window, 'current_page_index', 0)
+        )
+        if page_num == curr_page:
+            extracted_texts, _err = pdf_handler.extract_editable_text(doc, curr_page)
+            new_user_texts = [
+                t for t in self.pre_editable_texts
+                if getattr(t, 'page_number', None) == curr_page and getattr(t, 'is_new', False)
+            ]
+            combined = list(extracted_texts or []) + copy.deepcopy(new_user_texts)
+            for target in ([sess, self.window] if sess else [self.window]):
+                if hasattr(target, 'editable_texts'):
+                    target.editable_texts = copy.deepcopy(combined)
+
+        if sess is not None:
+            sess.is_modified = True
+            if hasattr(sess, 'document_modified'):
+                sess.document_modified = True
+        if hasattr(self.window, 'document_modified'):
+            self.window.document_modified = True
+
+        if self._is_session_active():
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+            if (
+                hasattr(self.window, 'search_bar')
+                and self.window.search_bar
+                and hasattr(self.window.search_bar, 'get_search_mode')
+                and self.window.search_bar.get_search_mode()
+                and hasattr(self.window, 'search_entry')
+                and self.window.search_entry
+                and hasattr(self.window, '_on_search_query_changed')
+            ):
+                self.window._on_search_query_changed(self.window.search_entry, immediate=True)
+            if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()
+
+        return res
+
     def execute(self):
         doc = self._get_doc()
         if not doc:
@@ -1963,7 +2068,7 @@ class EmbedOCRTextCommand(Command):
             sess, 'current_page_index', getattr(self.window, 'current_page_index', 0)
         )
         if curr_page in self.page_indices and 0 <= curr_page < len(doc):
-            extracted_texts, _ = pdf_handler.extract_editable_text(doc, curr_page)
+            extracted_texts, _err = pdf_handler.extract_editable_text(doc, curr_page)
             new_user_texts = [
                 t for t in self.pre_editable_texts
                 if getattr(t, 'page_number', None) == curr_page and getattr(t, 'is_new', False)

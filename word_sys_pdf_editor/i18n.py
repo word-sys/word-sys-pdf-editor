@@ -1019,6 +1019,11 @@ _STRINGS = {
         "ocr_banner_cancelling": "Cancelling OCR…",
         "ocr_banner_cancelled": "OCR processing cancelled.",
         "ocr_banner_completed": "OCR completed: {0} page(s) recognized.",
+        "ocr_btn_pause": "Pause",
+        "ocr_btn_resume": "Resume",
+        "ocr_status_paused": "Paused",
+        "ocr_banner_paused": "OCR processing paused.",
+        "ocr_eta_label": "ETA {0}",
     },
 
     "tr": {
@@ -2034,6 +2039,11 @@ _STRINGS = {
         "ocr_banner_cancelling": "OCR iptal ediliyor…",
         "ocr_banner_cancelled": "OCR işlemi iptal edildi.",
         "ocr_banner_completed": "OCR tamamlandı: {0} sayfa işlendi.",
+        "ocr_btn_pause": "Duraklat",
+        "ocr_btn_resume": "Devam Et",
+        "ocr_status_paused": "Duraklatıldı",
+        "ocr_banner_paused": "OCR işlemi duraklatıldı.",
+        "ocr_eta_label": "Kalan: {0}",
     },
 }
 

@@ -1604,3 +1604,299 @@ def test_embed_ocr_command_undo_redo_cycle():
 
     doc.close()
 
+
+def test_streaming_ocr_incremental_page_delivery_and_single_undo():
+    """Verify per-page OCR results are embedded incrementally as each page completes and share a single undo command."""
+    from word_sys_pdf_editor.ocr_engine import StreamingOCRPipeline, format_ocr_eta
+    from word_sys_pdf_editor.window import PdfEditorWindow
+
+    doc = _create_scanned_pdf([
+        [(40, 80, "STREAM PAGE ONE READY")],
+        [(40, 80, "STREAM PAGE TWO READY")],
+        [(40, 80, "STREAM PAGE THREE READY")],
+    ])
+
+    class DummyView:
+        def queue_draw(self):
+            pass
+
+    class DummyWindow:
+        def __init__(self, d):
+            self.session = DocumentSession(doc=d)
+            self._active_session = self.session
+            self.doc = d
+            self.current_page_index = 0
+            self.editable_texts = []
+            self._page_objects_cache = {}
+            self.document_modified = False
+            self.undo_manager = UndoManager(self)
+            self.status_label = MagicMock()
+            self.ocr_banner = MagicMock()
+            self.ocr_banner_label = MagicMock()
+            self.ocr_banner_progress = MagicMock()
+            self.ocr_banner_pause_btn = MagicMock()
+            self.ocr_banner_cancel_btn = MagicMock()
+            self._ocr_cancel_requested = False
+            self._ocr_paused = False
+            self._active_ocr_pipeline = None
+            self._active_streaming_ocr_cmd = None
+            self.pdf_view = DummyView()
+
+        def _update_ui_state(self):
+            pass
+
+        def _update_undo_redo_buttons(self):
+            pass
+
+        show_ocr_banner = PdfEditorWindow.show_ocr_banner
+        update_ocr_banner = PdfEditorWindow.update_ocr_banner
+        hide_ocr_banner = PdfEditorWindow.hide_ocr_banner
+        _on_ocr_banner_pause_clicked = PdfEditorWindow._on_ocr_banner_pause_clicked
+        _on_ocr_banner_cancel_clicked = PdfEditorWindow._on_ocr_banner_cancel_clicked
+        begin_streaming_ocr_session = PdfEditorWindow.begin_streaming_ocr_session
+        _on_ocr_page_streamed = PdfEditorWindow._on_ocr_page_streamed
+        finish_streaming_ocr_session = PdfEditorWindow.finish_streaming_ocr_session
+        start_streaming_ocr = PdfEditorWindow.start_streaming_ocr
+
+    win = DummyWindow(doc)
+
+    def fake_ocr_page(d, page_num, **_kwargs):
+        res_doc = fitz.open()
+        rp = res_doc.new_page(width=d[page_num].rect.width, height=d[page_num].rect.height)
+        rp.insert_text(fitz.Point(40, 80), f"STREAMED_TOKEN_P{page_num}", fontsize=16)
+        return res_doc
+
+    mid_stream_assertions = []
+
+    def on_page_ready(p_num, _payload, prog):
+        # When page 0 is ready, page 0 must already be searchable while pages 1 and 2 are still un-OCR'd!
+        if p_num == 0:
+            p0_hits = doc[0].search_for("STREAMED_TOKEN_P0")
+            p1_text = doc[1].get_text().strip()
+            p2_text = doc[2].get_text().strip()
+            mid_stream_assertions.append((len(p0_hits), p1_text, p2_text, prog.get("eta_seconds"), len(win.editable_texts)))
+
+    with patch("word_sys_pdf_editor.ocr_engine.perform_ocr_on_page", side_effect=fake_ocr_page), \
+         patch("word_sys_pdf_editor.ocr_engine.get_best_tessdata_dir_for_lang", return_value="/usr/share/tessdata"):
+        win.start_streaming_ocr(
+            target_pages=[0, 1, 2],
+            language="eng",
+            dpi=150,
+            auto_deskew=False,
+            auto_rotate=False,
+            sync=True,
+            on_page_ready=on_page_ready,
+        )
+
+    assert len(mid_stream_assertions) == 1
+    p0_hit_count, p1_mid_text, p2_mid_text, eta_sec, p0_editable_count = mid_stream_assertions[0]
+    assert p0_hit_count >= 1
+    assert p1_mid_text == ""
+    assert p2_mid_text == ""
+    assert eta_sec is not None and eta_sec > 0
+    assert format_ocr_eta(eta_sec).startswith("~")
+    assert p0_editable_count >= 1
+
+    # All 3 pages are now searchable
+    for i in range(3):
+        assert len(doc[i].search_for(f"STREAMED_TOKEN_P{i}")) >= 1
+
+    # Undo is a single command for the entire 3-page streaming batch
+    assert len(win.undo_manager.undo_stack) == 1
+    win.undo_manager.undo()
+    for i in range(3):
+        assert doc[i].get_text().strip() == ""
+    assert win.document_modified is False
+
+    # Redo restores all 3 pages in one step
+    win.undo_manager.redo()
+    for i in range(3):
+        assert len(doc[i].search_for(f"STREAMED_TOKEN_P{i}")) >= 1
+    assert win.document_modified is True
+
+    doc.close()
+
+
+def test_streaming_ocr_cancel_preserves_finished_pages_and_stops_remaining():
+    """Verify cancelling mid-stream stops remaining pages without corrupting finished ones and keeps a single undo command."""
+    from word_sys_pdf_editor.window import PdfEditorWindow
+
+    doc = _create_scanned_pdf([
+        [(40, 80, "PAGE ZERO")],
+        [(40, 80, "PAGE ONE")],
+        [(40, 80, "PAGE TWO")],
+    ])
+
+    class DummyView:
+        def queue_draw(self):
+            pass
+
+    class DummyWindow:
+        def __init__(self, d):
+            self.session = DocumentSession(doc=d)
+            self._active_session = self.session
+            self.doc = d
+            self.current_page_index = 0
+            self.editable_texts = []
+            self._page_objects_cache = {}
+            self.document_modified = False
+            self.undo_manager = UndoManager(self)
+            self.status_label = MagicMock()
+            self.ocr_banner = MagicMock()
+            self.ocr_banner_label = MagicMock()
+            self.ocr_banner_progress = MagicMock()
+            self.ocr_banner_pause_btn = MagicMock()
+            self.ocr_banner_cancel_btn = MagicMock()
+            self._ocr_cancel_requested = False
+            self._ocr_paused = False
+            self._active_ocr_pipeline = None
+            self._active_streaming_ocr_cmd = None
+            self.pdf_view = DummyView()
+
+        def _update_ui_state(self):
+            pass
+
+        def _update_undo_redo_buttons(self):
+            pass
+
+        show_ocr_banner = PdfEditorWindow.show_ocr_banner
+        update_ocr_banner = PdfEditorWindow.update_ocr_banner
+        hide_ocr_banner = PdfEditorWindow.hide_ocr_banner
+        _on_ocr_banner_pause_clicked = PdfEditorWindow._on_ocr_banner_pause_clicked
+        _on_ocr_banner_cancel_clicked = PdfEditorWindow._on_ocr_banner_cancel_clicked
+        begin_streaming_ocr_session = PdfEditorWindow.begin_streaming_ocr_session
+        _on_ocr_page_streamed = PdfEditorWindow._on_ocr_page_streamed
+        finish_streaming_ocr_session = PdfEditorWindow.finish_streaming_ocr_session
+        start_streaming_ocr = PdfEditorWindow.start_streaming_ocr
+
+    win = DummyWindow(doc)
+    calls = []
+
+    def fake_ocr_page(d, page_num, **_kwargs):
+        calls.append(page_num)
+        res_doc = fitz.open()
+        rp = res_doc.new_page(width=d[page_num].rect.width, height=d[page_num].rect.height)
+        rp.insert_text(fitz.Point(40, 80), f"CANCEL_TEST_P{page_num}", fontsize=16)
+        return res_doc
+
+    def cancel_after_page_one(p_num, _payload, _prog):
+        if p_num == 1:
+            win._on_ocr_banner_cancel_clicked(None)
+
+    with patch("word_sys_pdf_editor.ocr_engine.perform_ocr_on_page", side_effect=fake_ocr_page), \
+         patch("word_sys_pdf_editor.ocr_engine.get_best_tessdata_dir_for_lang", return_value="/usr/share/tessdata"):
+        win.start_streaming_ocr(
+            target_pages=[0, 1, 2],
+            language="eng",
+            dpi=150,
+            auto_deskew=False,
+            auto_rotate=False,
+            sync=True,
+            on_page_ready=cancel_after_page_one,
+        )
+
+    # Only pages 0 and 1 were processed; page 2 was never started
+    assert calls == [0, 1]
+    assert len(doc[0].search_for("CANCEL_TEST_P0")) >= 1
+    assert len(doc[1].search_for("CANCEL_TEST_P1")) >= 1
+    assert doc[2].get_text().strip() == ""
+
+    # Finished pages (0 and 1) are grouped into a single undo command
+    assert len(win.undo_manager.undo_stack) == 1
+    win.undo_manager.undo()
+    assert doc[0].get_text().strip() == ""
+    assert doc[1].get_text().strip() == ""
+    assert doc[2].get_text().strip() == ""
+
+    doc.close()
+
+
+def test_streaming_ocr_pause_resume_and_eta_helpers():
+    """Verify pause/resume controls on StreamingOCRPipeline and live ETA formatting."""
+    import threading
+    from word_sys_pdf_editor.ocr_engine import StreamingOCRPipeline, format_ocr_eta
+
+    assert format_ocr_eta(None) == ""
+    assert format_ocr_eta(0) == "0s"
+    assert format_ocr_eta(8.2) == "~8s"
+    assert format_ocr_eta(60.0) == "~1m"
+    assert format_ocr_eta(85.0) == "~1m 25s"
+
+    doc = _create_scanned_pdf([
+        [(40, 80, "PAUSE ONE")],
+        [(40, 80, "PAUSE TWO")],
+    ])
+
+    page0_done = threading.Event()
+    finished_evt = threading.Event()
+
+    def fake_ocr_page(d, page_num, **_kwargs):
+        res_doc = fitz.open()
+        rp = res_doc.new_page(width=d[page_num].rect.width, height=d[page_num].rect.height)
+        rp.insert_text(fitz.Point(40, 80), f"PAUSED_P{page_num}", fontsize=16)
+        return res_doc
+
+    pipeline_ref = {}
+
+    def on_page_ready(p_num, _payload, _prog):
+        if p_num == 0:
+            pipeline_ref["p"].pause()
+            page0_done.set()
+
+    def on_finished(_summary):
+        finished_evt.set()
+
+    with patch("word_sys_pdf_editor.ocr_engine.perform_ocr_on_page", side_effect=fake_ocr_page), \
+         patch("word_sys_pdf_editor.ocr_engine.get_best_tessdata_dir_for_lang", return_value="/usr/share/tessdata"):
+        pipeline = StreamingOCRPipeline(
+            doc=doc,
+            target_pages=[0, 1],
+            language="eng",
+            dpi=150,
+            auto_deskew=False,
+            auto_rotate=False,
+            on_page_ready=on_page_ready,
+            on_finished=on_finished,
+        )
+        pipeline_ref["p"] = pipeline
+        pipeline.start(sync=False)
+
+        assert page0_done.wait(timeout=2.0)
+        assert pipeline.is_paused is True
+        # Give worker a brief moment to verify page 1 does not run while paused
+        threading.Event().wait(0.08)
+        assert pipeline.completed_pages == [0]
+
+        # Resume and wait for completion
+        pipeline.resume()
+        assert pipeline.is_paused is False
+        assert finished_evt.wait(timeout=2.0)
+        assert pipeline.completed_pages == [0, 1]
+
+    doc.close()
+
+
+def test_streaming_ocr_localization_keys():
+    """Verify pause/resume and ETA localization keys exist in all 7 supported languages."""
+    required_keys = [
+        "ocr_btn_pause",
+        "ocr_btn_resume",
+        "ocr_status_paused",
+        "ocr_banner_paused",
+        "ocr_eta_label",
+    ]
+    locales = [
+        ("EN", _STRINGS["en"]),
+        ("TR", _STRINGS["tr"]),
+        ("FR", STRINGS_FR),
+        ("DE", STRINGS_DE),
+        ("ES", STRINGS_ES),
+        ("IT", STRINGS_IT),
+        ("RU", STRINGS_RU),
+    ]
+    for loc_name, strings_dict in locales:
+        for k in required_keys:
+            assert k in strings_dict, f"Missing key '{k}' in {loc_name}"
+            assert len(strings_dict[k].strip()) > 0
+
+

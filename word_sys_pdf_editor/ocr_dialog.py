@@ -48,6 +48,7 @@ class OCRDialog(Adw.Window):
         self._active_downloads: set[str] = set()
         self._cancel_ocr_flag = False
         self._is_ocr_running = False
+        self._ocr_pipeline = None
 
         self.set_transient_for(parent_window)
         self.set_modal(True)
@@ -70,6 +71,11 @@ class OCRDialog(Adw.Window):
         self.cancel_btn = Gtk.Button(label=_("btn_cancel"))
         self.cancel_btn.connect("clicked", self._on_cancel_clicked)
         header.pack_start(self.cancel_btn)
+
+        self.pause_btn = Gtk.Button(label=_("ocr_btn_pause"))
+        self.pause_btn.set_visible(False)
+        self.pause_btn.connect("clicked", self._on_pause_clicked)
+        header.pack_start(self.pause_btn)
 
         self.start_btn = Gtk.Button(label=_("ocr_btn_start"))
         self.start_btn.add_css_class("suggested-action")
@@ -495,12 +501,32 @@ class OCRDialog(Adw.Window):
         """Handle window close request cleanly, stopping any running OCR process."""
         self._cancel_ocr_flag = True
         self._is_ocr_running = False
+        if self._ocr_pipeline is not None:
+            self._ocr_pipeline.cancel()
         return False  # Return False to allow window closing
+
+    def _on_pause_clicked(self, _btn=None):
+        """Toggle pause/resume on the running OCR pipeline."""
+        if not self._is_ocr_running or self._ocr_pipeline is None:
+            return False
+        if self.parent_window is not None and hasattr(self.parent_window, "_on_ocr_banner_pause_clicked"):
+            paused = self.parent_window._on_ocr_banner_pause_clicked(None)
+        else:
+            paused = self._ocr_pipeline.toggle_pause()
+        self.pause_btn.set_label(_("ocr_btn_resume") if paused else _("ocr_btn_pause"))
+        if paused:
+            self.progress_status_label.set_text(_("ocr_banner_paused"))
+        return paused
 
     def _on_cancel_clicked(self, _btn):
         if self._is_ocr_running:
             self._cancel_ocr_flag = True
-            self.progress_status_label.set_text("Cancelling...")
+            if self._ocr_pipeline is not None:
+                self._ocr_pipeline.cancel()
+            if self.parent_window is not None and hasattr(self.parent_window, "_on_ocr_banner_cancel_clicked"):
+                self.parent_window._on_ocr_banner_cancel_clicked(None)
+            self.progress_status_label.set_text(_("ocr_cancelling"))
+            self.pause_btn.set_sensitive(False)
             self.cancel_btn.set_sensitive(False)
         else:
             self.close()
@@ -546,6 +572,9 @@ class OCRDialog(Adw.Window):
         if hasattr(self.parent_window, "_ocr_cancel_requested"):
             self.parent_window._ocr_cancel_requested = False
         self.start_btn.set_sensitive(False)
+        self.pause_btn.set_label(_("ocr_btn_pause"))
+        self.pause_btn.set_sensitive(True)
+        self.pause_btn.set_visible(True)
         self.cancel_btn.set_sensitive(True)
         self.lang_row.set_sensitive(False)
         self.secondary_lang_row.set_sensitive(False)
@@ -566,69 +595,92 @@ class OCRDialog(Adw.Window):
         total_pages = len(target_pages)
         if hasattr(self.parent_window, "show_ocr_banner"):
             self.parent_window.show_ocr_banner(total_pages)
+        if hasattr(self.parent_window, "begin_streaming_ocr_session"):
+            self.parent_window.begin_streaming_ocr_session(
+                language=lang_code,
+                dpi=dpi,
+                auto_deskew=auto_deskew,
+                auto_rotate=auto_rotate,
+                auto_invert=auto_invert,
+                enhance_contrast=True,
+            )
 
-        def _worker():
-            results = {}
-            total = len(target_pages)
-            try:
-                tessdata_dir = get_best_tessdata_dir_for_lang(lang_code)
+        from .ocr_engine import StreamingOCRPipeline
 
-                for idx, p_num in enumerate(target_pages):
-                    if self._cancel_ocr_flag or getattr(self.parent_window, "_ocr_cancel_requested", False):
-                        break
+        def _on_progress(prog: dict):
+            curr = prog.get("current_index", 1)
+            total = prog.get("total_pages", 1)
+            frac = prog.get("fraction", 0.0)
+            eta_text = prog.get("eta_text", "")
+            msg = _("ocr_msg_processing", curr, total)
+            if eta_text:
+                msg = f"{msg} ({_('ocr_eta_label', eta_text)})"
+            self.progress_bar.set_fraction(frac)
+            self.progress_status_label.set_text(msg)
+            if hasattr(self.parent_window, "update_ocr_banner"):
+                self.parent_window.update_ocr_banner(
+                    curr,
+                    total,
+                    fraction=frac,
+                    eta_seconds=prog.get("eta_seconds"),
+                    paused=prog.get("paused"),
+                )
 
-                    curr_msg = _("ocr_msg_processing", idx + 1, total)
-                    fraction = idx / max(total, 1)
-                    GLib.idle_add(self.progress_bar.set_fraction, fraction)
-                    GLib.idle_add(self.progress_status_label.set_text, curr_msg)
-                    if hasattr(self.parent_window, "update_ocr_banner"):
-                        GLib.idle_add(self.parent_window.update_ocr_banner, idx + 1, total, fraction)
+        def _on_page_ready(p_num: int, payload: dict, prog: dict):
+            curr = prog.get("current_index", 1)
+            total = prog.get("total_pages", 1)
+            frac = prog.get("fraction", 1.0)
+            eta_text = prog.get("eta_text", "")
+            msg = _("ocr_msg_processing", curr, total)
+            if eta_text:
+                msg = f"{msg} ({_('ocr_eta_label', eta_text)})"
+            self.progress_bar.set_fraction(frac)
+            self.progress_status_label.set_text(msg)
+            if hasattr(self.parent_window, "_on_ocr_page_streamed"):
+                self.parent_window._on_ocr_page_streamed(p_num, payload, prog)
+            elif hasattr(self.parent_window, "update_ocr_banner"):
+                self.parent_window.update_ocr_banner(
+                    curr,
+                    total,
+                    fraction=frac,
+                    eta_seconds=prog.get("eta_seconds"),
+                    paused=prog.get("paused"),
+                )
 
-                    try:
-                        p_obj = self.doc[p_num]
-                        # 1. Orientation detection and rotation
-                        if auto_rotate:
-                            try:
-                                from .ocr_engine import detect_page_orientation
-                                rot_angle = detect_page_orientation(p_obj, dpi=100, language=lang_code, tessdata_dir=tessdata_dir)
-                                if rot_angle in (90, 180, 270):
-                                    p_obj.set_rotation((p_obj.rotation + rot_angle) % 360)
-                            except Exception as ro_err:
-                                print(f"Warning: auto-rotate failed on page {p_num}: {ro_err}")
+        def _on_done(summary: dict):
+            self._on_ocr_finished(
+                target_pages,
+                summary.get("results", {}),
+                lang_code,
+            )
 
-                        # 2. Skew detection and deskewing
-                        if auto_deskew:
-                            try:
-                                from .ocr_engine import is_scanned_page, detect_page_skew_angle, deskew_scanned_page
-                                if is_scanned_page(p_obj).is_scanned:
-                                    skew = detect_page_skew_angle(p_obj, dpi=100)
-                                    if abs(skew) >= 0.35:
-                                        deskew_scanned_page(self.doc, p_num, skew, dpi=dpi)
-                            except Exception as sk_err:
-                                print(f"Warning: auto-deskew failed on page {p_num}: {sk_err}")
-
-                        ocr_doc = perform_ocr_on_page(
-                            self.doc,
-                            page_num=p_num,
-                            language=lang_code,
-                            dpi=dpi,
-                            tessdata_dir=tessdata_dir,
-                            auto_invert=auto_invert,
-                            enhance_contrast=True,
-                        )
-                        results[p_num] = ocr_doc
-                    except Exception as err:
-                        print(f"Error executing OCR on page {p_num}: {err}")
-            except Exception as e:
-                print(f"OCR execution setup error: {e}")
-            finally:
-                GLib.idle_add(self._on_ocr_finished, target_pages, results, lang_code)
-
-        threading.Thread(target=_worker, daemon=True).start()
+        self._ocr_pipeline = StreamingOCRPipeline(
+            doc=self.doc,
+            target_pages=target_pages,
+            language=lang_code,
+            dpi=dpi,
+            auto_deskew=auto_deskew,
+            auto_rotate=auto_rotate,
+            auto_invert=auto_invert,
+            enhance_contrast=True,
+            on_progress=_on_progress,
+            on_page_ready=_on_page_ready,
+            on_finished=_on_done,
+            dispatch_callback=GLib.idle_add,
+            external_cancel_check=lambda: bool(
+                self._cancel_ocr_flag or getattr(self.parent_window, "_ocr_cancel_requested", False)
+            ),
+        )
+        if self.parent_window is not None:
+            self.parent_window._active_ocr_pipeline = self._ocr_pipeline
+        self._ocr_pipeline.start(sync=False)
 
     def _on_ocr_finished(self, target_pages: list[int], results: dict, lang_code: str = "eng"):
         self._is_ocr_running = False
+        self._ocr_pipeline = None
         self.start_btn.set_sensitive(True)
+        self.pause_btn.set_visible(False)
+        self.pause_btn.set_sensitive(True)
         self.cancel_btn.set_sensitive(True)
         self.lang_row.set_sensitive(True)
         self.secondary_lang_row.set_sensitive(len(self.installed_lang_codes) >= 2)
@@ -644,6 +696,8 @@ class OCRDialog(Adw.Window):
         is_cancelled = self._cancel_ocr_flag or getattr(self.parent_window, "_ocr_cancel_requested", False)
 
         if is_cancelled:
+            if hasattr(self.parent_window, "finish_streaming_ocr_session"):
+                self.parent_window.finish_streaming_ocr_session(cancelled=True)
             if hasattr(self.parent_window, "hide_ocr_banner"):
                 self.parent_window.hide_ocr_banner(cancelled=True)
             self.close()

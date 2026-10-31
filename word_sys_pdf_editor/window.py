@@ -862,8 +862,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.ocr_banner = None
         self.ocr_banner_label = None
         self.ocr_banner_progress = None
+        self.ocr_banner_pause_btn = None
         self.ocr_banner_cancel_btn = None
         self._ocr_cancel_requested = False
+        self._ocr_paused = False
+        self._active_ocr_pipeline = None
+        self._active_streaming_ocr_cmd = None
         self._font_combo_populated = False
 
         self._build_ui()
@@ -2131,11 +2135,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.ocr_banner_progress.set_hexpand(True)
         self.ocr_banner_progress.set_valign(Gtk.Align.CENTER)
         self.ocr_banner_progress.set_show_text(True)
+        self.ocr_banner_pause_btn = Gtk.Button(label=_("ocr_btn_pause"))
+        self.ocr_banner_pause_btn.connect("clicked", self._on_ocr_banner_pause_clicked)
         self.ocr_banner_cancel_btn = Gtk.Button(label=_("btn_cancel"))
         self.ocr_banner_cancel_btn.connect("clicked", self._on_ocr_banner_cancel_clicked)
         self.ocr_banner.append(ocr_banner_icon)
         self.ocr_banner.append(self.ocr_banner_label)
         self.ocr_banner.append(self.ocr_banner_progress)
+        self.ocr_banner.append(self.ocr_banner_pause_btn)
         self.ocr_banner.append(self.ocr_banner_cancel_btn)
         self.ocr_banner.set_visible(False)
         content_box.append(self.ocr_banner)
@@ -10682,6 +10689,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Display background OCR progress banner."""
         if hasattr(self, 'ocr_banner') and self.ocr_banner:
             self._ocr_cancel_requested = False
+            self._ocr_paused = False
+            if hasattr(self, 'ocr_banner_pause_btn') and self.ocr_banner_pause_btn:
+                self.ocr_banner_pause_btn.set_sensitive(True)
+                if hasattr(self.ocr_banner_pause_btn, 'set_label'):
+                    self.ocr_banner_pause_btn.set_label(_("ocr_btn_pause"))
             if hasattr(self, 'ocr_banner_cancel_btn') and self.ocr_banner_cancel_btn:
                 self.ocr_banner_cancel_btn.set_sensitive(True)
             if hasattr(self, 'ocr_banner_progress') and self.ocr_banner_progress:
@@ -10690,29 +10702,60 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.ocr_banner_label.set_text(_("ocr_banner_processing"))
             self.ocr_banner.set_visible(True)
 
-    def update_ocr_banner(self, current_page, total_pages, fraction=None):
-        """Update progress on background OCR banner."""
+    def update_ocr_banner(self, current_page, total_pages, fraction=None, eta_seconds=None, paused=None):
+        """Update progress and live ETA on background OCR banner."""
         if hasattr(self, 'ocr_banner') and self.ocr_banner:
             frac = fraction if fraction is not None else (current_page / max(total_pages, 1))
             if hasattr(self, 'ocr_banner_progress') and self.ocr_banner_progress:
                 self.ocr_banner_progress.set_fraction(frac)
             if hasattr(self, 'ocr_banner_label') and self.ocr_banner_label:
-                self.ocr_banner_label.set_text(f"{_('ocr_banner_processing')} ({current_page}/{total_pages})")
+                label_text = f"{_('ocr_banner_processing')} ({current_page}/{total_pages})"
+                if eta_seconds is not None and eta_seconds > 0:
+                    from .ocr_engine import format_ocr_eta
+                    eta_str = format_ocr_eta(eta_seconds)
+                    if eta_str:
+                        label_text = f"{label_text} — {_('ocr_eta_label', eta_str)}"
+                is_paused = paused if paused is not None else bool(getattr(self, '_ocr_paused', False))
+                if is_paused:
+                    label_text = f"{label_text} [{_('ocr_status_paused')}]"
+                self.ocr_banner_label.set_text(label_text)
 
     def hide_ocr_banner(self, cancelled=False, completed_count=0):
         """Hide background OCR banner and update status."""
         if hasattr(self, 'ocr_banner') and self.ocr_banner:
             self.ocr_banner.set_visible(False)
+            self._ocr_paused = False
             if cancelled:
                 self.status_label.set_text(_("ocr_cancelling"))
             elif completed_count > 0:
                 self.status_label.set_text(_("ocr_msg_completed", completed_count))
 
+    def _on_ocr_banner_pause_clicked(self, btn=None):
+        """Toggle pause/resume on the active streaming OCR pipeline."""
+        pipeline = getattr(self, '_active_ocr_pipeline', None)
+        if pipeline is not None and hasattr(pipeline, 'toggle_pause'):
+            paused = pipeline.toggle_pause()
+        else:
+            paused = not bool(getattr(self, '_ocr_paused', False))
+        self._ocr_paused = paused
+        if hasattr(self, 'ocr_banner_pause_btn') and self.ocr_banner_pause_btn:
+            if hasattr(self.ocr_banner_pause_btn, 'set_label'):
+                self.ocr_banner_pause_btn.set_label(_("ocr_btn_resume") if paused else _("ocr_btn_pause"))
+        if paused and hasattr(self, 'ocr_banner_label') and self.ocr_banner_label:
+            self.ocr_banner_label.set_text(_("ocr_banner_paused"))
+        return paused
+
     def _on_ocr_banner_cancel_clicked(self, btn):
         """Handle user clicking Cancel on the background OCR banner."""
         self._ocr_cancel_requested = True
+        self._ocr_paused = False
+        pipeline = getattr(self, '_active_ocr_pipeline', None)
+        if pipeline is not None and hasattr(pipeline, 'cancel'):
+            pipeline.cancel()
         if hasattr(self, 'ocr_banner_label') and self.ocr_banner_label:
             self.ocr_banner_label.set_text(_("ocr_cancelling"))
+        if hasattr(self, 'ocr_banner_pause_btn') and self.ocr_banner_pause_btn:
+            self.ocr_banner_pause_btn.set_sensitive(False)
         if hasattr(self, 'ocr_banner_cancel_btn') and self.ocr_banner_cancel_btn:
             self.ocr_banner_cancel_btn.set_sensitive(False)
 
@@ -11059,9 +11102,153 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._ocr_dialog = None
         return False
 
+    def begin_streaming_ocr_session(
+        self,
+        language: str = "eng",
+        dpi: int = 200,
+        auto_deskew: bool = True,
+        auto_rotate: bool = True,
+        auto_invert: bool = True,
+        enhance_contrast: bool = True,
+    ) -> Optional[EmbedOCRTextCommand]:
+        """Initialize a single Undo command before streaming OCR pages begin."""
+        if not self.doc:
+            self._active_streaming_ocr_cmd = None
+            return None
+        cmd = EmbedOCRTextCommand(
+            self,
+            page_indices=[],
+            language=language,
+            dpi=dpi,
+            auto_deskew=auto_deskew,
+            auto_rotate=auto_rotate,
+            auto_invert=auto_invert,
+            enhance_contrast=enhance_contrast,
+        )
+        self._active_streaming_ocr_cmd = cmd
+        return cmd
+
+    def _on_ocr_page_streamed(self, page_num: int, page_payload: dict, progress: Optional[dict] = None):
+        """Main-thread handler invoked as soon as a single page finishes OCR so it becomes searchable immediately."""
+        if not self.doc or getattr(self.doc, "is_closed", False):
+            return
+        cmd = getattr(self, "_active_streaming_ocr_cmd", None)
+        if cmd is None:
+            cmd = self.begin_streaming_ocr_session(
+                language=page_payload.get("language", "eng"),
+                dpi=page_payload.get("dpi", 200),
+            )
+        if cmd is not None:
+            cmd.record_streamed_page(
+                page_num,
+                ocr_words=page_payload.get("ocr_words"),
+                ocr_doc=page_payload.get("ocr_doc"),
+                pre_snapshot=page_payload.get("pre_snapshot"),
+            )
+        if progress:
+            self.update_ocr_banner(
+                progress.get("current_index", 1),
+                progress.get("total_pages", 1),
+                fraction=progress.get("fraction"),
+                eta_seconds=progress.get("eta_seconds"),
+                paused=progress.get("paused"),
+            )
+
+    def finish_streaming_ocr_session(self, cancelled: bool = False) -> Optional[EmbedOCRTextCommand]:
+        """Finalize the streaming OCR session and record a single Undo command for all completed pages."""
+        cmd = getattr(self, "_active_streaming_ocr_cmd", None)
+        self._active_streaming_ocr_cmd = None
+        self._active_ocr_pipeline = None
+        if cmd is not None and len(cmd.page_indices) > 0:
+            if hasattr(self, "undo_manager") and self.undo_manager:
+                self.undo_manager.record(cmd)
+            if not cancelled and hasattr(self, "status_label") and self.status_label:
+                self.status_label.set_text(_("ocr_msg_completed", len(cmd.page_indices)))
+            return cmd
+        return None
+
+    def start_streaming_ocr(
+        self,
+        target_pages: list[int],
+        language: str = "eng",
+        dpi: int = 200,
+        tessdata_dir: Optional[str] = None,
+        auto_deskew: bool = True,
+        auto_rotate: bool = True,
+        auto_invert: bool = True,
+        enhance_contrast: bool = True,
+        on_progress=None,
+        on_page_ready=None,
+        on_finished=None,
+        sync: bool = False,
+    ):
+        """Run the streaming OCR pipeline on target_pages, publishing each page incrementally."""
+        if not self.doc:
+            return None
+        from .ocr_engine import StreamingOCRPipeline
+
+        self.begin_streaming_ocr_session(
+            language=language,
+            dpi=dpi,
+            auto_deskew=auto_deskew,
+            auto_rotate=auto_rotate,
+            auto_invert=auto_invert,
+            enhance_contrast=enhance_contrast,
+        )
+        self.show_ocr_banner(len(target_pages))
+
+        def _handle_progress(prog: dict):
+            self.update_ocr_banner(
+                prog.get("current_index", 1),
+                prog.get("total_pages", 1),
+                fraction=prog.get("fraction"),
+                eta_seconds=prog.get("eta_seconds"),
+                paused=prog.get("paused"),
+            )
+            if callable(on_progress):
+                on_progress(prog)
+
+        def _handle_page(p_num: int, payload: dict, prog: dict):
+            self._on_ocr_page_streamed(p_num, payload, prog)
+            if callable(on_page_ready):
+                on_page_ready(p_num, payload, prog)
+
+        def _handle_done(summary: dict):
+            is_cancelled = bool(summary.get("cancelled", False))
+            completed = summary.get("completed_pages", [])
+            self.finish_streaming_ocr_session(cancelled=is_cancelled)
+            self.hide_ocr_banner(cancelled=is_cancelled, completed_count=len(completed))
+            if callable(on_finished):
+                on_finished(summary)
+
+        pipeline = StreamingOCRPipeline(
+            doc=self.doc,
+            target_pages=target_pages,
+            language=language,
+            dpi=dpi,
+            tessdata_dir=tessdata_dir,
+            auto_deskew=auto_deskew,
+            auto_rotate=auto_rotate,
+            auto_invert=auto_invert,
+            enhance_contrast=enhance_contrast,
+            on_progress=_handle_progress,
+            on_page_ready=_handle_page,
+            on_finished=_handle_done,
+            dispatch_callback=None if sync else GLib.idle_add,
+            external_cancel_check=lambda: bool(getattr(self, "_ocr_cancel_requested", False)),
+        )
+        self._active_ocr_pipeline = pipeline
+        pipeline.start(sync=sync)
+        return pipeline
+
     def _on_ocr_completed(self, target_pages: list[int], results: dict, language: str = "eng"):
         """Handle completion of OCR recognition by embedding transparent searchable text layers."""
         if not self.doc:
+            return
+        # If pages were already incrementally embedded via streaming session, finalize that single command
+        active_cmd = getattr(self, "_active_streaming_ocr_cmd", None)
+        if active_cmd is not None and len(active_cmd.page_indices) > 0:
+            self.finish_streaming_ocr_session(cancelled=False)
             return
         if results:
             pages = [p for p in target_pages if p in results]

@@ -4,10 +4,12 @@ import io
 import os
 import shutil
 import subprocess
+import threading
+import time
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import fitz
 import numpy as np
@@ -833,3 +835,298 @@ def detect_page_orientation(page: fitz.Page, dpi: int = 100, language: str = "en
     except Exception as e:
         print(f"Warning: detect_page_orientation failed: {e}")
         return 0
+
+
+def format_ocr_eta(eta_seconds: Optional[float]) -> str:
+    """Format remaining OCR time in seconds into a concise human-readable string (e.g. '~12s', '~1m 20s')."""
+    if eta_seconds is None or eta_seconds < 0:
+        return ""
+    if eta_seconds == 0:
+        return "0s"
+    secs = max(1, int(round(float(eta_seconds))))
+    if secs < 60:
+        return f"~{secs}s"
+    mins, rem = divmod(secs, 60)
+    if rem > 0:
+        return f"~{mins}m {rem}s"
+    return f"~{mins}m"
+
+
+class StreamingOCRPipeline:
+    """Streaming OCR worker that processes pages incrementally and publishes per-page results as soon as ready.
+
+    Supports pause/resume, cancellation without corrupting already-completed pages, and live ETA tracking.
+    """
+
+    def __init__(
+        self,
+        doc: fitz.Document,
+        target_pages: list[int],
+        language: str = "eng",
+        dpi: int = 200,
+        tessdata_dir: Optional[str] = None,
+        auto_deskew: bool = True,
+        auto_rotate: bool = True,
+        auto_invert: bool = True,
+        enhance_contrast: bool = True,
+        on_progress: Optional[Callable[[dict[str, Any]], None]] = None,
+        on_page_ready: Optional[Callable[[int, dict[str, Any], dict[str, Any]], None]] = None,
+        on_finished: Optional[Callable[[dict[str, Any]], None]] = None,
+        dispatch_callback: Optional[Callable[..., Any]] = None,
+        external_cancel_check: Optional[Callable[[], bool]] = None,
+    ):
+        self.doc = doc
+        self.target_pages = [int(p) for p in target_pages]
+        self.language = language
+        self.dpi = dpi
+        self.tessdata_dir = tessdata_dir
+        self.auto_deskew = auto_deskew
+        self.auto_rotate = auto_rotate
+        self.auto_invert = auto_invert
+        self.enhance_contrast = enhance_contrast
+        self.on_progress = on_progress
+        self.on_page_ready = on_page_ready
+        self.on_finished = on_finished
+        self.dispatch_callback = dispatch_callback
+        self.external_cancel_check = external_cancel_check
+
+        self._cancel_event = threading.Event()
+        self._resume_event = threading.Event()
+        self._resume_event.set()
+        self._is_running = False
+        self._thread: Optional[threading.Thread] = None
+
+        self.completed_pages: list[int] = []
+        self.page_durations: list[float] = []
+        self.eta_seconds: Optional[float] = None
+        self.results: dict[int, Any] = {}
+        self.ocr_words_by_page: dict[int, list[dict[str, Any]]] = {}
+
+    @property
+    def is_paused(self) -> bool:
+        return not self._resume_event.is_set() and not self.is_cancelled
+
+    @property
+    def is_cancelled(self) -> bool:
+        if self._cancel_event.is_set():
+            return True
+        if callable(self.external_cancel_check):
+            try:
+                if self.external_cancel_check():
+                    self._cancel_event.set()
+                    return True
+            except Exception:
+                pass
+        return False
+
+    @property
+    def is_running(self) -> bool:
+        return self._is_running
+
+    def pause(self) -> None:
+        """Pause processing before the next page begins."""
+        if not self._cancel_event.is_set():
+            self._resume_event.clear()
+
+    def resume(self) -> None:
+        """Resume a paused OCR pipeline."""
+        self._resume_event.set()
+
+    def toggle_pause(self) -> bool:
+        """Toggle pause state and return True if now paused, False if resumed."""
+        if self.is_paused:
+            self.resume()
+            return False
+        self.pause()
+        return True
+
+    def cancel(self) -> None:
+        """Request cancellation and wake any paused worker thread."""
+        self._cancel_event.set()
+        self._resume_event.set()
+
+    def _emit(self, callback: Optional[Callable[..., Any]], *args: Any) -> None:
+        if not callable(callback):
+            return
+        if callable(self.dispatch_callback):
+            def _wrapped():
+                callback(*args)
+                return False
+            self.dispatch_callback(_wrapped)
+        else:
+            callback(*args)
+
+    def _wait_if_paused(self) -> bool:
+        """Block while paused; return True if cancelled while waiting."""
+        while not self._resume_event.is_set():
+            if self.is_cancelled:
+                return True
+            self._resume_event.wait(timeout=0.03)
+        return self.is_cancelled
+
+    def start(self, sync: bool = False) -> "StreamingOCRPipeline":
+        """Start the streaming OCR pipeline on a daemon worker thread (or synchronously if sync=True)."""
+        self._is_running = True
+        if sync:
+            self._run()
+        else:
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        from . import pdf_handler
+
+        total = len(self.target_pages)
+        tessdata_dir = self.tessdata_dir
+        try:
+            if tessdata_dir is None and total > 0 and not self.is_cancelled:
+                try:
+                    tessdata_dir = get_best_tessdata_dir_for_lang(self.language)
+                except Exception as td_err:
+                    print(f"OCR tessdata lookup notice: {td_err}")
+                    tessdata_dir = None
+
+            for idx, p_num in enumerate(self.target_pages):
+                if self._wait_if_paused():
+                    break
+                if self.doc is None or getattr(self.doc, "is_closed", False):
+                    break
+                if p_num < 0 or p_num >= len(self.doc):
+                    continue
+
+                pre_progress = {
+                    "current_index": idx + 1,
+                    "total_pages": total,
+                    "page_num": p_num,
+                    "fraction": idx / max(total, 1),
+                    "eta_seconds": self.eta_seconds,
+                    "eta_text": format_ocr_eta(self.eta_seconds),
+                    "paused": self.is_paused,
+                }
+                self._emit(self.on_progress, pre_progress)
+
+                if self._wait_if_paused():
+                    break
+
+                t0 = time.perf_counter()
+                pre_snapshot = None
+                ocr_doc = None
+                ocr_words: list[dict[str, Any]] = []
+                page_mutated_by_prep = False
+
+                try:
+                    doc_lock = pdf_handler.get_doc_lock(self.doc)
+                    if doc_lock is not None:
+                        with doc_lock:
+                            if getattr(self.doc, "is_closed", False):
+                                break
+                            pdf_handler.save_page_snapshot(self.doc, p_num, force=True)
+                            pre_snapshot = pdf_handler._page_snapshots.get((id(self.doc), p_num))
+                            p_obj = self.doc[p_num]
+
+                            if self.auto_rotate and not self.is_cancelled:
+                                try:
+                                    rot_angle = detect_page_orientation(
+                                        p_obj,
+                                        dpi=100,
+                                        language=self.language,
+                                        tessdata_dir=tessdata_dir,
+                                    )
+                                    if rot_angle in (90, 180, 270):
+                                        p_obj.set_rotation((p_obj.rotation + rot_angle) % 360)
+                                        page_mutated_by_prep = True
+                                except Exception as ro_err:
+                                    print(f"Warning: auto-rotate failed on page {p_num}: {ro_err}")
+
+                            if self.auto_deskew and not self.is_cancelled:
+                                try:
+                                    if is_scanned_page(p_obj).is_scanned:
+                                        skew = detect_page_skew_angle(p_obj, dpi=100)
+                                        if abs(skew) >= 0.35:
+                                            deskew_scanned_page(self.doc, p_num, skew, dpi=self.dpi)
+                                            page_mutated_by_prep = True
+                                except Exception as sk_err:
+                                    print(f"Warning: auto-deskew failed on page {p_num}: {sk_err}")
+                    else:
+                        pdf_handler.save_page_snapshot(self.doc, p_num, force=True)
+                        pre_snapshot = pdf_handler._page_snapshots.get((id(self.doc), p_num))
+
+                    if self.is_cancelled:
+                        if page_mutated_by_prep and pre_snapshot is not None:
+                            pdf_handler._page_snapshots[(id(self.doc), p_num)] = pre_snapshot
+                            pdf_handler.restore_page_from_snapshot(self.doc, p_num)
+                        break
+
+                    ocr_doc = perform_ocr_on_page(
+                        self.doc,
+                        page_num=p_num,
+                        language=self.language,
+                        dpi=self.dpi,
+                        tessdata_dir=tessdata_dir,
+                        auto_invert=self.auto_invert,
+                        enhance_contrast=self.enhance_contrast,
+                    )
+
+                    if self.is_cancelled:
+                        if ocr_doc is not None and hasattr(ocr_doc, "close"):
+                            try:
+                                ocr_doc.close()
+                            except Exception:
+                                pass
+                        if page_mutated_by_prep and pre_snapshot is not None:
+                            pdf_handler._page_snapshots[(id(self.doc), p_num)] = pre_snapshot
+                            pdf_handler.restore_page_from_snapshot(self.doc, p_num)
+                        break
+
+                    if doc_lock is not None:
+                        with doc_lock:
+                            if not getattr(self.doc, "is_closed", False):
+                                ocr_words = pdf_handler.extract_ocr_words_for_page(self.doc[p_num], ocr_doc)
+                    else:
+                        ocr_words = pdf_handler.extract_ocr_words_for_page(self.doc[p_num], ocr_doc)
+
+                    elapsed = max(0.0005, time.perf_counter() - t0)
+                    self.page_durations.append(elapsed)
+                    avg_dur = sum(self.page_durations) / len(self.page_durations)
+                    remaining = max(0, total - (idx + 1))
+                    self.eta_seconds = avg_dur * remaining
+
+                    self.completed_pages.append(p_num)
+                    self.results[p_num] = ocr_doc
+                    self.ocr_words_by_page[p_num] = ocr_words
+
+                    post_progress = {
+                        "current_index": idx + 1,
+                        "total_pages": total,
+                        "page_num": p_num,
+                        "fraction": (idx + 1) / max(total, 1),
+                        "eta_seconds": self.eta_seconds,
+                        "eta_text": format_ocr_eta(self.eta_seconds),
+                        "paused": self.is_paused,
+                    }
+                    page_payload = {
+                        "page_num": p_num,
+                        "ocr_doc": ocr_doc,
+                        "ocr_words": ocr_words,
+                        "pre_snapshot": pre_snapshot,
+                        "language": self.language,
+                        "dpi": self.dpi,
+                    }
+                    self._emit(self.on_page_ready, p_num, page_payload, post_progress)
+                except Exception as err:
+                    print(f"Error executing streaming OCR on page {p_num}: {err}")
+        finally:
+            self._is_running = False
+            summary = {
+                "target_pages": list(self.target_pages),
+                "completed_pages": list(self.completed_pages),
+                "results": self.results,
+                "ocr_words_by_page": self.ocr_words_by_page,
+                "cancelled": self.is_cancelled,
+                "eta_seconds": 0.0,
+                "language": self.language,
+                "dpi": self.dpi,
+            }
+            self._emit(self.on_finished, summary)
+

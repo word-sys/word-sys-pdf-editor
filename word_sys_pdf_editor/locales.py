@@ -4799,6 +4799,11 @@ STRINGS_FR.update({
     'ocr_banner_cancelling': 'Annulation de l\'OCR…',
     'ocr_banner_cancelled': 'Traitement OCR annulé.',
     'ocr_banner_completed': 'OCR terminé : {0} page(s) reconnue(s).',
+    'ocr_btn_pause': 'Pause',
+    'ocr_btn_resume': 'Reprendre',
+    'ocr_status_paused': 'En pause',
+    'ocr_banner_paused': 'Traitement OCR en pause.',
+    'ocr_eta_label': 'Temps restant : {0}',
 })
 
 STRINGS_DE.update({
@@ -4905,6 +4910,11 @@ STRINGS_DE.update({
     'ocr_banner_cancelling': 'OCR wird abgebrochen…',
     'ocr_banner_cancelled': 'OCR-Verarbeitung abgebrochen.',
     'ocr_banner_completed': 'OCR abgeschlossen: {0} Seite(n) erkannt.',
+    'ocr_btn_pause': 'Pause',
+    'ocr_btn_resume': 'Fortsetzen',
+    'ocr_status_paused': 'Pausiert',
+    'ocr_banner_paused': 'OCR-Verarbeitung pausiert.',
+    'ocr_eta_label': 'Verbleibend: {0}',
 })
 
 STRINGS_ES.update({
@@ -5011,6 +5021,11 @@ STRINGS_ES.update({
     'ocr_banner_cancelling': 'Cancelando OCR…',
     'ocr_banner_cancelled': 'Procesamiento OCR cancelado.',
     'ocr_banner_completed': 'OCR completado: {0} página(s) reconocida(s).',
+    'ocr_btn_pause': 'Pausar',
+    'ocr_btn_resume': 'Reanudar',
+    'ocr_status_paused': 'En pausa',
+    'ocr_banner_paused': 'Procesamiento OCR en pausa.',
+    'ocr_eta_label': 'Tiempo restante: {0}',
 })
 
 STRINGS_IT.update({
@@ -5117,6 +5132,11 @@ STRINGS_IT.update({
     'ocr_banner_cancelling': 'Annullamento OCR…',
     'ocr_banner_cancelled': 'Elaborazione OCR annullata.',
     'ocr_banner_completed': 'OCR completato: {0} pagina/e riconosciuta/e.',
+    'ocr_btn_pause': 'Pausa',
+    'ocr_btn_resume': 'Riprendi',
+    'ocr_status_paused': 'In pausa',
+    'ocr_banner_paused': 'Elaborazione OCR in pausa.',
+    'ocr_eta_label': 'Tempo rimanente: {0}',
 })
 
 STRINGS_RU.update({
@@ -5223,6 +5243,11 @@ STRINGS_RU.update({
     'ocr_banner_cancelling': 'Отмена OCR…',
     'ocr_banner_cancelled': 'Обработка OCR отменена.',
     'ocr_banner_completed': 'OCR завершено: распознано страниц: {0}.',
+    'ocr_btn_pause': 'Пауза',
+    'ocr_btn_resume': 'Продолжить',
+    'ocr_status_paused': 'Приостановлено',
+    'ocr_banner_paused': 'Обработка OCR приостановлена.',
+    'ocr_eta_label': 'Осталось: {0}',
 })
 
 
