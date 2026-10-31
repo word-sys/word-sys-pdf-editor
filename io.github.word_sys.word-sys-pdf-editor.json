@@ -54,7 +54,8 @@
                 {
                     "type": "git",
                     "url": "https://github.com/word-sys/word-sys-pdf-editor.git",
-                    "tag": "v1.12.0"
+                    "tag": "v1.12.0",
+                    "commit": "cfed98c11f3ef91a36f184a16f3ef01cb3ed9dd7"
                 }
             ]
         }
