@@ -43,3 +43,8 @@ version = {attr = "word_sys_pdf_editor.constants.APP_VERSION"}
 
 [project.gui-scripts]
 word-sys-pdf-editor = "word_sys_pdf_editor.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"

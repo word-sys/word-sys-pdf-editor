@@ -306,6 +306,19 @@ class TestPerformanceBenchmarks(unittest.TestCase):
         finally:
             doc.close()
 
+    def test_unified_suite_runner_registry_completeness(self):
+        """6. Verify unified test runner registers every test_*.py suite in tests/ without omissions."""
+        from tests.run_all_suites import get_all_suite_files
+
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        actual_test_files = sorted(
+            f for f in os.listdir(tests_dir) if f.startswith("test_") and f.endswith(".py")
+        )
+        registered_files = sorted(get_all_suite_files())
+        self.assertEqual(registered_files, actual_test_files)
+        for fname in registered_files:
+            self.assertTrue(os.path.isfile(os.path.join(tests_dir, fname)), f"Missing suite file: {fname}")
+
 
 if __name__ == "__main__":
     unittest.main()
