@@ -308,7 +308,79 @@ def transform_bbox_page_rot(bbox, w: float, h: float, angle_delta: int):
         return (y1, w - x2, y2, w - x1)
     return (x1, y1, x2, y2)
 
-def pixmap_to_cairo_surface(pix):
+def normalize_device_scale(device_scale: Optional[float] = None) -> float:
+    """Clamp and round device scale factor to a safe supported range [1.0, 4.0]."""
+    if device_scale is None:
+        return 1.0
+    try:
+        val = float(device_scale)
+        if not math.isfinite(val) or val <= 1.0:
+            return 1.0
+        return round(min(val, 4.0), 4)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def resolve_device_scale(widget=None, cr=None, override: Optional[float] = None) -> float:
+    """Determine effective HiDPI / fractional display scale factor for Cairo rendering.
+
+    Priority:
+      1. Explicit override (e.g., for testing or per-window override)
+      2. Cairo target surface device scale (supports fractional Wayland scales like 1.25, 1.5, 1.75)
+      3. GTK widget scale factor / GdkSurface scale
+    """
+    if override is not None:
+        return normalize_device_scale(override)
+
+    if cr is not None and hasattr(cr, "get_target"):
+        try:
+            target = cr.get_target()
+            if target is not None and hasattr(target, "get_device_scale"):
+                sx, sy = target.get_device_scale()
+                s = max(float(sx), float(sy))
+                if s > 1.0:
+                    return normalize_device_scale(s)
+        except Exception:
+            pass
+
+    if widget is not None:
+        try:
+            native = widget.get_native() if hasattr(widget, "get_native") else None
+            surf = native.get_surface() if native is not None and hasattr(native, "get_surface") else None
+            if surf is not None and hasattr(surf, "get_scale"):
+                s = float(surf.get_scale())
+                if s > 1.0:
+                    return normalize_device_scale(s)
+        except Exception:
+            pass
+        try:
+            if hasattr(widget, "get_scale_factor"):
+                sf = float(widget.get_scale_factor())
+                if sf > 1.0:
+                    return normalize_device_scale(sf)
+        except Exception:
+            pass
+
+    return 1.0
+
+
+def _make_page_cache_key(doc_id: int, page_index: int, zoom_level: float, device_scale: float = 1.0):
+    zoom_rounded = round(float(zoom_level), 4)
+    scale_norm = normalize_device_scale(device_scale)
+    if abs(scale_norm - 1.0) < 0.001:
+        return (doc_id, page_index, zoom_rounded)
+    return (doc_id, page_index, zoom_rounded, scale_norm)
+
+
+def _make_tile_cache_key(doc_id: int, page_index: int, zoom_level: float, col: int, row: int, device_scale: float = 1.0):
+    zoom_rounded = round(float(zoom_level), 4)
+    scale_norm = normalize_device_scale(device_scale)
+    if abs(scale_norm - 1.0) < 0.001:
+        return (doc_id, page_index, zoom_rounded, int(col), int(row))
+    return (doc_id, page_index, zoom_rounded, int(col), int(row), scale_norm)
+
+
+def pixmap_to_cairo_surface(pix, device_scale: float = 1.0):
     """Convert PyMuPDF Pixmap directly to Cairo ImageSurface via direct memory transfer into Cairo-allocated buffer."""
     if pix is None or pix.width <= 0 or pix.height <= 0:
         return None, None
@@ -369,17 +441,23 @@ def pixmap_to_cairo_surface(pix):
                 return None, None
 
         surface.mark_dirty()
+        scale_norm = normalize_device_scale(device_scale)
+        if abs(scale_norm - 1.0) >= 0.001 and hasattr(surface, "set_device_scale"):
+            surface.set_device_scale(scale_norm, scale_norm)
         return surface, buf
 
     except Exception as e:
         print(f"Error creating Cairo surface from pixmap: {e}")
         return None, None
 
-def get_page_cairo_surface(doc, page_index, zoom_level, clip_rect=None):
-    """Get or render cached Cairo ImageSurface for the given page and zoom level via direct pixel transfer."""
+def get_page_cairo_surface(doc, page_index, zoom_level, clip_rect=None, device_scale: float = 1.0):
+    """Get or render cached Cairo ImageSurface for the given page, zoom level, and device scale via direct pixel transfer."""
     global _cairo_page_cache
     if not doc or getattr(doc, 'is_closed', False) or not (0 <= page_index < doc.page_count):
         return None
+
+    scale_norm = normalize_device_scale(device_scale)
+    effective_zoom = float(zoom_level) * scale_norm
 
     # Sub-rectangle clip renders are not cached in _cairo_page_cache
     if clip_rect is not None:
@@ -388,19 +466,19 @@ def get_page_cairo_surface(doc, page_index, zoom_level, clip_rect=None):
             if lock:
                 with lock:
                     page = doc.load_page(page_index)
-                    zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+                    zoom_matrix = fitz.Matrix(effective_zoom, effective_zoom)
                     pix = page.get_pixmap(matrix=zoom_matrix, clip=clip_rect, alpha=False)
             else:
                 page = doc.load_page(page_index)
-                zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+                zoom_matrix = fitz.Matrix(effective_zoom, effective_zoom)
                 pix = page.get_pixmap(matrix=zoom_matrix, clip=clip_rect, alpha=False)
-            surf, _ = pixmap_to_cairo_surface(pix)
+            surf, _ = pixmap_to_cairo_surface(pix, device_scale=scale_norm)
             return surf
         except Exception as e:
             print(f"Error creating clipped surface for page {page_index}: {e}")
             return None
 
-    cache_key = (id(doc), page_index, round(float(zoom_level), 4))
+    cache_key = _make_page_cache_key(id(doc), page_index, zoom_level, scale_norm)
     if cache_key in _cairo_page_cache:
         return _cairo_page_cache[cache_key]
 
@@ -409,14 +487,14 @@ def get_page_cairo_surface(doc, page_index, zoom_level, clip_rect=None):
         if lock:
             with lock:
                 page = doc.load_page(page_index)
-                zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+                zoom_matrix = fitz.Matrix(effective_zoom, effective_zoom)
                 pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
         else:
             page = doc.load_page(page_index)
-            zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+            zoom_matrix = fitz.Matrix(effective_zoom, effective_zoom)
             pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
 
-        surf, _ = pixmap_to_cairo_surface(pix)
+        surf, _ = pixmap_to_cairo_surface(pix, device_scale=scale_norm)
         if surf is None:
             return None
 
@@ -428,7 +506,7 @@ def get_page_cairo_surface(doc, page_index, zoom_level, clip_rect=None):
         print(f"Error creating cached page surface for page {page_index}: {e}")
         return None
 
-def update_page_cairo_surface_rect(doc, page_index, zoom_level, rect):
+def update_page_cairo_surface_rect(doc, page_index, zoom_level, rect, device_scale: float = 1.0):
     """Update a sub-rectangle region of the cached Cairo ImageSurface in-place.
     rect is (x0, y0, x1, y1) in unscaled PDF points.
     """
@@ -436,11 +514,13 @@ def update_page_cairo_surface_rect(doc, page_index, zoom_level, rect):
     if not doc or getattr(doc, 'is_closed', False) or not (0 <= page_index < doc.page_count):
         return False
 
-    cache_key = (id(doc), page_index, round(float(zoom_level), 4))
+    scale_norm = normalize_device_scale(device_scale)
+    cache_key = _make_page_cache_key(id(doc), page_index, zoom_level, scale_norm)
     if cache_key not in _cairo_page_cache:
         return False
 
     cached_surf = _cairo_page_cache[cache_key]
+    effective_zoom = float(zoom_level) * scale_norm
     try:
         x0, y0, x1, y1 = rect
         clip_rect = fitz.Rect(max(0.0, x0 - 1.0), max(0.0, y0 - 1.0), x1 + 1.0, y1 + 1.0)
@@ -448,14 +528,14 @@ def update_page_cairo_surface_rect(doc, page_index, zoom_level, rect):
         if lock:
             with lock:
                 page = doc.load_page(page_index)
-                zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+                zoom_matrix = fitz.Matrix(effective_zoom, effective_zoom)
                 clip_pix = page.get_pixmap(matrix=zoom_matrix, clip=clip_rect, alpha=False)
         else:
             page = doc.load_page(page_index)
-            zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+            zoom_matrix = fitz.Matrix(effective_zoom, effective_zoom)
             clip_pix = page.get_pixmap(matrix=zoom_matrix, clip=clip_rect, alpha=False)
 
-        clip_surf, _ = pixmap_to_cairo_surface(clip_pix)
+        clip_surf, _ = pixmap_to_cairo_surface(clip_pix, device_scale=scale_norm)
         if clip_surf is None:
             return False
 
@@ -509,11 +589,11 @@ class PageRasterizerPool:
                 for k in keys_to_del:
                     self._pending_callbacks.pop(k, None)
 
-    def peek_surface(self, doc, page_index: int, zoom_level: float) -> Optional[cairo.ImageSurface]:
+    def peek_surface(self, doc, page_index: int, zoom_level: float, device_scale: float = 1.0) -> Optional[cairo.ImageSurface]:
         """Return cached surface if immediately available in LRU cache, otherwise None."""
         if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
             return None
-        cache_key = (id(doc), page_index, round(float(zoom_level), 4))
+        cache_key = _make_page_cache_key(id(doc), page_index, zoom_level, device_scale)
         global _cairo_page_cache
         if cache_key in _cairo_page_cache:
             surf = _cairo_page_cache.get(cache_key)
@@ -525,11 +605,12 @@ class PageRasterizerPool:
                 return surf
         return None
 
-    def find_best_cached_surface(self, doc, page_index: int, target_zoom: float = 1.0) -> Optional[Tuple[cairo.ImageSurface, float]]:
-        """Find an already-rendered Cairo surface for the given page at any zoom level, prioritizing closest zoom."""
+    def find_best_cached_surface(self, doc, page_index: int, target_zoom: float = 1.0, device_scale: float = 1.0) -> Optional[Tuple[cairo.ImageSurface, float]]:
+        """Find an already-rendered Cairo surface for the given page at any zoom level, prioritizing matching device scale and closest zoom."""
         if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
             return None
         doc_id = id(doc)
+        scale_norm = normalize_device_scale(device_scale)
         global _cairo_page_cache
         candidates = []
         with getattr(_cairo_page_cache, '_lock', threading.Lock()):
@@ -541,7 +622,9 @@ class PageRasterizerPool:
                         and getattr(surf, 'get_width', lambda: 0)() > 0
                         and getattr(surf, 'get_height', lambda: 0)() > 0
                     ):
-                        candidates.append((surf, float(k[2])))
+                        key_scale = float(k[3]) if len(k) >= 4 else 1.0
+                        scale_mismatch = 0 if abs(key_scale - scale_norm) < 0.001 else 1
+                        candidates.append((surf, float(k[2]), scale_mismatch))
 
         if not candidates:
             with _stale_page_cache_lock:
@@ -555,10 +638,10 @@ class PageRasterizerPool:
                     return stale
             return None
 
-        best_surf, best_zoom = min(candidates, key=lambda item: abs(item[1] - target_zoom))
+        best_surf, best_zoom, _ = min(candidates, key=lambda item: (item[2], abs(item[1] - target_zoom)))
         return best_surf, best_zoom
 
-    def request_surface(self, doc, page_index: int, zoom_level: float, callback: Optional[Any] = None, defer: bool = True, progressive: bool = False):
+    def request_surface(self, doc, page_index: int, zoom_level: float, callback: Optional[Any] = None, defer: bool = True, progressive: bool = False, device_scale: float = 1.0):
         """Submit background rasterization request.
         
         If progressive=True and no cached surface exists for this page at any zoom level,
@@ -570,10 +653,11 @@ class PageRasterizerPool:
 
         doc_id = id(doc)
         zoom_rounded = round(float(zoom_level), 4)
-        task_key = (doc_id, page_index, zoom_rounded)
+        scale_norm = normalize_device_scale(device_scale)
+        task_key = _make_page_cache_key(doc_id, page_index, zoom_rounded, scale_norm)
 
         # Check if already in cache
-        cached = self.peek_surface(doc, page_index, zoom_level)
+        cached = self.peek_surface(doc, page_index, zoom_level, device_scale=scale_norm)
         if cached is not None:
             if callback:
                 def _dispatch_cached():
@@ -589,9 +673,9 @@ class PageRasterizerPool:
         # request 50 DPI preview first for instant visual feedback (<5ms)
         preview_zoom = round(50.0 / 72.0, 4)
         if progressive and zoom_rounded > preview_zoom * 1.25:
-            best_cached = self.find_best_cached_surface(doc, page_index, zoom_level)
+            best_cached = self.find_best_cached_surface(doc, page_index, zoom_level, device_scale=scale_norm)
             if best_cached is None:
-                self.request_surface(doc, page_index, preview_zoom, callback=callback, defer=defer, progressive=False)
+                self.request_surface(doc, page_index, preview_zoom, callback=callback, defer=defer, progressive=False, device_scale=scale_norm)
 
         with self._lock:
             self._latest_requested_zoom[(doc_id, page_index)] = zoom_rounded
@@ -603,11 +687,11 @@ class PageRasterizerPool:
 
             self._pending_callbacks[task_key] = [callback] if callback else []
 
-        def _render_worker(d, p_idx, z_val, t_key, expected_gen):
+        def _render_worker(d, p_idx, z_val, s_val, t_key, expected_gen):
             try:
                 if getattr(d, 'is_closed', False):
                     return
-                surf = get_page_cairo_surface(d, p_idx, z_val)
+                surf = get_page_cairo_surface(d, p_idx, z_val, device_scale=s_val)
             except Exception:
                 surf = None
 
@@ -632,7 +716,7 @@ class PageRasterizerPool:
             with self._lock:
                 if task_key not in self._pending_callbacks:
                     return False
-                future = self._executor.submit(_render_worker, doc, page_index, zoom_rounded, task_key, gen)
+                future = self._executor.submit(_render_worker, doc, page_index, zoom_rounded, scale_norm, task_key, gen)
                 self._active_futures[task_key] = future
             return False
 
@@ -641,9 +725,10 @@ class PageRasterizerPool:
         else:
             _do_submit()
 
-    def wait_for_surface(self, doc, page_index: int, zoom_level: float, timeout: float = 5.0) -> Optional[cairo.ImageSurface]:
+    def wait_for_surface(self, doc, page_index: int, zoom_level: float, timeout: float = 5.0, device_scale: float = 1.0) -> Optional[cairo.ImageSurface]:
         """Wait synchronously for a requested surface (useful for tests and headless verification)."""
-        cached = self.peek_surface(doc, page_index, zoom_level)
+        scale_norm = normalize_device_scale(device_scale)
+        cached = self.peek_surface(doc, page_index, zoom_level, device_scale=scale_norm)
         if cached is not None:
             return cached
         event = threading.Event()
@@ -651,9 +736,9 @@ class PageRasterizerPool:
         def _on_ready(p, z, surf):
             result[0] = surf
             event.set()
-        self.request_surface(doc, page_index, zoom_level, callback=_on_ready, defer=False, progressive=False)
+        self.request_surface(doc, page_index, zoom_level, callback=_on_ready, defer=False, progressive=False, device_scale=scale_norm)
         event.wait(timeout=timeout)
-        return result[0] or self.peek_surface(doc, page_index, zoom_level)
+        return result[0] or self.peek_surface(doc, page_index, zoom_level, device_scale=scale_norm)
 
     def cancel_all(self, doc=None):
         """Cancel pending callbacks for document or all documents."""
@@ -681,11 +766,11 @@ def get_page_rasterizer_pool() -> PageRasterizerPool:
         _page_rasterizer_pool = PageRasterizerPool(max_workers=2)
     return _page_rasterizer_pool
 
-def peek_page_cairo_surface(doc, page_index, zoom_level):
-    return get_page_rasterizer_pool().peek_surface(doc, page_index, zoom_level)
+def peek_page_cairo_surface(doc, page_index, zoom_level, device_scale: float = 1.0):
+    return get_page_rasterizer_pool().peek_surface(doc, page_index, zoom_level, device_scale=device_scale)
 
-def request_page_cairo_surface(doc, page_index, zoom_level, callback=None, defer: bool = True, progressive: bool = False):
-    return get_page_rasterizer_pool().request_surface(doc, page_index, zoom_level, callback=callback, defer=defer, progressive=progressive)
+def request_page_cairo_surface(doc, page_index, zoom_level, callback=None, defer: bool = True, progressive: bool = False, device_scale: float = 1.0):
+    return get_page_rasterizer_pool().request_surface(doc, page_index, zoom_level, callback=callback, defer=defer, progressive=progressive, device_scale=device_scale)
 
 
 class TiledPageRenderer:
@@ -772,23 +857,21 @@ class TiledPageRenderer:
                 tiles.append((c, r))
         return tiles
 
-    def peek_tile(self, doc, page_index: int, zoom_level: float, col: int, row: int) -> Optional[cairo.ImageSurface]:
+    def peek_tile(self, doc, page_index: int, zoom_level: float, col: int, row: int, device_scale: float = 1.0) -> Optional[cairo.ImageSurface]:
         """Return cached tile Cairo surface if immediately available in LRU cache, otherwise None."""
         if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
             return None
-        doc_id = id(doc)
-        zoom_rounded = round(float(zoom_level), 4)
-        tile_key = (doc_id, page_index, zoom_rounded, col, row)
+        tile_key = _make_tile_cache_key(id(doc), page_index, zoom_level, col, row, device_scale)
         with self._lock:
             return self._tile_cache.get(tile_key)
 
-    def render_tile(self, doc, page_index: int, zoom_level: float, col: int, row: int) -> Optional[cairo.ImageSurface]:
+    def render_tile(self, doc, page_index: int, zoom_level: float, col: int, row: int, device_scale: float = 1.0) -> Optional[cairo.ImageSurface]:
         """Synchronously render and cache single tile at (col, row)."""
         if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
             return None
-        doc_id = id(doc)
-        zoom_rounded = round(float(zoom_level), 4)
-        tile_key = (doc_id, page_index, zoom_rounded, col, row)
+        scale_norm = normalize_device_scale(device_scale)
+        effective_zoom = float(zoom_level) * scale_norm
+        tile_key = _make_tile_cache_key(id(doc), page_index, zoom_level, col, row, scale_norm)
 
         with self._lock:
             cached = self._tile_cache.get(tile_key)
@@ -805,7 +888,7 @@ class TiledPageRenderer:
                     tx1 = min(page.rect.width * zoom_level, float((col + 1) * self.tile_size))
                     ty1 = min(page.rect.height * zoom_level, float((row + 1) * self.tile_size))
                     clip_rect = fitz.Rect(tx0 / zoom_level, ty0 / zoom_level, tx1 / zoom_level, ty1 / zoom_level)
-                    zoom_mat = fitz.Matrix(zoom_level, zoom_level)
+                    zoom_mat = fitz.Matrix(effective_zoom, effective_zoom)
                     pix = page.get_pixmap(matrix=zoom_mat, clip=clip_rect, alpha=False)
             else:
                 page = doc.load_page(page_index)
@@ -814,10 +897,10 @@ class TiledPageRenderer:
                 tx1 = min(page.rect.width * zoom_level, float((col + 1) * self.tile_size))
                 ty1 = min(page.rect.height * zoom_level, float((row + 1) * self.tile_size))
                 clip_rect = fitz.Rect(tx0 / zoom_level, ty0 / zoom_level, tx1 / zoom_level, ty1 / zoom_level)
-                zoom_mat = fitz.Matrix(zoom_level, zoom_level)
+                zoom_mat = fitz.Matrix(effective_zoom, effective_zoom)
                 pix = page.get_pixmap(matrix=zoom_mat, clip=clip_rect, alpha=False)
 
-            surf, _ = pixmap_to_cairo_surface(pix)
+            surf, _ = pixmap_to_cairo_surface(pix, device_scale=scale_norm)
             if surf is not None:
                 with self._lock:
                     self._tile_cache[tile_key] = surf
@@ -826,16 +909,17 @@ class TiledPageRenderer:
             print(f"Error rendering tile ({col}, {row}) for page {page_index}: {e}")
             return None
 
-    def request_tile(self, doc, page_index: int, zoom_level: float, col: int, row: int, callback: Optional[Callable] = None, defer: bool = True):
+    def request_tile(self, doc, page_index: int, zoom_level: float, col: int, row: int, callback: Optional[Callable] = None, defer: bool = True, device_scale: float = 1.0):
         """Submit background tile rasterization request."""
         if not doc or getattr(doc, 'is_closed', False) or not hasattr(doc, 'page_count') or not (0 <= page_index < doc.page_count):
             return
 
         doc_id = id(doc)
         zoom_rounded = round(float(zoom_level), 4)
-        task_key = (doc_id, page_index, zoom_rounded, col, row)
+        scale_norm = normalize_device_scale(device_scale)
+        task_key = _make_tile_cache_key(doc_id, page_index, zoom_rounded, col, row, scale_norm)
 
-        cached = self.peek_tile(doc, page_index, zoom_level, col, row)
+        cached = self.peek_tile(doc, page_index, zoom_level, col, row, device_scale=scale_norm)
         if cached is not None:
             if callback:
                 def _dispatch_cached():
@@ -855,11 +939,11 @@ class TiledPageRenderer:
                 return
             self._pending_callbacks[task_key] = [callback] if callback else []
 
-        def _worker(d, p_idx, z_val, c, r, t_key, expected_gen):
+        def _worker(d, p_idx, z_val, c, r, s_val, t_key, expected_gen):
             try:
                 if getattr(d, 'is_closed', False):
                     return
-                surf = self.render_tile(d, p_idx, z_val, c, r)
+                surf = self.render_tile(d, p_idx, z_val, c, r, device_scale=s_val)
             except Exception:
                 surf = None
 
@@ -885,7 +969,7 @@ class TiledPageRenderer:
                 if task_key not in self._pending_callbacks:
                     return False
                 executor = self._get_executor()
-                future = executor.submit(_worker, doc, page_index, zoom_rounded, col, row, task_key, gen)
+                future = executor.submit(_worker, doc, page_index, zoom_rounded, col, row, scale_norm, task_key, gen)
                 self._active_futures[task_key] = future
             return False
 
@@ -1688,9 +1772,10 @@ def generate_thumbnail(doc, page_index, target_width=150, filepath=None, save_to
         placeholder_pixbuf.fill(0xaaaaaaFF)
         return placeholder_pixbuf
 
-def draw_page_to_cairo(cr, doc, page_index, zoom_level, dirty_rect=None):
+def draw_page_to_cairo(cr, doc, page_index, zoom_level, dirty_rect=None, device_scale: Optional[float] = None):
     """Draw page to cairo using the cached surface."""
-    surf = get_page_cairo_surface(doc, page_index, zoom_level)
+    eff_scale = resolve_device_scale(cr=cr, override=device_scale)
+    surf = get_page_cairo_surface(doc, page_index, zoom_level, device_scale=eff_scale)
     if (
         surf is not None
         and getattr(surf, 'get_width', lambda: 0)() > 0

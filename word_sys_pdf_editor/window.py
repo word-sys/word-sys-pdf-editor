@@ -2251,6 +2251,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pdf_view.set_focusable(True)
         self.pdf_view.connect("notify::allocated-width", lambda *a: self._update_form_field_overlay_positions())
         self.pdf_view.connect("notify::allocated-height", lambda *a: self._update_form_field_overlay_positions())
+        self.pdf_view.connect("notify::scale-factor", self._on_canvas_scale_factor_changed)
 
         self.pdf_overlay = Gtk.Overlay()
         self.pdf_overlay.set_child(self.pdf_view)
@@ -4741,13 +4742,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         prefetch_pages = self._scroll_tracker.get_prefetch_page_indices(
             visible_pages, total_pages, is_eco_mode=is_eco
         )
+        device_scale = PdfEditorWindow._get_canvas_device_scale(self)
 
         for p_idx in prefetch_pages:
-            if pdf_handler.peek_page_cairo_surface(self.doc, p_idx, self.zoom_level) is None:
+            if pdf_handler.peek_page_cairo_surface(self.doc, p_idx, self.zoom_level, device_scale=device_scale) is None:
                 def _on_prefetched_ready(p, z, surf):
                     if not self.doc or getattr(self.doc, 'is_closed', False):
                         return
-                    if abs(self.zoom_level - z) < 0.001 or pdf_handler.peek_page_cairo_surface(self.doc, p, self.zoom_level) is None:
+                    if abs(self.zoom_level - z) < 0.001 or pdf_handler.peek_page_cairo_surface(self.doc, p, self.zoom_level, device_scale=device_scale) is None:
                         if hasattr(self, 'pdf_view') and self.pdf_view:
                             vis_now = self.get_visible_page_indices(prefetch_margin=0.0) if getattr(self, 'continuous_scroll', False) else [self.current_page_index]
                             if p in vis_now:
@@ -4756,7 +4758,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 pdf_handler.request_page_cairo_surface(
                     self.doc, p_idx, self.zoom_level,
                     callback=_on_prefetched_ready,
-                    progressive=True
+                    progressive=True,
+                    device_scale=device_scale
                 )
 
     def _sync_window_title_and_subtitle(self):
@@ -5259,14 +5262,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.pdf_view.queue_draw()
         if getattr(self, 'async_page_rendering', True) and self.doc and not getattr(self.doc, 'is_closed', False):
-            pdf_handler.request_page_cairo_surface(self.doc, page_index, self.zoom_level, progressive=True)
+            device_scale = PdfEditorWindow._get_canvas_device_scale(self)
+            pdf_handler.request_page_cairo_surface(self.doc, page_index, self.zoom_level, progressive=True, device_scale=device_scale)
             if hasattr(self, '_trigger_directional_prefetch'):
                 self._trigger_directional_prefetch()
             elif not getattr(self, 'is_eco_mode', False):
                 if page_index + 1 < pdf_handler.get_page_count(self.doc):
-                    pdf_handler.request_page_cairo_surface(self.doc, page_index + 1, self.zoom_level)
+                    pdf_handler.request_page_cairo_surface(self.doc, page_index + 1, self.zoom_level, device_scale=device_scale)
                 if page_index - 1 >= 0:
-                    pdf_handler.request_page_cairo_surface(self.doc, page_index - 1, self.zoom_level)
+                    pdf_handler.request_page_cairo_surface(self.doc, page_index - 1, self.zoom_level, device_scale=device_scale)
         
         if preserve_scroll:
             self._is_programmatic_scrolling = True
@@ -5639,6 +5643,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             self._draw_page_content(area, cr, p_idx, px, py, pw, ph, dirty_rect=dirty_rect)
 
+    def _get_canvas_device_scale(self, area=None, cr=None) -> float:
+        """Resolve effective device scale factor for canvas rendering (1.0, 1.25, 1.5, 1.75, 2.0, etc.)."""
+        override = getattr(self, "_device_scale_override", None)
+        widget = area if area is not None else getattr(self, "pdf_view", None)
+        return pdf_handler.resolve_device_scale(widget=widget, cr=cr, override=override)
+
+    def _on_canvas_scale_factor_changed(self, widget, _pspec=None):
+        """Queue a fresh HiDPI re-render when the window moves across monitors with different display scales."""
+        if hasattr(self, "pdf_view") and self.pdf_view:
+            self.pdf_view.queue_draw()
+
     def _draw_page_content(self, area, cr, page_index, page_offset_x, page_offset_y, page_w, page_h, dirty_rect=None):
         """Render single page contents including Cairo surface, objects, annotations, and overlays."""
         cr.save()
@@ -5648,6 +5663,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                          dirty_rect[2] * self.zoom_level, dirty_rect[3] * self.zoom_level)
             cr.clip()
 
+        device_scale = PdfEditorWindow._get_canvas_device_scale(self, area, cr)
         tiler = pdf_handler.get_tiled_page_renderer()
         page_unscaled_w = page_w / self.zoom_level
         page_unscaled_h = page_h / self.zoom_level
@@ -5665,7 +5681,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 tx0, ty0, tw, th = tiler.get_tile_pixel_rect(
                     col, row, page_unscaled_w, page_unscaled_h, self.zoom_level
                 )
-                tile_surf = tiler.peek_tile(self.doc, page_index, self.zoom_level, col, row)
+                tile_surf = tiler.peek_tile(self.doc, page_index, self.zoom_level, col, row, device_scale=device_scale)
                 if (
                     tile_surf is not None
                     and getattr(tile_surf, 'get_width', lambda: 0)() > 0
@@ -5684,11 +5700,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             self.pdf_view.queue_draw()
 
                     tiler.request_tile(
-                        self.doc, page_index, self.zoom_level, col, row, callback=_on_tile_ready
+                        self.doc, page_index, self.zoom_level, col, row,
+                        callback=_on_tile_ready, device_scale=device_scale
                     )
 
                     best_match = pdf_handler.get_page_rasterizer_pool().find_best_cached_surface(
-                        self.doc, page_index, self.zoom_level
+                        self.doc, page_index, self.zoom_level, device_scale=device_scale
                     )
                     rendered_tile_fallback = False
                     if best_match is not None:
@@ -5723,9 +5740,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             use_async = getattr(self, 'async_page_rendering', True)
             cached_surf = None
             if use_async:
-                cached_surf = pdf_handler.peek_page_cairo_surface(self.doc, page_index, self.zoom_level)
+                cached_surf = pdf_handler.peek_page_cairo_surface(self.doc, page_index, self.zoom_level, device_scale=device_scale)
             else:
-                cached_surf = pdf_handler.get_page_cairo_surface(self.doc, page_index, self.zoom_level)
+                cached_surf = pdf_handler.get_page_cairo_surface(self.doc, page_index, self.zoom_level, device_scale=device_scale)
 
             if (
                 cached_surf is not None
@@ -5750,18 +5767,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                 is_visible = (p_idx == self.current_page_index)
                             if is_visible:
                                 # Redraw if target zoom arrived or low-res preview arrived before target
-                                if abs(self.zoom_level - z_val) < 0.001 or pdf_handler.peek_page_cairo_surface(self.doc, p_idx, self.zoom_level) is None:
+                                if abs(self.zoom_level - z_val) < 0.001 or pdf_handler.peek_page_cairo_surface(self.doc, p_idx, self.zoom_level, device_scale=device_scale) is None:
                                     if hasattr(self, 'pdf_view') and self.pdf_view:
                                         self.pdf_view.queue_draw()
 
                         pdf_handler.request_page_cairo_surface(
                             self.doc, page_index, self.zoom_level,
                             callback=_on_async_page_ready,
-                            progressive=True
+                            progressive=True,
+                            device_scale=device_scale
                         )
 
                     rendered_fallback = False
-                    best_match = pdf_handler.get_page_rasterizer_pool().find_best_cached_surface(self.doc, page_index, self.zoom_level)
+                    best_match = pdf_handler.get_page_rasterizer_pool().find_best_cached_surface(
+                        self.doc, page_index, self.zoom_level, device_scale=device_scale
+                    )
                     if best_match is not None:
                         alt_surf, alt_zoom = best_match
                         if alt_zoom > 0:
@@ -5787,7 +5807,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         cr.stroke()
                         cr.restore()
                 else:
-                    pdf_handler.draw_page_to_cairo(cr, self.doc, page_index, self.zoom_level)
+                    pdf_handler.draw_page_to_cairo(cr, self.doc, page_index, self.zoom_level, device_scale=device_scale)
         cr.restore()
 
         page = self.doc[page_index]
@@ -11835,6 +11855,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             visible_indices = [self.current_page_index]
 
         target_zoom = self.zoom_level
+        device_scale = PdfEditorWindow._get_canvas_device_scale(self)
 
         def _make_ready_cb(expected_idx, expected_zoom):
             def _on_ready(p, z, s):
@@ -11853,7 +11874,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 pdf_handler.request_page_cairo_surface(
                     self.doc, p_idx, target_zoom,
                     callback=_make_ready_cb(p_idx, target_zoom),
-                    progressive=True
+                    progressive=True,
+                    device_scale=device_scale
                 )
 
         if hasattr(self, 'pdf_view') and self.pdf_view:

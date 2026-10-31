@@ -1966,6 +1966,129 @@ class TestLargeDocumentPerformance(unittest.TestCase):
         self.assertLess(elapsed_ms, 10.0, f"1,000 lookups in 40,000-page sequence took {elapsed_ms:.1f}ms")
 
 
+class TestHighDpiAndFractionalScaling(unittest.TestCase):
+    """Verify Cairo surface device scale, sharpness, tiled rendering, and coordinate mapping at 125%, 150%, 175%, and 200%."""
+
+    def setUp(self):
+        self.doc = fitz.open()
+        page = self.doc.new_page(width=200, height=100)
+        page.insert_text((15, 45), "High-DPI Sharpness Check 12345", fontsize=12)
+        page.draw_rect(fitz.Rect(10, 10, 190, 90), color=(0, 0, 0), width=1.0)
+        pdf_handler.invalidate_page_cache(self.doc)
+
+    def tearDown(self):
+        if self.doc and not self.doc.is_closed:
+            pdf_handler.invalidate_page_cache(self.doc)
+            self.doc.close()
+
+    @staticmethod
+    def _mean_edge_gradient(surface: cairo.ImageSurface) -> float:
+        import numpy as np
+        arr = np.frombuffer(surface.get_data(), dtype=np.uint8).reshape(
+            (surface.get_height(), surface.get_width(), 4)
+        )[:, :, :3].astype(np.float32)
+        gx = np.abs(np.diff(arr, axis=1)).mean()
+        gy = np.abs(np.diff(arr, axis=0)).mean()
+        return float(gx + gy)
+
+    def test_surface_dimensions_and_sharpness_across_fractional_scales(self):
+        """Verify page surfaces at 125%, 150%, 175%, and 200% match target device scale and eliminate upscaling blur."""
+        surf_1x = pdf_handler.get_page_cairo_surface(self.doc, 0, 1.0, device_scale=1.0)
+        self.assertIsNotNone(surf_1x)
+        self.assertEqual(surf_1x.get_width(), 200)
+        self.assertEqual(surf_1x.get_height(), 100)
+        self.assertEqual(surf_1x.get_device_scale(), (1.0, 1.0))
+
+        for scale in (1.25, 1.5, 1.75, 2.0):
+            surf_hi = pdf_handler.get_page_cairo_surface(self.doc, 0, 1.0, device_scale=scale)
+            self.assertIsNotNone(surf_hi)
+            self.assertEqual(surf_hi.get_width(), int(round(200 * scale)))
+            self.assertEqual(surf_hi.get_height(), int(round(100 * scale)))
+            sx, sy = surf_hi.get_device_scale()
+            self.assertAlmostEqual(sx, scale, places=3)
+            self.assertAlmostEqual(sy, scale, places=3)
+
+            # Paint 1x surface onto scaled target (reproduces pre-fix upscaling blur)
+            target_blurry = cairo.ImageSurface(
+                cairo.FORMAT_ARGB32, int(round(200 * scale)), int(round(100 * scale))
+            )
+            target_blurry.set_device_scale(scale, scale)
+            cr_blur = cairo.Context(target_blurry)
+            cr_blur.set_source_surface(surf_1x, 0, 0)
+            cr_blur.paint()
+
+            # Paint device-scaled surface onto scaled target via draw_page_to_cairo
+            target_sharp = cairo.ImageSurface(
+                cairo.FORMAT_ARGB32, int(round(200 * scale)), int(round(100 * scale))
+            )
+            target_sharp.set_device_scale(scale, scale)
+            cr_sharp = cairo.Context(target_sharp)
+            ok, err = pdf_handler.draw_page_to_cairo(cr_sharp, self.doc, 0, 1.0)
+            self.assertTrue(ok, err)
+
+            sharpness_blurry = self._mean_edge_gradient(target_blurry)
+            sharpness_hi = self._mean_edge_gradient(target_sharp)
+            self.assertGreater(
+                sharpness_hi,
+                sharpness_blurry,
+                f"Expected sharper edges at scale={scale}: {sharpness_hi:.3f} vs {sharpness_blurry:.3f}",
+            )
+
+    def test_tiled_renderer_fractional_device_scale(self):
+        """Verify TiledPageRenderer renders tiles at physical resolution with matching device_scale and logical coordinates."""
+        tiler = pdf_handler.get_tiled_page_renderer()
+        for scale in (1.25, 1.5, 1.75, 2.0):
+            tile = tiler.render_tile(self.doc, 0, 2.0, 0, 0, device_scale=scale)
+            self.assertIsNotNone(tile)
+            sx, sy = tile.get_device_scale()
+            self.assertAlmostEqual(sx, scale, places=3)
+            self.assertAlmostEqual(sy, scale, places=3)
+            # Logical tile width at zoom=2.0 on 200x100 page is 400x200 (< 512 tile size)
+            self.assertEqual(tile.get_width(), int(round(400 * scale)))
+            self.assertEqual(tile.get_height(), int(round(200 * scale)))
+            cached = tiler.peek_tile(self.doc, 0, 2.0, 0, 0, device_scale=scale)
+            self.assertIs(cached, tile)
+
+    def test_coordinate_mapping_and_hit_testing_at_fractional_scales(self):
+        """Verify canvas_to_page_coords and page_to_canvas_coords have zero offset across 125%, 150%, 175%, and 200% scales."""
+        app = Gtk.Application.new("com.wordsys.pdfeditor.hidpi_test", 0)
+        win = PdfEditorWindow(application=app)
+        win.font_scan_in_progress = False
+        win.doc = self.doc
+        win._active_session.doc = self.doc
+        win.current_page_index = 0
+
+        for continuous in (False, True):
+            win.continuous_scroll = continuous
+            for scale in (1.0, 1.25, 1.5, 1.75, 2.0):
+                win._device_scale_override = scale
+                for zoom in (1.0, 1.25, 1.5, 2.0):
+                    win.zoom_level = zoom
+                    win.current_pdf_page_width = int(200 * zoom)
+                    win.current_pdf_page_height = int(100 * zoom)
+                    if continuous:
+                        win._recompute_continuous_layout()
+
+                    # Verify round-trip coordinate accuracy on sample PDF points
+                    for pdf_x, pdf_y in ((15.0, 45.0), (100.5, 50.25), (189.75, 89.5)):
+                        cx, cy = win.page_to_canvas_coords(0, pdf_x, pdf_y)
+                        p_idx, mapped_x, mapped_y = win.canvas_to_page_coords(cx, cy)
+                        self.assertEqual(p_idx, 0)
+                        self.assertAlmostEqual(mapped_x, pdf_x, places=4)
+                        self.assertAlmostEqual(mapped_y, pdf_y, places=4)
+
+                    # Also verify rendering _draw_page_content onto a scaled Cairo surface succeeds cleanly
+                    target = cairo.ImageSurface(
+                        cairo.FORMAT_ARGB32,
+                        max(1, int(round(220 * zoom * scale))),
+                        max(1, int(round(120 * zoom * scale))),
+                    )
+                    target.set_device_scale(scale, scale)
+                    cr = cairo.Context(target)
+                    px, py, pw, ph = win.get_page_canvas_rect(0)
+                    win._draw_page_content(win.pdf_view, cr, 0, px, py, pw, ph)
+
+
 if __name__ == "__main__":
     unittest.main()
 
