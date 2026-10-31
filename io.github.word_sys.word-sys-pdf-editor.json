@@ -12,15 +12,38 @@
         "--socket=fallback-x11",
         "--device=dri",
         "--socket=pcsc",
-        "--share=network"
+        "--share=network",
+        "--env=TESSDATA_PREFIX=/app/share/tessdata"
     ],
     "modules": [
         "python3-requirements.json",
+        {
+            "name": "tessdata-fast",
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -d /app/share/tessdata",
+                "install -Dm644 eng.traineddata /app/share/tessdata/eng.traineddata",
+                "install -Dm644 osd.traineddata /app/share/tessdata/osd.traineddata"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/eng.traineddata",
+                    "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+                },
+                {
+                    "type": "file",
+                    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/osd.traineddata",
+                    "sha256": "9cf5d576fcc47564f11265841e5ca839001e7e6f38ff7f7aacf46d15a96b00ff"
+                }
+            ]
+        },
         {
             "name": "word-sys-pdf-editor",
             "buildsystem": "simple",
             "build-commands": [
                 "pip3 install --verbose --exists-action=i --no-index --no-build-isolation --no-deps --prefix=${FLATPAK_DEST} .",
+                "install -d /app/share/tessdata",
                 "install -Dm644 ${FLATPAK_ID}.desktop -t /app/share/applications/",
                 "install -Dm644 ${FLATPAK_ID}.metainfo.xml -t /app/share/metainfo/",
                 "install -Dm644 word_sys_pdf_editor/img/f-pv1.svg -t /app/share/icons/hicolor/scalable/apps/",

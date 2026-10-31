@@ -35,8 +35,23 @@ tar -xzf build_tmp/python.tar.gz -C AppDir/usr --strip-components=1
 echo "--- Installing Python dependencies ---"
 AppDir/usr/bin/python3 -m pip install --upgrade pip
 AppDir/usr/bin/python3 -m pip install pygobject==3.50.0
-AppDir/usr/bin/python3 -m pip install PyMuPDF numpy "anyconvert>=0.1.9" cryptography "pyhanko>=0.25.0" "python-pkcs11>=0.7.0" "Pillow>=9.0.0" certifi
+AppDir/usr/bin/python3 -m pip install PyMuPDF numpy "anyconvert>=0.1.9" cryptography "pyhanko>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "Pillow>=9.0.0" certifi
 AppDir/usr/bin/python3 -m pip install .
+
+echo "--- Bundling OCR tessdata & optional Tesseract runtime ---"
+mkdir -p AppDir/usr/share/tessdata
+for TESS_DIR in /usr/share/tesseract-ocr/5/tessdata /usr/share/tesseract-ocr/4.00/tessdata /usr/share/tesseract-ocr/tessdata /usr/share/tessdata; do
+    if [ -d "$TESS_DIR" ]; then
+        for MODEL in eng.traineddata osd.traineddata; do
+            if [ -f "$TESS_DIR/$MODEL" ] && [ ! -f "AppDir/usr/share/tessdata/$MODEL" ]; then
+                cp "$TESS_DIR/$MODEL" AppDir/usr/share/tessdata/
+            fi
+        done
+    fi
+done
+if command -v tesseract >/dev/null 2>&1; then
+    cp "$(command -v tesseract)" AppDir/usr/bin/tesseract 2>/dev/null || true
+fi
 
 echo "--- Configuring application entry point ---"
 cat << 'EOF' > AppDir/usr/bin/word-sys-pdf-editor.py
@@ -49,6 +64,12 @@ cat << 'EOF' > AppDir/usr/bin/word-sys-pdf-editor
 #!/bin/bash
 unset GTK_THEME
 SELF_DIR="$(dirname "$(readlink -f "$0")")"
+export APPDIR="${APPDIR:-$(readlink -f "$SELF_DIR/../..")}"
+export PATH="$SELF_DIR:$PATH"
+export PYTHONDONTWRITEBYTECODE=1
+if [ -d "$SELF_DIR/../share/tessdata" ] && [ -z "$TESSDATA_PREFIX" ]; then
+    export TESSDATA_PREFIX="$SELF_DIR/../share/tessdata"
+fi
 export GDK_PIXBUF_MODULEDIR="$SELF_DIR/../lib/gdk-pixbuf-2.0/2.10.0/loaders"
 export GDK_PIXBUF_MODULE_FILE="$SELF_DIR/../lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
 export LD_LIBRARY_PATH="$SELF_DIR/../lib:$SELF_DIR/../lib/gdk-pixbuf-2.0/2.10.0/loaders:$LD_LIBRARY_PATH"

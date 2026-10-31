@@ -1929,4 +1929,86 @@ def test_ocr_dialog_closes_immediately_on_start_and_hands_off_to_window():
     doc.close()
 
 
+def test_flatpak_manifests_bundle_tessdata_and_ocr_permissions():
+    """Verify both Flatpak manifests configure TESSDATA_PREFIX, network/pcsc permissions, and bundle tessdata-fast."""
+    import json
+
+    repo_root = Path(__file__).resolve().parent.parent
+    manifest_names = [
+        "io.github.word_sys.word-sys-pdf-editor.json",
+        "org.word_sys.pdfeditor.json",
+    ]
+    for name in manifest_names:
+        manifest_path = repo_root / name
+        assert manifest_path.is_file(), f"Missing Flatpak manifest: {name}"
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        finish_args = data.get("finish-args", [])
+        assert "--share=network" in finish_args
+        assert "--socket=pcsc" in finish_args
+        assert "--env=TESSDATA_PREFIX=/app/share/tessdata" in finish_args
+
+        modules = data.get("modules", [])
+        tessdata_mod = next(
+            (m for m in modules if isinstance(m, dict) and m.get("name") == "tessdata-fast"),
+            None,
+        )
+        assert tessdata_mod is not None, f"tessdata-fast module missing in {name}"
+        sources = tessdata_mod.get("sources", [])
+        urls = [s.get("url", "") for s in sources]
+        assert any("eng.traineddata" in u for u in urls)
+        assert any("osd.traineddata" in u for u in urls)
+        for src in sources:
+            assert len(src.get("sha256", "")) == 64
+
+
+def test_debian_and_appimage_packaging_ocr_and_runtime_configuration(tmp_path, monkeypatch):
+    """Verify debian/control, debian/postinst, build-appimage.sh, and find_tesseract_binary OCR support."""
+    import subprocess
+    from word_sys_pdf_editor.ocr_engine import find_tesseract_binary
+
+    repo_root = Path(__file__).resolve().parent.parent
+
+    # 1. debian/control OCR Recommends & Suggests
+    control_text = (repo_root / "debian" / "control").read_text(encoding="utf-8")
+    assert "tesseract-ocr" in control_text
+    assert "tesseract-ocr-eng" in control_text
+    for lang_pkg in (
+        "tesseract-ocr-tur",
+        "tesseract-ocr-deu",
+        "tesseract-ocr-fra",
+        "tesseract-ocr-spa",
+        "tesseract-ocr-ita",
+        "tesseract-ocr-rus",
+    ):
+        assert lang_pkg in control_text
+
+    # 2. debian/postinst dependencies
+    postinst_text = (repo_root / "debian" / "postinst").read_text(encoding="utf-8")
+    assert "pyhanko-certvalidator" in postinst_text
+    assert "Pillow" in postinst_text
+
+    # 3. build-appimage.sh syntax & OCR bundling
+    appimage_script = repo_root / "build-appimage.sh"
+    script_text = appimage_script.read_text(encoding="utf-8")
+    assert "AppDir/usr/share/tessdata" in script_text
+    assert "TESSDATA_PREFIX" in script_text
+    assert "PYTHONDONTWRITEBYTECODE=1" in script_text
+    assert "pyhanko-certvalidator" in script_text
+
+    syntax_check = subprocess.run(["bash", "-n", str(appimage_script)], capture_output=True, text=True)
+    assert syntax_check.returncode == 0, f"build-appimage.sh syntax error: {syntax_check.stderr}"
+
+    # 4. find_tesseract_binary resolves $APPDIR/usr/bin/tesseract when system PATH lacks tesseract
+    fake_appdir = tmp_path / "AppDir"
+    fake_bin = fake_appdir / "usr" / "bin"
+    fake_bin.mkdir(parents=True)
+    fake_tess = fake_bin / "tesseract"
+    fake_tess.write_text("#!/bin/sh\necho tesseract\n", encoding="utf-8")
+    fake_tess.chmod(0o755)
+
+    monkeypatch.setenv("APPDIR", str(fake_appdir))
+    with patch("word_sys_pdf_editor.ocr_engine.shutil.which", return_value=None):
+        resolved = find_tesseract_binary()
+        assert resolved == str(fake_tess)
 

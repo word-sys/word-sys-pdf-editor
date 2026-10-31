@@ -10,8 +10,8 @@ case "$1" in
 
         python3 -m venv --system-site-packages "${VENV_DIR}"
 
-        echo "word-sys-pdf-editor: Installing PyMuPDF, numpy, anyconvert, and security dependencies..."
-        "${VENV_DIR}/bin/pip" install --upgrade --quiet --prefer-binary pymupdf numpy "anyconvert>=0.1.9" "cryptography" "pyhanko>=0.25.0" "python-pkcs11>=0.7.0" "Pillow>=9.0.0" certifi
+        echo "word-sys-pdf-editor: Installing PyMuPDF, numpy, anyconvert, OCR, and security dependencies..."
+        "${VENV_DIR}/bin/pip" install --upgrade --quiet --prefer-binary pymupdf numpy "anyconvert>=0.1.9" "cryptography" "pyhanko>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "Pillow>=9.0.0" certifi
 
         echo "word-sys-pdf-editor: Setup complete."
         ;;

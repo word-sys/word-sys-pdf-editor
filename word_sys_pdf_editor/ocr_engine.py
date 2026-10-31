@@ -581,6 +581,25 @@ def perform_ocr_on_page(
     return fitz.open(stream=ocr_bytes)
 
 
+def find_tesseract_binary() -> Optional[str]:
+    """Locate the tesseract CLI binary across system PATH, Flatpak (/app/bin), and AppImage ($APPDIR/usr/bin)."""
+    found = shutil.which("tesseract")
+    if found:
+        return found
+
+    appdir = os.environ.get("APPDIR")
+    if appdir:
+        cand = Path(appdir) / "usr" / "bin" / "tesseract"
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return str(cand)
+
+    flatpak_cand = Path("/app/bin/tesseract")
+    if flatpak_cand.is_file() and os.access(flatpak_cand, os.X_OK):
+        return str(flatpak_cand)
+
+    return None
+
+
 def extract_ocr_words_with_confidence(
     pix: fitz.Pixmap,
     page_rect: Optional[fitz.Rect] = None,
@@ -608,7 +627,7 @@ def extract_ocr_words_with_confidence(
     sx = pw / max(float(pix.width), 1.0)
     sy = ph / max(float(pix.height), 1.0)
 
-    tess_path = shutil.which("tesseract")
+    tess_path = find_tesseract_binary()
     if tess_path:
         try:
             img_bytes = pix.tobytes("png")
