@@ -140,6 +140,9 @@ class MockBuilderWindow:
     _get_overlay_for_field = PdfEditorWindow._get_overlay_for_field
     _open_form_field_editor = PdfEditorWindow._open_form_field_editor
     _close_active_form_field_editor = PdfEditorWindow._close_active_form_field_editor
+    _cancel_active_form_field_editor = PdfEditorWindow._cancel_active_form_field_editor
+    _sync_form_field_value = PdfEditorWindow._sync_form_field_value
+    _refresh_form_field_widget_value = PdfEditorWindow._refresh_form_field_widget_value
     _handle_delete_with_confirmation = PdfEditorWindow._handle_delete_with_confirmation
     _find_text_at_pos = PdfEditorWindow._find_text_at_pos
     _find_image_at_pos = PdfEditorWindow._find_image_at_pos
@@ -1954,6 +1957,83 @@ class TestInteractiveFormInputs(unittest.TestCase):
 
         win.do_close_request()
         app.quit()
+
+
+class TestDenseAcroFormOverlayMemoryAndWidgetCount(unittest.TestCase):
+    """Verify a 500-field AcroForm creates 0 passive GTK overlay widgets and at most 1 active editor widget."""
+
+    def test_500_field_form_creates_at_most_one_editor_widget_and_low_memory(self):
+        import tracemalloc
+        doc = fitz.open()
+        page = doc.new_page(width=1000, height=2000)
+
+        for idx in range(500):
+            col = idx % 10
+            row = idx // 10
+            x0 = 10 + col * 95
+            y0 = 10 + row * 38
+            rect = (x0, y0, x0 + 85, y0 + 24)
+            if idx % 5 == 0:
+                pdf_handler.add_form_widget(page, "checkbox", (x0, y0, x0 + 20, y0 + 20), f"cb_{idx}", default_value=False)
+            elif idx % 7 == 0:
+                pdf_handler.add_form_widget(
+                    page, "combobox", rect, f"combo_{idx}",
+                    default_value="Opt A", choice_values=["Opt A", "Opt B"]
+                )
+            else:
+                pdf_handler.add_form_widget(page, "text", rect, f"txt_{idx}", default_value=f"val_{idx}")
+
+        win = MockBuilderWindow(doc)
+        win._enable_persistent_form_overlays = False
+        win.view_mode = True
+        win.current_pdf_page_width = 1000
+        win.current_pdf_page_height = 2000
+
+        tracemalloc.start()
+        snap_before = tracemalloc.take_snapshot()
+
+        win._load_acroform_fields_for_page(0)
+
+        snap_after = tracemalloc.take_snapshot()
+        current_bytes, peak_bytes = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        self.assertEqual(len(win.form_fields), 500)
+        # Default production path creates 0 passive GTK overlay widgets for all 500 fields
+        self.assertEqual(len(win._form_field_overlay_widgets), 0)
+        self.assertIsNone(win._active_form_field_editor_widget)
+        # Memory overhead for 500 AcroFormField models is well under 5 MB (~200-400 KB)
+        self.assertLess(current_bytes, 5 * 1024 * 1024)
+
+        # Activating a text field creates exactly 1 ephemeral GTK editor widget
+        text_fields = [f for f in win.form_fields if f.field_type == "text"]
+        self.assertGreaterEqual(len(text_fields), 2)
+
+        win._open_form_field_editor(text_fields[0])
+        self.assertEqual(len(win._form_field_overlay_widgets), 1)
+        self.assertEqual(win._active_editing_form_field, text_fields[0])
+        first_widget = win._active_form_field_editor_widget
+        self.assertIsInstance(first_widget, Gtk.Entry)
+
+        # Switching directly to another text field closes the previous editor and keeps widget count at 1
+        win._open_form_field_editor(text_fields[1])
+        self.assertEqual(len(win._form_field_overlay_widgets), 1)
+        self.assertEqual(win._active_editing_form_field, text_fields[1])
+
+        # Closing editor returns overlay widget count to 0
+        win._close_active_form_field_editor()
+        self.assertEqual(len(win._form_field_overlay_widgets), 0)
+        self.assertIsNone(win._active_editing_form_field)
+        self.assertIsNone(win._active_form_field_editor_widget)
+
+        # Toggling a checkbox field updates value in-place with 0 overlay widgets created
+        checkbox_fields = [f for f in win.form_fields if f.field_type == "checkbox"]
+        self.assertGreaterEqual(len(checkbox_fields), 1)
+        win._open_form_field_editor(checkbox_fields[0])
+        self.assertEqual(len(win._form_field_overlay_widgets), 0)
+        self.assertTrue(checkbox_fields[0].is_checked)
+
+        doc.close()
 
 
 if __name__ == "__main__":
