@@ -2130,9 +2130,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.ocr_banner.add_css_class("card")
         ocr_banner_icon = Gtk.Image.new_from_icon_name("scanner-symbolic")
         self.ocr_banner_label = Gtk.Label(xalign=0.0, hexpand=True)
-        self.ocr_banner_label.set_text(_("ocr_banner_processing"))
+        self.ocr_banner_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.ocr_banner_label.set_text(_("ocr_banner_processing", 1, 1))
         self.ocr_banner_progress = Gtk.ProgressBar()
-        self.ocr_banner_progress.set_hexpand(True)
+        self.ocr_banner_progress.set_size_request(160, -1)
         self.ocr_banner_progress.set_valign(Gtk.Align.CENTER)
         self.ocr_banner_progress.set_show_text(True)
         self.ocr_banner_pause_btn = Gtk.Button(label=_("ocr_btn_pause"))
@@ -10699,7 +10700,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, 'ocr_banner_progress') and self.ocr_banner_progress:
                 self.ocr_banner_progress.set_fraction(0.0)
             if hasattr(self, 'ocr_banner_label') and self.ocr_banner_label:
-                self.ocr_banner_label.set_text(_("ocr_banner_processing"))
+                self.ocr_banner_label.set_text(_("ocr_banner_processing", 1, max(1, total_pages)))
             self.ocr_banner.set_visible(True)
 
     def update_ocr_banner(self, current_page, total_pages, fraction=None, eta_seconds=None, paused=None):
@@ -10709,7 +10710,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, 'ocr_banner_progress') and self.ocr_banner_progress:
                 self.ocr_banner_progress.set_fraction(frac)
             if hasattr(self, 'ocr_banner_label') and self.ocr_banner_label:
-                label_text = f"{_('ocr_banner_processing')} ({current_page}/{total_pages})"
+                label_text = _("ocr_banner_processing", current_page, total_pages)
                 if eta_seconds is not None and eta_seconds > 0:
                     from .ocr_engine import format_ocr_eta
                     eta_str = format_ocr_eta(eta_seconds)

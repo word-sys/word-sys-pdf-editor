@@ -48,6 +48,7 @@ class OCRDialog(Adw.Window):
         self._active_downloads: set[str] = set()
         self._cancel_ocr_flag = False
         self._is_ocr_running = False
+        self._closing_after_handoff = False
         self._ocr_pipeline = None
 
         self.set_transient_for(parent_window)
@@ -498,7 +499,10 @@ class OCRDialog(Adw.Window):
                 pass
 
     def do_close_request(self) -> bool:
-        """Handle window close request cleanly, stopping any running OCR process."""
+        """Handle window close request cleanly, stopping any running OCR process unless handed off to main window."""
+        if getattr(self, "_closing_after_handoff", False):
+            self._is_ocr_running = False
+            return False
         self._cancel_ocr_flag = True
         self._is_ocr_running = False
         if self._ocr_pipeline is not None:
@@ -591,6 +595,20 @@ class OCRDialog(Adw.Window):
         auto_deskew = self.deskew_switch.get_active()
         auto_rotate = self.rotate_switch.get_active()
         auto_invert = self.invert_switch.get_active()
+
+        if self.parent_window is not None and hasattr(self.parent_window, "start_streaming_ocr"):
+            self._closing_after_handoff = True
+            self.parent_window.start_streaming_ocr(
+                target_pages=target_pages,
+                language=lang_code,
+                dpi=dpi,
+                auto_deskew=auto_deskew,
+                auto_rotate=auto_rotate,
+                auto_invert=auto_invert,
+                enhance_contrast=True,
+            )
+            self.close()
+            return
 
         total_pages = len(target_pages)
         if hasattr(self.parent_window, "show_ocr_banner"):

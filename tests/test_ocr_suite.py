@@ -1193,7 +1193,8 @@ def test_ocr_banner_lifecycle_mocked():
 
     win.update_ocr_banner(current_page=3, total_pages=5, fraction=0.6)
     assert win.ocr_banner_progress.fraction == 0.6
-    assert "3/5" in win.ocr_banner_label.text
+    assert "3" in win.ocr_banner_label.text and "5" in win.ocr_banner_label.text
+    assert "{0}" not in win.ocr_banner_label.text and "{1}" not in win.ocr_banner_label.text
 
     win._on_ocr_banner_cancel_clicked(None)
     assert win._ocr_cancel_requested is True
@@ -1898,5 +1899,34 @@ def test_streaming_ocr_localization_keys():
         for k in required_keys:
             assert k in strings_dict, f"Missing key '{k}' in {loc_name}"
             assert len(strings_dict[k].strip()) > 0
+
+
+def test_ocr_dialog_closes_immediately_on_start_and_hands_off_to_window():
+    """Verify clicking Start OCR in OCRDialog delegates to parent_window.start_streaming_ocr and closes the dialog."""
+    doc = fitz.open()
+    doc.new_page(width=300, height=300)
+
+    fake_langs = {
+        "eng": {"name": "English", "native": "English", "is_installed": True, "source": "system", "path": "/usr/share/tessdata/eng.traineddata"},
+    }
+
+    class ParentWin(Adw.Window):
+        def __init__(self):
+            super().__init__()
+            self.start_streaming_ocr = MagicMock()
+
+    parent = ParentWin()
+    with patch("word_sys_pdf_editor.ocr_dialog.get_available_languages", return_value=fake_langs):
+        dialog = OCRDialog(parent_window=parent, doc=doc, current_page_num=0)
+        with patch.object(dialog, "close", wraps=dialog.close) as spy_close:
+            dialog._on_start_ocr_clicked(None)
+            parent.start_streaming_ocr.assert_called_once()
+            spy_close.assert_called_once()
+            # Ensure closing after handoff did not set the cancel flag
+            assert dialog._closing_after_handoff is True
+            assert dialog._cancel_ocr_flag is False
+
+    doc.close()
+
 
 
