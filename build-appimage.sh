@@ -35,7 +35,7 @@ tar -xzf build_tmp/python.tar.gz -C AppDir/usr --strip-components=1
 echo "--- Installing Python dependencies ---"
 AppDir/usr/bin/python3 -m pip install --upgrade pip
 AppDir/usr/bin/python3 -m pip install pygobject==3.50.0
-AppDir/usr/bin/python3 -m pip install PyMuPDF numpy "anyconvert>=0.1.9" cryptography "pyhanko>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "Pillow>=9.0.0" certifi
+AppDir/usr/bin/python3 -m pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" "Pillow>=9.0.0" certifi
 AppDir/usr/bin/python3 -m pip install .
 
 echo "--- Bundling OCR tessdata & optional Tesseract runtime ---"

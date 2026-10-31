@@ -30,16 +30,16 @@
             "sources": [
                 {
                     "type": "file",
-                    "url": "https://files.pythonhosted.org/packages/3a/1b/3b16a9bc514a440a7a0883684111dcb1ef1aee960af2ca95da8fc775f124/numpy-2.5.3-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
-                    "sha256": "a5fa86b80fd24bcd1aff83ad23be44ea323de3f787be8f8b15d4a65621e25321",
+                    "url": "https://files.pythonhosted.org/packages/da/24/3bd070f3269dc609d8f26b2643f62ef91bb415841c0b294805aaf7fe06da/numpy-2.5.4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+                    "sha256": "6ffa07666f8da0eef81d149934a626d0d95fbd6838432a33e66245423a9062c0",
                     "only-arches": [
                         "x86_64"
                     ]
                 },
                 {
                     "type": "file",
-                    "url": "https://files.pythonhosted.org/packages/73/85/735720d04ec197c5dcfacdfc9922667c7f1f5f496a279b7ba4d7c74c4cc7/numpy-2.5.3-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
-                    "sha256": "c76d5dde9f445058f83d0c02af00557a4db91de9a9a57c0df87d1535001d654b",
+                    "url": "https://files.pythonhosted.org/packages/db/b6/135bb0953b61dc21c6cafa14b424ae666944e4899cf140e00c2b322a1a45/numpy-2.5.4-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+                    "sha256": "1c2e71b04c6cad90026e544501bbe0ab9290fa8a4d845e7e8c0d124fb429c988",
                     "only-arches": [
                         "aarch64"
                     ]
@@ -80,8 +80,8 @@
             "sources": [
                 {
                     "type": "file",
-                    "url": "https://files.pythonhosted.org/packages/af/fa/24df268e6f66f5e705212debeb50ef6a1834dda66643aa10383431378d4f/anyconvert-0.1.9-py3-none-any.whl",
-                    "sha256": "d99112468b5083aec9eab96d4b59707bdda5848cda485d3652f91fe7c2a0ca50"
+                    "url": "https://files.pythonhosted.org/packages/d1/3a/81bb8eb58d69344105958752f9afc2e0d30caf5ca2c67c76cd404c68d770/anyconvert-0.1.11-py3-none-any.whl",
+                    "sha256": "0ae8c8596cc38f215c05217dc9ac079b9dbd5bf6daaf184952e170c4d528ff34"
                 }
             ]
         },
@@ -94,8 +94,8 @@
             "sources": [
                 {
                     "type": "file",
-                    "url": "https://files.pythonhosted.org/packages/90/11/0e6f11117525ff0eec40ebac3d313376f102df93ca44ad9e893ee85e4f89/pycparser-3.11-py3-none-any.whl",
-                    "sha256": "51d5a8ba2be0bbe440b99d2112604c95bbbc3c2748a64260186c541e1729cd80"
+                    "url": "https://files.pythonhosted.org/packages/b6/ae/315bbeee126a769cbde43cf4908acb4b40408d8bf8bbf334dd7368d8dadf/pycparser-3.12-py3-none-any.whl",
+                    "sha256": "a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e"
                 }
             ]
         },
@@ -143,6 +143,129 @@
                     "type": "file",
                     "url": "https://files.pythonhosted.org/packages/c1/63/61b15dc1a8de03fe0adbe3fd7608b3ad5c73bf50993bbcb1faaa930afe33/cryptography-50.0.2-cp39-abi3-manylinux_2_28_aarch64.whl",
                     "sha256": "dfe9763530994147d9af1def057a5b9658b00e8f8fe8743d144d1e0911c2e454",
+                    "only-arches": [
+                        "aarch64"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "python3-asn1crypto",
+            "buildsystem": "simple",
+            "build-commands": [
+                "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"asn1crypto\" --no-build-isolation --no-deps"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/c9/7f/09065fd9e27da0eda08b4d6897f1c13535066174cc023af248fc2a8d5e5a/asn1crypto-1.5.1-py2.py3-none-any.whl",
+                    "sha256": "db4e40728b728508912cbb3d44f19ce188f218e9eba635821bb4b68564f8fd67"
+                }
+            ]
+        },
+        {
+            "name": "python3-certifi",
+            "buildsystem": "simple",
+            "build-commands": [
+                "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"certifi\" --no-build-isolation --no-deps"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl",
+                    "sha256": "e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1"
+                }
+            ]
+        },
+        {
+            "name": "python3-tzlocal",
+            "buildsystem": "simple",
+            "build-commands": [
+                "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"tzlocal\" --no-build-isolation --no-deps"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/7b/c1/9be4e1a8a30db8729a86628073910e56f85aaf8a659e053f376a2e6ea5a8/tzlocal-5.4.5-py3-none-any.whl",
+                    "sha256": "ecab534f6d65d9deb4c4ea52c121ab6dd5958e9b878e71dcb102578269752454"
+                }
+            ]
+        },
+        {
+            "name": "python3-uritools",
+            "buildsystem": "simple",
+            "build-commands": [
+                "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"uritools\" --no-build-isolation --no-deps"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/ac/76/e9bb35862bcc5b82218d2c017b1eacdcfeb3ba46ce0c0ca8ffc4db80ddbe/uritools-6.1.3-py3-none-any.whl",
+                    "sha256": "136f113e76e53f85bf2d9cce0c3d40ceec775d0409e7d6de9b28f046a7d42838"
+                }
+            ]
+        },
+        {
+            "name": "python3-oscrypto",
+            "buildsystem": "simple",
+            "build-commands": [
+                "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"oscrypto\" --no-build-isolation --no-deps"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/01/7c/fa07d3da2b6253eb8474be16eab2eadf670460e364ccc895ca7ff388ee30/oscrypto-1.3.0-py2.py3-none-any.whl",
+                    "sha256": "2b2f1d2d42ec152ca90ccb5682f3e051fb55986e1b170ebde472b133713e7085"
+                }
+            ]
+        },
+        {
+            "name": "python3-pyhanko-certvalidator",
+            "buildsystem": "simple",
+            "build-commands": [
+                "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"pyhanko-certvalidator\" --no-build-isolation --no-deps"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/e8/22/fc8a485269187b85eadd2cf536b92be403a238932e7d3943ba176fb31041/pyhanko_certvalidator-0.33.0-py3-none-any.whl",
+                    "sha256": "72d3b830c0427a7aae45873ba7b4e34cb86caed451eff9dfb4394a69e93bb169"
+                }
+            ]
+        },
+        {
+            "name": "python3-pyhanko",
+            "buildsystem": "simple",
+            "build-commands": [
+                "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"pyhanko\" --no-build-isolation --no-deps"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/6e/18/3c7c3c4dd7b629da4b76ba03aed2c6103ccbf280834f30dfa3d8fe47b23b/pyhanko-0.38.0-py3-none-any.whl",
+                    "sha256": "60abfdf6114e4ad64bb413491848af4a276231b563cb9f268e8dbfbcd47e586f"
+                }
+            ]
+        },
+        {
+            "name": "python3-python-pkcs11",
+            "buildsystem": "simple",
+            "build-commands": [
+                "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"python-pkcs11\" --no-build-isolation --no-deps"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/94/50/ff5b52f9967822cd510a1727ae3bc0014d680af708e027d6559833c8afe8/python_pkcs11-0.10.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+                    "sha256": "7270f8844463f2ac713df63a21d4a8c7111c57ca5edfb8bf34156e45d7cb855b",
+                    "only-arches": [
+                        "x86_64"
+                    ]
+                },
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/f3/4e/e255500b914f0c4cf37c3b51c84f107e325c554920af0ec62fd43fbc124b/python_pkcs11-0.10.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+                    "sha256": "6c05e23631b0e95585a7936392df12ac68fc5051e24f12a952bf536d5cf83baf",
                     "only-arches": [
                         "aarch64"
                     ]

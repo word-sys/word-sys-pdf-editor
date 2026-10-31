@@ -49,7 +49,7 @@ sudo pacman -S python python-pip python-gobject gtk4 libadwaita \
 
 3. Install required Python packages:
    ```bash
-   pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi
+   pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi
    ```
 
 4. Run the editor:

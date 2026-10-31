@@ -219,7 +219,7 @@ Cette méthode convient aux personnes souhaitant exécuter l'application directe
 
 4.  **Installer les dépendances Python :**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject==3.50.0
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
     ```
 
 5.  **Lancer l'application :**
@@ -263,7 +263,7 @@ Cette méthode convient aux personnes souhaitant exécuter l'application directe
 
 4.  **Installer les dépendances Python :**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 5.  **Lancer l'application :**
@@ -298,7 +298,7 @@ Cette méthode convient aux personnes souhaitant exécuter l'application directe
 
 3.  **Installer les dépendances Python :**
     ```bash
-    pip install PyMuPDF numpy anyconvert cryptography Pillow pyhanko python-pkcs11 certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 4.  **Lancer l'application :**

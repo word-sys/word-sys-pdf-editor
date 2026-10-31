@@ -1930,7 +1930,7 @@ def test_ocr_dialog_closes_immediately_on_start_and_hands_off_to_window():
 
 
 def test_flatpak_manifests_bundle_tessdata_and_ocr_permissions():
-    """Verify both Flatpak manifests configure TESSDATA_PREFIX, network/pcsc permissions, and bundle tessdata-fast."""
+    """Verify both Flatpak manifests configure TESSDATA_PREFIX, network/pcsc permissions, bundle tessdata-fast, and pin PyMuPDF <2.0.0."""
     import json
 
     repo_root = Path(__file__).resolve().parent.parent
@@ -1961,9 +1961,40 @@ def test_flatpak_manifests_bundle_tessdata_and_ocr_permissions():
         for src in sources:
             assert len(src.get("sha256", "")) == 64
 
+    # Verify python3-requirements.json and org.word_sys.pdfeditor.json contain all 15 python3-* modules and PyMuPDF <2.0.0
+    expected_py_modules = {
+        "python3-numpy",
+        "python3-PyMuPDF",
+        "python3-anyconvert",
+        "python3-pycparser",
+        "python3-cffi",
+        "python3-cryptography",
+        "python3-asn1crypto",
+        "python3-certifi",
+        "python3-tzlocal",
+        "python3-uritools",
+        "python3-oscrypto",
+        "python3-pyhanko-certvalidator",
+        "python3-pyhanko",
+        "python3-python-pkcs11",
+        "python3-pillow",
+    }
+    py_req_data = json.loads((repo_root / "python3-requirements.json").read_text(encoding="utf-8"))
+    org_manifest_data = json.loads((repo_root / "org.word_sys.pdfeditor.json").read_text(encoding="utf-8"))
+
+    for label, mod_list in [
+        ("python3-requirements.json", py_req_data.get("modules", [])),
+        ("org.word_sys.pdfeditor.json", org_manifest_data.get("modules", [])),
+    ]:
+        dict_mods = {m["name"]: m for m in mod_list if isinstance(m, dict) and "name" in m}
+        assert expected_py_modules.issubset(dict_mods.keys()), f"Missing python3 modules in {label}"
+        pymupdf_sources = dict_mods["python3-PyMuPDF"].get("sources", [])
+        for s in pymupdf_sources:
+            assert "pymupdf-1." in s["url"].lower(), f"PyMuPDF must remain <2.0.0 in {label}"
+
 
 def test_debian_and_appimage_packaging_ocr_and_runtime_configuration(tmp_path, monkeypatch):
-    """Verify debian/control, debian/postinst, build-appimage.sh, and find_tesseract_binary OCR support."""
+    """Verify debian/control, debian/postinst, build-appimage.sh, pyproject.toml, requirements.txt, and find_tesseract_binary."""
     import subprocess
     from word_sys_pdf_editor.ocr_engine import find_tesseract_binary
 
@@ -1983,10 +2014,13 @@ def test_debian_and_appimage_packaging_ocr_and_runtime_configuration(tmp_path, m
     ):
         assert lang_pkg in control_text
 
-    # 2. debian/postinst dependencies
-    postinst_text = (repo_root / "debian" / "postinst").read_text(encoding="utf-8")
-    assert "pyhanko-certvalidator" in postinst_text
-    assert "Pillow" in postinst_text
+    # 2. Consistency of version limits across pyproject.toml, requirements.txt, debian/postinst, and build-appimage.sh
+    for rel_path in ("pyproject.toml", "requirements.txt", "debian/postinst", "build-appimage.sh"):
+        content = (repo_root / rel_path).read_text(encoding="utf-8")
+        assert "PyMuPDF>=1.24.0,<2.0.0" in content, f"Missing PyMuPDF>=1.24.0,<2.0.0 in {rel_path}"
+        assert "anyconvert>=0.1.11" in content, f"Missing anyconvert>=0.1.11 in {rel_path}"
+        assert "pyhanko-certvalidator>=0.24.0" in content, f"Missing pyhanko-certvalidator>=0.24.0 in {rel_path}"
+        assert "Pillow>=9.0.0" in content, f"Missing Pillow>=9.0.0 in {rel_path}"
 
     # 3. build-appimage.sh syntax & OCR bundling
     appimage_script = repo_root / "build-appimage.sh"
@@ -1994,7 +2028,6 @@ def test_debian_and_appimage_packaging_ocr_and_runtime_configuration(tmp_path, m
     assert "AppDir/usr/share/tessdata" in script_text
     assert "TESSDATA_PREFIX" in script_text
     assert "PYTHONDONTWRITEBYTECODE=1" in script_text
-    assert "pyhanko-certvalidator" in script_text
 
     syntax_check = subprocess.run(["bash", "-n", str(appimage_script)], capture_output=True, text=True)
     assert syntax_check.returncode == 0, f"build-appimage.sh syntax error: {syntax_check.stderr}"
