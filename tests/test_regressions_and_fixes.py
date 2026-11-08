@@ -2393,3 +2393,95 @@ class TestLargeImageMemoryBounding:
         with Image.open(io.BytesIO(fitted)) as out_im:
             assert max(out_im.size) <= 4096
             assert abs((out_im.width / out_im.height) - 0.25) < 0.01
+
+
+class TestAppImagePythonIsolation:
+    """Verify AppImage launcher isolates bundled Python from host PYTHONPATH, PYTHONHOME, and user site-packages."""
+
+    @staticmethod
+    def _extract_launcher_heredoc() -> str:
+        script_path = os.path.join(workspace_dir, "build-appimage.sh")
+        with open(script_path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        marker = "cat << 'EOF' > AppDir/usr/bin/word-sys-pdf-editor\n"
+        assert marker in content, "Launcher heredoc marker missing in build-appimage.sh"
+        start = content.index(marker) + len(marker)
+        end = content.index("\nEOF\n", start)
+        return content[start:end]
+
+    def test_build_appimage_launcher_unsets_host_python_vars_and_uses_isolated_flags(self):
+        launcher = self._extract_launcher_heredoc()
+        assert "unset GTK_THEME" in launcher
+        assert "unset PYTHONPATH" in launcher
+        assert "unset PYTHONHOME" in launcher
+        assert "unset PYTHONUSERBASE" in launcher
+        assert "export PYTHONNOUSERSITE=1" in launcher
+        assert "export PYTHONDONTWRITEBYTECODE=1" in launcher
+        assert 'exec "$SELF_DIR/python3" -s -B "$SELF_DIR/word-sys-pdf-editor.py" "$@"' in launcher
+
+    def test_launcher_runtime_blocks_poisoned_host_pythonpath_and_gi_overrides(self, tmp_path):
+        import json
+        import subprocess
+
+        launcher_body = self._extract_launcher_heredoc()
+        bin_dir = tmp_path / "AppDir" / "usr" / "bin"
+        bin_dir.mkdir(parents=True)
+
+        # Create a poisoned host PYTHONPATH directory mimicking conflicting /usr/lib/python3/dist-packages
+        poison_dir = tmp_path / "poison_dist_packages"
+        poison_dir.mkdir()
+        (poison_dir / "sitecustomize.py").write_text(
+            "raise RuntimeError('Host PYTHONPATH leaked into AppImage runtime!')\n",
+            encoding="utf-8",
+        )
+
+        # Symlink python3 into mock AppDir/usr/bin/python3
+        os.symlink(sys.executable, str(bin_dir / "python3"))
+
+        # Write mock entry script that inspects runtime isolation
+        entry_py = bin_dir / "word-sys-pdf-editor.py"
+        entry_py.write_text(
+            "import json, os, sys\n"
+            "print(json.dumps({\n"
+            "    'PYTHONPATH': os.environ.get('PYTHONPATH'),\n"
+            "    'PYTHONHOME': os.environ.get('PYTHONHOME'),\n"
+            "    'PYTHONUSERBASE': os.environ.get('PYTHONUSERBASE'),\n"
+            "    'GTK_THEME': os.environ.get('GTK_THEME'),\n"
+            "    'PYTHONNOUSERSITE': os.environ.get('PYTHONNOUSERSITE'),\n"
+            "    'no_user_site': bool(sys.flags.no_user_site),\n"
+            "    'dont_write_bytecode': bool(sys.flags.dont_write_bytecode),\n"
+            "    'sys_path': sys.path,\n"
+            "    'argv': sys.argv[1:],\n"
+            "}))\n",
+            encoding="utf-8",
+        )
+
+        wrapper_path = bin_dir / "word-sys-pdf-editor"
+        wrapper_path.write_text(launcher_body + "\n", encoding="utf-8")
+        wrapper_path.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(poison_dir)
+        env["PYTHONHOME"] = "/nonexistent/broken/pythonhome"
+        env["PYTHONUSERBASE"] = str(tmp_path / "poison_userbase")
+        env["GTK_THEME"] = "HighContrastInverse"
+
+        proc = subprocess.run(
+            [str(wrapper_path), "--test-arg", "sample.pdf"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, f"Wrapper failed: {proc.stderr}"
+        data = json.loads(proc.stdout.strip())
+        assert data["PYTHONPATH"] is None
+        assert data["PYTHONHOME"] is None
+        assert data["PYTHONUSERBASE"] is None
+        assert data["GTK_THEME"] is None
+        assert data["PYTHONNOUSERSITE"] == "1"
+        assert data["no_user_site"] is True
+        assert data["dont_write_bytecode"] is True
+        assert str(poison_dir) not in data["sys_path"]
+        assert data["argv"] == ["--test-arg", "sample.pdf"]
+

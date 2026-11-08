@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+unset PYTHONPATH
+unset PYTHONHOME
+unset PYTHONUSERBASE
+export PYTHONNOUSERSITE=1
+
 ARCH="$(uname -m)"
 echo "=== Building word-sys PDF Editor for architecture: $ARCH ==="
 
@@ -63,9 +68,13 @@ EOF
 cat << 'EOF' > AppDir/usr/bin/word-sys-pdf-editor
 #!/bin/bash
 unset GTK_THEME
+unset PYTHONPATH
+unset PYTHONHOME
+unset PYTHONUSERBASE
 SELF_DIR="$(dirname "$(readlink -f "$0")")"
 export APPDIR="${APPDIR:-$(readlink -f "$SELF_DIR/../..")}"
 export PATH="$SELF_DIR:$PATH"
+export PYTHONNOUSERSITE=1
 export PYTHONDONTWRITEBYTECODE=1
 if [ -d "$SELF_DIR/../share/tessdata" ] && [ -z "$TESSDATA_PREFIX" ]; then
     export TESSDATA_PREFIX="$SELF_DIR/../share/tessdata"
@@ -73,7 +82,7 @@ fi
 export GDK_PIXBUF_MODULEDIR="$SELF_DIR/../lib/gdk-pixbuf-2.0/2.10.0/loaders"
 export GDK_PIXBUF_MODULE_FILE="$SELF_DIR/../lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
 export LD_LIBRARY_PATH="$SELF_DIR/../lib:$SELF_DIR/../lib/gdk-pixbuf-2.0/2.10.0/loaders:$LD_LIBRARY_PATH"
-exec "$SELF_DIR/python3" "$SELF_DIR/word-sys-pdf-editor.py" "$@"
+exec "$SELF_DIR/python3" -s -B "$SELF_DIR/word-sys-pdf-editor.py" "$@"
 EOF
 chmod +x AppDir/usr/bin/word-sys-pdf-editor
 
