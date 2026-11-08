@@ -3173,6 +3173,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.action_confirm_delete.connect('change-state', on_confirm_delete_change)
         self.add_action(self.action_confirm_delete)
 
+        current_auto_switch = bool(get_setting("auto_switch_to_select", True))
+        self.action_auto_switch_select = Gio.SimpleAction.new_stateful(
+            'auto_switch_to_select', None, GLib.Variant.new_boolean(current_auto_switch)
+        )
+        def on_auto_switch_select_change(action, value):
+            new_val = value.get_boolean()
+            action.set_state(value)
+            set_setting("auto_switch_to_select", new_val)
+        self.action_auto_switch_select.connect('change-state', on_auto_switch_select_change)
+        self.add_action(self.action_auto_switch_select)
+
         current_lang = get_language()
         self.action_change_language = Gio.SimpleAction.new_stateful(
             'change_language', GLib.VariantType.new('s'), GLib.Variant.new_string(current_lang)
@@ -3404,7 +3415,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         meas_selected = getattr(self, 'selected_measurement', None) is not None
         shape_controls_active = in_edit and (shape_selected or self.tool_mode in ("add_ellipse", "add_rectangle", "add_checkmark", "add_cross"))
         stroke_controls_active = in_edit and (stroke_selected or self.tool_mode in ("pen", "highlighter"))
-        form_builder_active = in_edit and (self.tool_mode == "form_builder")
+        form_builder_active = in_edit and (self.tool_mode == "form_builder" or getattr(self, 'selected_form_field', None) is not None)
         calibrate_active = in_edit and (self.tool_mode == "calibrate")
         measure_active = in_edit and (self.tool_mode in ("measure_distance", "measure_area", "calibrate") or meas_selected)
         stamp_active = in_edit and (self.tool_mode == "add_stamp" or (getattr(self, 'selected_image', None) and getattr(self.selected_image, 'is_stamp', False)))
@@ -3449,7 +3460,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if stamp_active:
                 self._update_stamp_controls()
 
-        redact_active = (getattr(self, 'tool_mode', None) == "redact")
+        redact_active = in_edit and (getattr(self, 'tool_mode', None) == "redact" or getattr(self, 'selected_redaction_mark', None) is not None)
         if hasattr(self, 'redaction_toolbar_box') and self.redaction_toolbar_box:
             self.redaction_toolbar_box.set_visible(redact_active)
             if redact_active:
@@ -9236,6 +9247,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if getattr(self, '_image_dialog_open', False) is True:
             return
         self._image_dialog_open = True
+        click_mods = int(getattr(self, "_last_placement_modifiers", 0) or 0)
 
         filter_img = Gtk.FileFilter(name=_("image_filter_label"))
         for mime in ["image/png", "image/jpeg", "image/webp", "image/bmp", "image/gif", "image/tiff"]:
@@ -9284,7 +9296,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.selected_form_field = None
                 self.selected_measurement = None
 
-                self.tool_mode = "select"
+                PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=click_mods)
                 self.document_modified = True
                 self._refresh_thumbnail(target_page)
                 self.pdf_view.queue_draw()
@@ -10017,9 +10029,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pending_format_change_obj = text_obj_to_apply
             self.before_format_change_state = snapshot_object_state(text_obj_to_apply)
             self._update_text_format_controls(text_obj_to_apply)
+            if getattr(text_obj_to_apply, 'is_new', False) and getattr(self, 'tool_mode', None) == "add_text":
+                PdfEditorWindow._maybe_auto_switch_to_select(self)
 
-        if hasattr(self, '_invalidate_spatial_index'):
-            self._invalidate_spatial_index(self.current_page_index)
         if hasattr(self, '_invalidate_spatial_index'):
             self._invalidate_spatial_index(self.current_page_index)
         self.drag_threshold_passed = False
@@ -12291,6 +12303,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._switch_active_page(target_page)
 
         modifiers = Gtk.EventController.get_current_event_state(gesture) if isinstance(gesture, Gtk.EventController) else 0
+        self._last_placement_modifiers = int(modifiers) if isinstance(modifiers, (int, Gdk.ModifierType)) else 0
         ctrl_pressed = bool(modifiers & Gdk.ModifierType.CONTROL_MASK)
 
         clicked_text = self._find_text_at_pos(page_x_unzoomed, page_y_unzoomed)
@@ -12304,9 +12317,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.view_mode:
             if n_press == 1:
                 if getattr(self, 'view_tool_mode', None) == "add_sticky_note" or (hasattr(self, 'view_sticky_note_btn') and self.view_sticky_note_btn and self.view_sticky_note_btn.get_active()):
-                    if hasattr(self, 'view_sticky_note_btn') and self.view_sticky_note_btn:
-                        self.view_sticky_note_btn.set_active(False)
-                    self.view_tool_mode = None
+                    PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=self._last_placement_modifiers)
                     self._create_sticky_note_at(page_x_unzoomed, page_y_unzoomed)
                     return
 
@@ -12538,22 +12549,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.last_mouse_page_pos = None
                 return
 
-        elif self.tool_mode == "form_builder":
-            unrot_px, unrot_py = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed)
-            clicked_form_field = self._find_form_field_at_pos(unrot_px, unrot_py)
-            if clicked_form_field:
-                self._can_drag_object = (clicked_form_field is obj_before_press)
-                if hasattr(self, 'select_object'):
-                    self.select_object(clicked_form_field)
-                else:
-                    self.selected_form_field = clicked_form_field
-            else:
-                if hasattr(self, 'deselect_all'):
-                    self.deselect_all()
-                else:
-                    self.selected_form_field = None
-                self._can_drag_object = False
-
             if self.tool_mode == "measure_area":
                 unrot_x, unrot_y = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed)
                 if n_press >= 2:
@@ -12569,6 +12564,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         cmd = AddMeasurementCommand(self, meas)
                         cmd.execute()
                         self.undo_manager.add_command(cmd)
+                        self.selected_measurement = meas
+                        PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=self._last_placement_modifiers)
                         self.pdf_view.queue_draw()
                         self._update_ui_state()
                         return
@@ -12592,6 +12589,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             cmd = AddMeasurementCommand(self, meas)
                             cmd.execute()
                             self.undo_manager.add_command(cmd)
+                            self.selected_measurement = meas
+                            PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=self._last_placement_modifiers)
                             self.pdf_view.queue_draw()
                             self._update_ui_state()
                             return
@@ -12600,6 +12599,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.temp_polygon_vertices.append((unrot_x, unrot_y))
                     self.pdf_view.queue_draw()
                     return
+
+        elif self.tool_mode == "form_builder":
+            unrot_px, unrot_py = self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed)
+            clicked_form_field = self._find_form_field_at_pos(unrot_px, unrot_py)
+            if clicked_form_field:
+                self._can_drag_object = (clicked_form_field is obj_before_press)
+                if hasattr(self, 'select_object'):
+                    self.select_object(clicked_form_field)
+                else:
+                    self.selected_form_field = clicked_form_field
+            else:
+                if hasattr(self, 'deselect_all'):
+                    self.deselect_all()
+                else:
+                    self.selected_form_field = None
+                self._can_drag_object = False
 
         elif self.tool_mode == "add_text":
             if self.inline_editor_widget is not None:
@@ -12656,6 +12671,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             self.selected_text = new_text_obj
             self.selected_image = None
+            PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=self._last_placement_modifiers)
             self._update_text_format_controls(self.selected_text)
             self._show_inline_editor(new_text_obj, click_x=x, click_y=y)
             self._update_ui_state()
@@ -13605,6 +13621,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_shape = None
         if hasattr(self, 'selected_stroke') and self.selected_stroke:
             self.selected_stroke = None
+        if tool_name != "select":
+            if hasattr(self, 'selected_form_field'):
+                self.selected_form_field = None
+            if hasattr(self, 'selected_redaction_mark'):
+                self.selected_redaction_mark = None
+            if hasattr(self, 'selected_measurement'):
+                self.selected_measurement = None
 
         self.pdf_view.queue_draw()
 
@@ -13999,6 +14022,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Initiate canvas drag gesture for selection, movement, resizing, or freehand drawing."""
         if not self.doc:
             return
+
+        try:
+            mods = Gtk.EventController.get_current_event_state(gesture) if isinstance(gesture, Gtk.EventController) else 0
+            self._last_placement_modifiers = int(mods) if isinstance(mods, (int, Gdk.ModifierType)) else 0
+        except Exception:
+            self._last_placement_modifiers = 0
 
         target_page, page_x, page_y = self.canvas_to_page_coords(start_x, start_y)
         self.drag_start_page_index = target_page
@@ -14808,6 +14837,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if self.dragging_to_create:
             self.dragging_to_create = False
+            try:
+                end_mods = Gtk.EventController.get_current_event_state(gesture) if isinstance(gesture, Gtk.EventController) else 0
+                end_mods_int = int(end_mods) if isinstance(end_mods, (int, Gdk.ModifierType)) else 0
+            except Exception:
+                end_mods_int = 0
+            drag_mods = int(getattr(self, "_last_placement_modifiers", 0) or 0) | end_mods_int
             if getattr(self, 'temp_stroke', None) is not None:
                 stroke_to_add = self.temp_stroke
                 self.temp_stroke = None
@@ -14826,6 +14861,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.undo_manager.add_command(command)
                     self.document_modified = True
                     self._refresh_thumbnail(self.current_page_index)
+                    PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=drag_mods, is_drawing_stroke=True)
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
                 return
@@ -14858,6 +14894,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.temp_shape.is_baked = True
                 self.temp_shape = None
                 self._refresh_thumbnail(self.current_page_index)
+                PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=drag_mods)
                 
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
@@ -14923,7 +14960,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                             self.selected_stroke = None
                             self.selected_form_field = None
                             self.selected_measurement = None
-                            self.tool_mode = "select"
+                            PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=drag_mods)
 
                             command = AddObjectCommand(self, image_obj)
                             command.execute()
@@ -14983,6 +15020,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self._refresh_thumbnail(self.current_page_index)
                         if hasattr(self, 'status_label') and self.status_label:
                             self.status_label.set_text(_("stamp_placed_status").format(active_stamp.name))
+                        PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=drag_mods)
                         self._update_ui_state()
                         self.pdf_view.queue_draw()
 
@@ -15073,7 +15111,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self.selected_form_field = None
                         self.selected_measurement = None
 
-                        self.tool_mode = "select"
+                        PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=drag_mods)
                         self.document_modified = True
                         if hasattr(self, '_refresh_thumbnail'):
                             self._refresh_thumbnail(target_page)
@@ -15109,7 +15147,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.selected_form_field = None
                     self.selected_measurement = None
 
-                    self.tool_mode = "select"
+                    PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=drag_mods)
                     self.document_modified = True
                     if hasattr(self, '_refresh_thumbnail'):
                         self._refresh_thumbnail(target_page)
@@ -15145,7 +15183,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     if self.undo_manager:
                         self.undo_manager.record(cmd)
                     self.selected_redaction_mark = mark
-                    self.tool_mode = "select"
+                    PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=drag_mods)
                     self._update_ui_state()
                     self.pdf_view.queue_draw()
                     self._open_redaction_popover(mark)
@@ -15172,6 +15210,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
                 rect = (x1, y1, x2, y2)
                 self._create_new_form_field(rect)
+                PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=drag_mods)
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
             elif getattr(self, 'temp_calibration_line', None) is not None:
@@ -15206,6 +15245,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     cmd = AddMeasurementCommand(self, meas)
                     cmd.execute()
                     self.undo_manager.add_command(cmd)
+                    self.selected_measurement = meas
+                    PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=drag_mods)
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
             elif getattr(self, 'temp_measurement_rect', None) is not None:
@@ -15228,6 +15269,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     cmd = AddMeasurementCommand(self, meas)
                     cmd.execute()
                     self.undo_manager.add_command(cmd)
+                    self.selected_measurement = meas
+                    PdfEditorWindow._maybe_auto_switch_to_select(self, modifiers=drag_mods)
                 self.pdf_view.queue_draw()
                 self._update_ui_state()
             return
@@ -17204,7 +17247,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 btn_del = Gtk.Button(label=_("delete_confirm"))
                 btn_del.add_css_class("destructive-action")
                 def on_delete_text(b):
-                    self._dismiss_context_popover()
+                    PdfEditorWindow._dismiss_context_popover(self)
                     self._handle_delete_with_confirmation(clicked_text, "delete_text_confirm")
                 btn_del.connect("clicked", on_delete_text)
                 popover_box.append(btn_del)
@@ -17241,7 +17284,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("menu_delete_shape"))
             btn_del.add_css_class("destructive-action")
             def on_delete_shape(b):
-                self._dismiss_context_popover()
+                PdfEditorWindow._dismiss_context_popover(self)
                 self._handle_delete_with_confirmation(clicked_shape, "delete_shape_confirm")
             btn_del.connect("clicked", on_delete_shape)
             popover_box.append(btn_del)
@@ -17297,7 +17340,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("menu_delete_image"))
             btn_del.add_css_class("destructive-action")
             def on_delete_image(b):
-                self._dismiss_context_popover()
+                PdfEditorWindow._dismiss_context_popover(self)
                 self._handle_delete_with_confirmation(clicked_image, "delete_image_confirm")
             btn_del.connect("clicked", on_delete_image)
             popover_box.append(btn_del)
@@ -17311,7 +17354,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("delete_confirm"))
             btn_del.add_css_class("destructive-action")
             def on_delete_meas(b):
-                self._dismiss_context_popover()
+                PdfEditorWindow._dismiss_context_popover(self)
                 self._handle_delete_with_confirmation(clicked_measurement, "delete_shape_confirm")
             btn_del.connect("clicked", on_delete_meas)
             popover_box.append(btn_del)
@@ -17375,7 +17418,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _handle_context_action(self, action, obj, x, y):
         """Execute actions dispatched from context menu popovers."""
-        self._dismiss_context_popover()
+        PdfEditorWindow._dismiss_context_popover(self)
             
         if action == "edit_text":
             self._show_inline_editor(obj, click_x=x, click_y=y)
@@ -17851,6 +17894,41 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, 'action_confirm_delete'):
             self.action_confirm_delete.set_state(GLib.Variant.new_boolean(val))
 
+    def _update_auto_switch_select_menu_state(self, val: bool):
+        """Update the auto_switch_to_select menu action state."""
+        if hasattr(self, 'action_auto_switch_select') and self.action_auto_switch_select:
+            self.action_auto_switch_select.set_state(GLib.Variant.new_boolean(bool(val)))
+
+    def _should_auto_switch_to_select(self, modifiers: Optional[int] = None, is_drawing_stroke: bool = False) -> bool:
+        """Determine whether the active tool should automatically switch back to Selection ('select') after object placement."""
+        if is_drawing_stroke:
+            keep_drawing = bool(get_setting("keep_drawing_tools_active", True))
+            base_switch = not keep_drawing
+        else:
+            base_switch = bool(get_setting("auto_switch_to_select", True))
+
+        if modifiers is None:
+            modifiers = int(getattr(self, "_last_placement_modifiers", 0) or 0)
+        shift_held = bool(int(modifiers) & int(Gdk.ModifierType.SHIFT_MASK))
+        return (not base_switch) if shift_held else base_switch
+
+    def _maybe_auto_switch_to_select(self, modifiers: Optional[int] = None, is_drawing_stroke: bool = False) -> bool:
+        """Switch tool_mode to 'select' (or deactivate view_tool_mode) after object creation if configured."""
+        should_switch = PdfEditorWindow._should_auto_switch_to_select(
+            self,
+            modifiers=modifiers,
+            is_drawing_stroke=is_drawing_stroke,
+        )
+        self._last_placement_modifiers = 0
+        if should_switch:
+            if getattr(self, "view_mode", False):
+                if hasattr(self, "view_sticky_note_btn") and self.view_sticky_note_btn:
+                    self.view_sticky_note_btn.set_active(False)
+                self.view_tool_mode = None
+            else:
+                self.tool_mode = "select"
+        return should_switch
+
     def _dismiss_context_popover(self):
         """Safely close any active canvas context menu popover."""
         if hasattr(self, 'context_popover') and self.context_popover:
@@ -17863,7 +17941,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Handle delete with confirmation."""
         from .ui_components import show_confirm_dialog
 
-        self._dismiss_context_popover()
+        PdfEditorWindow._dismiss_context_popover(self)
         
         if isinstance(obj, EditableText):
             confirm_text = _("delete_text_confirm").format(f"{obj.text[:50]}...")
@@ -17899,7 +17977,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_confirm_delete_menu_state(False)
             
         if confirmed:
-            self._dismiss_context_popover()
+            PdfEditorWindow._dismiss_context_popover(self)
             if hasattr(self, 'hide_text_editor') and getattr(self, 'editing_text_obj', None) in (
                 obj, getattr(obj, 'linked_text', None)
             ):
@@ -18001,6 +18079,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.undo_manager.add_command(command)
             
             self.selected_text = new_text
+            PdfEditorWindow._maybe_auto_switch_to_select(self)
             self._update_text_format_controls(new_text)
             self.document_modified = True
             self._refresh_thumbnail(self.current_page_index)
@@ -18082,7 +18161,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_form_field = None
         self.selected_measurement = None
 
-        self.tool_mode = "select"
+        PdfEditorWindow._maybe_auto_switch_to_select(self)
         self.document_modified = True
         if hasattr(self, '_refresh_thumbnail'):
             self._refresh_thumbnail(page_num)
@@ -18177,6 +18256,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_form_field = None
         self.selected_measurement = None
 
+        PdfEditorWindow._maybe_auto_switch_to_select(self)
         self._update_text_format_controls(new_text_obj)
         self._show_inline_editor(new_text_obj, target_rect=patch_obj.bbox)
         if hasattr(self, 'status_label') and self.status_label:

@@ -1810,6 +1810,149 @@ class TestProportionalTransformHandles(unittest.TestCase):
         self.assertEqual(image.bbox, (50.0, 50.0, 290.0, 160.0))
 
 
+class TestConsistentAutoSwitchToSelect(unittest.TestCase):
+    """Verify consistent automatic switching to the Selection tool across placement tools and Shift-override behavior."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.app = Adw.Application(application_id="org.word_sys.test_auto_switch_select")
+        except Exception:
+            cls.app = None
+
+    def setUp(self):
+        from word_sys_pdf_editor import i18n
+        self._orig_settings = dict(i18n._settings)
+        self._save_patcher = patch("word_sys_pdf_editor.i18n._save_settings")
+        self._save_patcher.start()
+        self.doc = fitz.open()
+        self.doc.new_page(width=600, height=800)
+        self.win = PdfEditorWindow(application=self.app)
+        self.win.font_scan_in_progress = False
+        self.win.set_continuous_scroll_mode(False)
+        self.win.doc = self.doc
+        self.win.current_page_index = 0
+        self.win.current_pdf_page_width = 600
+        self.win.current_pdf_page_height = 800
+        self.win.zoom_level = 1.0
+        self.win.view_mode = False
+        self.win.undo_manager = MagicMock()
+        set_setting("auto_switch_to_select", True)
+        set_setting("keep_drawing_tools_active", True)
+
+    def tearDown(self):
+        from word_sys_pdf_editor import i18n
+        i18n._settings.clear()
+        i18n._settings.update(self._orig_settings)
+        self._save_patcher.stop()
+        if hasattr(self, "win") and self.win:
+            try:
+                self.win.close_document()
+                self.win.destroy()
+            except Exception:
+                pass
+        if getattr(self, "doc", None) is not None and not getattr(self.doc, "is_closed", True):
+            try:
+                self.doc.close()
+            except Exception:
+                pass
+
+    def test_auto_switch_helper_respects_preference_and_shift_override(self):
+        self.win.tool_mode = "add_rectangle"
+        set_setting("auto_switch_to_select", True)
+
+        # Shift held inverts auto-switch -> stays in add_rectangle
+        switched = self.win._maybe_auto_switch_to_select(modifiers=int(Gdk.ModifierType.SHIFT_MASK))
+        self.assertFalse(switched)
+        self.assertEqual(self.win.tool_mode, "add_rectangle")
+
+        # Normal placement switches to select
+        switched = self.win._maybe_auto_switch_to_select(modifiers=0)
+        self.assertTrue(switched)
+        self.assertEqual(self.win.tool_mode, "select")
+
+        # When auto_switch_to_select is False, normal placement keeps active tool
+        set_setting("auto_switch_to_select", False)
+        self.win.tool_mode = "add_ellipse"
+        switched = self.win._maybe_auto_switch_to_select(modifiers=0)
+        self.assertFalse(switched)
+        self.assertEqual(self.win.tool_mode, "add_ellipse")
+
+        # Shift held when auto_switch_to_select is False switches to select
+        switched = self.win._maybe_auto_switch_to_select(modifiers=int(Gdk.ModifierType.SHIFT_MASK))
+        self.assertTrue(switched)
+        self.assertEqual(self.win.tool_mode, "select")
+
+    def test_drawing_stroke_tools_stay_active_by_default(self):
+        self.win.tool_mode = "pen"
+        set_setting("keep_drawing_tools_active", True)
+        switched = self.win._maybe_auto_switch_to_select(modifiers=0, is_drawing_stroke=True)
+        self.assertFalse(switched)
+        self.assertEqual(self.win.tool_mode, "pen")
+
+        set_setting("keep_drawing_tools_active", False)
+        switched = self.win._maybe_auto_switch_to_select(modifiers=0, is_drawing_stroke=True)
+        self.assertTrue(switched)
+        self.assertEqual(self.win.tool_mode, "select")
+
+    def test_add_text_tool_auto_switches_to_select_and_respects_disabled_setting(self):
+        gesture = MagicMock()
+        self.win. _show_inline_editor = MagicMock()
+
+        # Enabled (default): switches from add_text to select upon placing text
+        set_setting("auto_switch_to_select", True)
+        self.win.tool_mode = "add_text"
+        self.win.on_pdf_view_pressed(gesture, 1, 120.0, 140.0)
+        self.assertIsNotNone(self.win.selected_text)
+        self.assertEqual(self.win.tool_mode, "select")
+
+        # Disabled: stays in add_text
+        set_setting("auto_switch_to_select", False)
+        self.win.inline_editor_widget = None
+        self.win.tool_mode = "add_text"
+        self.win.on_pdf_view_pressed(gesture, 1, 200.0, 240.0)
+        self.assertEqual(self.win.tool_mode, "add_text")
+
+    def test_shapes_and_checkmarks_auto_switch_to_select(self):
+        gesture = MagicMock()
+        for tool in ("add_rectangle", "add_ellipse", "add_checkmark", "add_cross"):
+            self.win.on_tool_selected(None, tool)
+            self.win.on_drag_begin(gesture, 100.0, 100.0)
+            self.win.on_drag_update(gesture, 60.0, 40.0)
+            self.win.on_drag_end(gesture, 60.0, 40.0)
+            self.assertEqual(self.win.tool_mode, "select", f"Tool '{tool}' did not switch to select")
+            self.assertIsNotNone(self.win.selected_shape)
+
+    def test_measurements_and_form_builder_auto_switch_to_select(self):
+        gesture = MagicMock()
+
+        # Distance measurement
+        self.win.tool_mode = "measure_distance"
+        self.win.on_drag_begin(gesture, 80.0, 80.0)
+        self.win.on_drag_update(gesture, 100.0, 0.0)
+        self.win.on_drag_end(gesture, 100.0, 0.0)
+        self.assertEqual(self.win.tool_mode, "select")
+        self.assertIsNotNone(self.win.selected_measurement)
+
+        # Area measurement
+        self.win.tool_mode = "measure_area"
+        self.win.on_drag_begin(gesture, 80.0, 120.0)
+        self.win.on_drag_update(gesture, 100.0, 60.0)
+        self.win.on_drag_end(gesture, 100.0, 60.0)
+        self.assertEqual(self.win.tool_mode, "select")
+        self.assertIsNotNone(self.win.selected_measurement)
+
+        # Form builder
+        self.win.tool_mode = "form_builder"
+        self.win.form_builder_field_type = "text"
+        self.win.on_drag_begin(gesture, 100.0, 300.0)
+        self.win.on_drag_update(gesture, 140.0, 30.0)
+        self.win.on_drag_end(gesture, 140.0, 30.0)
+        self.assertEqual(self.win.tool_mode, "select")
+        self.assertIsNotNone(self.win.selected_form_field)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

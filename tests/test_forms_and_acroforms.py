@@ -701,14 +701,16 @@ class TestFormBuilder(unittest.TestCase):
         self.window.selected_form_field = field
 
         # Test cancelled deletion
-        with patch('word_sys_pdf_editor.ui_components.show_confirm_dialog', return_value=(False, False)):
+        with patch('word_sys_pdf_editor.window.get_setting', return_value=True), \
+             patch('word_sys_pdf_editor.ui_components.show_confirm_dialog', return_value=(False, False)):
             self.window._delete_selected_form_field()
             # Still exists
             fields, _ = pdf_handler.extract_acroform_fields(self.doc, 0)
             self.assertEqual(len(fields), 1)
 
         # Test accepted deletion
-        with patch('word_sys_pdf_editor.ui_components.show_confirm_dialog', return_value=(True, False)):
+        with patch('word_sys_pdf_editor.window.get_setting', return_value=True), \
+             patch('word_sys_pdf_editor.ui_components.show_confirm_dialog', return_value=(True, False)):
             self.window._delete_selected_form_field()
             fields_after, _ = pdf_handler.extract_acroform_fields(self.doc, 0)
             self.assertEqual(len(fields_after), 0)
