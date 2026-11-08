@@ -1333,6 +1333,112 @@ class TestPatchAndLayerLocalization(unittest.TestCase):
                 )
 
 
+class TestContextMenuAutoDismissOnDelete(unittest.TestCase):
+    """Verify context menu popover automatically closes when deleting Clone/Patch, Image, Text, or Shape objects."""
+
+    def setUp(self):
+        self.doc = fitz.open()
+        self.page = self.doc.new_page(width=600, height=800)
+        pdf_handler.save_page_snapshot(self.doc, 0, force=True)
+        self.win = MockLayerWindow(self.doc)
+        self.win.context_popover = MagicMock()
+        self.win.editing_text_obj = None
+        self.win.hide_text_editor = MagicMock()
+        self.win._dismiss_context_popover = PdfEditorWindow._dismiss_context_popover.__get__(self.win)
+        self.win._handle_delete_with_confirmation = PdfEditorWindow._handle_delete_with_confirmation.__get__(self.win)
+
+    def tearDown(self):
+        pdf_handler._page_snapshots.clear()
+        if self.doc:
+            self.doc.close()
+
+    @patch("word_sys_pdf_editor.window.get_setting", return_value=False)
+    def test_delete_clone_patch_without_confirmation_closes_context_popover(self, _mock_setting):
+        im = Image.new("RGBA", (80, 40), (255, 255, 255, 255))
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        patch_obj = PatchObject(
+            bbox=(100.0, 100.0, 180.0, 140.0),
+            page_number=0,
+            image_bytes=buf.getvalue(),
+        )
+        self.win.editable_images = [patch_obj]
+        self.win.selected_image = patch_obj
+
+        self.win._handle_delete_with_confirmation(patch_obj, "delete_image_confirm")
+
+        self.win.context_popover.popdown.assert_called()
+        self.assertNotIn(patch_obj, self.win.editable_images)
+        self.assertIsNone(self.win.selected_image)
+
+    @patch("word_sys_pdf_editor.ui_components.show_confirm_dialog", return_value=(True, False))
+    @patch("word_sys_pdf_editor.window.get_setting", return_value=True)
+    def test_delete_clone_patch_with_confirmation_closes_context_popover_before_dialog(
+        self, _mock_setting, _mock_dialog
+    ):
+        im = Image.new("RGBA", (80, 40), (255, 255, 255, 255))
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        patch_obj = PatchObject(
+            bbox=(100.0, 100.0, 180.0, 140.0),
+            page_number=0,
+            image_bytes=buf.getvalue(),
+        )
+        self.win.editable_images = [patch_obj]
+        self.win.selected_image = patch_obj
+
+        self.win._handle_delete_with_confirmation(patch_obj, "delete_image_confirm")
+
+        self.win.context_popover.popdown.assert_called()
+        self.assertNotIn(patch_obj, self.win.editable_images)
+
+    @patch("word_sys_pdf_editor.window.get_setting", return_value=False)
+    def test_delete_clone_patch_with_active_linked_text_hides_inline_editor(self, _mock_setting):
+        im = Image.new("RGBA", (80, 40), (255, 255, 255, 255))
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        patch_obj = PatchObject(
+            bbox=(100.0, 100.0, 180.0, 140.0),
+            page_number=0,
+            image_bytes=buf.getvalue(),
+        )
+        linked_txt = EditableText(105.0, 110.0, "Typed Over Patch", page_number=0, is_new=True)
+        patch_obj.linked_text = linked_txt
+        linked_txt.linked_patch = patch_obj
+        self.win.editable_images = [patch_obj]
+        self.win.editable_texts = [linked_txt]
+        self.win.editing_text_obj = linked_txt
+
+        self.win._handle_delete_with_confirmation(patch_obj, "delete_image_confirm")
+
+        self.win.context_popover.popdown.assert_called()
+        self.win.hide_text_editor.assert_called_once()
+        self.assertEqual(self.win.editable_images, [])
+        self.assertEqual(self.win.editable_texts, [])
+
+    @patch("word_sys_pdf_editor.window.get_setting", return_value=False)
+    def test_delete_text_and_shape_close_context_popover(self, _mock_setting):
+        txt = EditableText(50.0, 50.0, "Delete Me", page_number=0, is_new=True)
+        shp = EditableShape(
+            shape_type="rectangle",
+            bbox=(50.0, 80.0, 150.0, 130.0),
+            page_number=0,
+            is_new=True,
+        )
+        self.win.editable_texts = [txt]
+        self.win.editable_shapes = [shp]
+
+        self.win._handle_delete_with_confirmation(txt, "delete_text_confirm")
+        self.win.context_popover.popdown.assert_called()
+        self.assertEqual(self.win.editable_texts, [])
+
+        self.win.context_popover.reset_mock()
+        self.win._handle_delete_with_confirmation(shp, "delete_shape_confirm")
+        self.win.context_popover.popdown.assert_called()
+        self.assertEqual(self.win.editable_shapes, [])
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -17204,6 +17204,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 btn_del = Gtk.Button(label=_("delete_confirm"))
                 btn_del.add_css_class("destructive-action")
                 def on_delete_text(b):
+                    self._dismiss_context_popover()
                     self._handle_delete_with_confirmation(clicked_text, "delete_text_confirm")
                 btn_del.connect("clicked", on_delete_text)
                 popover_box.append(btn_del)
@@ -17240,6 +17241,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("menu_delete_shape"))
             btn_del.add_css_class("destructive-action")
             def on_delete_shape(b):
+                self._dismiss_context_popover()
                 self._handle_delete_with_confirmation(clicked_shape, "delete_shape_confirm")
             btn_del.connect("clicked", on_delete_shape)
             popover_box.append(btn_del)
@@ -17295,6 +17297,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("menu_delete_image"))
             btn_del.add_css_class("destructive-action")
             def on_delete_image(b):
+                self._dismiss_context_popover()
                 self._handle_delete_with_confirmation(clicked_image, "delete_image_confirm")
             btn_del.connect("clicked", on_delete_image)
             popover_box.append(btn_del)
@@ -17308,8 +17311,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_del = Gtk.Button(label=_("delete_confirm"))
             btn_del.add_css_class("destructive-action")
             def on_delete_meas(b):
-                if hasattr(self, 'context_popover') and self.context_popover:
-                    self.context_popover.popdown()
+                self._dismiss_context_popover()
                 self._handle_delete_with_confirmation(clicked_measurement, "delete_shape_confirm")
             btn_del.connect("clicked", on_delete_meas)
             popover_box.append(btn_del)
@@ -17373,8 +17375,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _handle_context_action(self, action, obj, x, y):
         """Execute actions dispatched from context menu popovers."""
-        if hasattr(self, 'context_popover'):
-            self.context_popover.popdown()
+        self._dismiss_context_popover()
             
         if action == "edit_text":
             self._show_inline_editor(obj, click_x=x, click_y=y)
@@ -17850,9 +17851,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, 'action_confirm_delete'):
             self.action_confirm_delete.set_state(GLib.Variant.new_boolean(val))
 
+    def _dismiss_context_popover(self):
+        """Safely close any active canvas context menu popover."""
+        if hasattr(self, 'context_popover') and self.context_popover:
+            try:
+                self.context_popover.popdown()
+            except Exception:
+                pass
+
     def _handle_delete_with_confirmation(self, obj, confirmation_key):
         """Handle delete with confirmation."""
         from .ui_components import show_confirm_dialog
+
+        self._dismiss_context_popover()
         
         if isinstance(obj, EditableText):
             confirm_text = _("delete_text_confirm").format(f"{obj.text[:50]}...")
@@ -17888,6 +17899,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_confirm_delete_menu_state(False)
             
         if confirmed:
+            self._dismiss_context_popover()
+            if hasattr(self, 'hide_text_editor') and getattr(self, 'editing_text_obj', None) in (
+                obj, getattr(obj, 'linked_text', None)
+            ):
+                self.hide_text_editor()
             if isinstance(obj, MeasurementObject):
                 self.selected_measurement = None
                 command = DeleteMeasurementCommand(self, obj)
