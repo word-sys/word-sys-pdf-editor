@@ -2690,4 +2690,109 @@ class TestPreferencesWindowGeneralAndWorkflow:
                 win.destroy()
 
 
+class TestHamburgerMenuCustomizationAndPresets:
+    """Verify Hamburger Menu customization page, presets, individual toggles, and live menu rebuilding."""
+
+    def test_hamburger_page_presets_and_individual_switches_sync(self, tmp_path):
+        from unittest.mock import MagicMock
+        from word_sys_pdf_editor.preferences_dialog import PreferencesWindow
+        from word_sys_pdf_editor.settings_manager import (
+            ALL_HAMBURGER_ITEM_KEYS,
+            HAMBURGER_DOCUMENT_ACTION_KEYS,
+            HAMBURGER_INLINE_TOGGLE_KEYS,
+            HAMBURGER_MENU_PRESETS,
+            SettingsManager,
+        )
+
+        cfg_path = tmp_path / "settings.json"
+        mgr = SettingsManager(config_file=cfg_path)
+        mock_win = MagicMock()
+
+        prefs = PreferencesWindow(editor_window=mock_win, settings_manager=mgr)
+        try:
+            assert set(prefs.hamburger_item_switches.keys()) == set(ALL_HAMBURGER_ITEM_KEYS)
+            assert prefs._hamburger_preset_codes[prefs.hamburger_preset_dropdown.get_selected()] == "standard"
+            for k in HAMBURGER_DOCUMENT_ACTION_KEYS:
+                assert prefs.hamburger_item_switches[k].get_active() is True
+            for k in HAMBURGER_INLINE_TOGGLE_KEYS:
+                assert prefs.hamburger_item_switches[k].get_active() is False
+
+            # Switch preset to Minimal
+            minimal_idx = prefs._hamburger_preset_codes.index("minimal")
+            prefs.hamburger_preset_dropdown.set_selected(minimal_idx)
+            assert mgr.get("hamburger_menu_preset") == "minimal"
+            assert mgr.get("hamburger_visible_items") == HAMBURGER_MENU_PRESETS["minimal"]
+            assert prefs.hamburger_item_switches["save_as"].get_active() is True
+            assert prefs.hamburger_item_switches["export_submenu"].get_active() is True
+            assert prefs.hamburger_item_switches["compress_document"].get_active() is False
+            assert prefs.hamburger_item_switches["toggle_continuous_scroll"].get_active() is False
+            mock_win.rebuild_hamburger_menu.assert_called()
+
+            # Switch preset to Full
+            full_idx = prefs._hamburger_preset_codes.index("full")
+            prefs.hamburger_preset_dropdown.set_selected(full_idx)
+            assert mgr.get("hamburger_menu_preset") == "full"
+            for k in ALL_HAMBURGER_ITEM_KEYS:
+                assert prefs.hamburger_item_switches[k].get_active() is True
+
+            # Toggle individual switch -> transitions preset dropdown to Custom
+            prefs.hamburger_item_switches["ocr_document"].set_active(False)
+            assert mgr.get("hamburger_menu_preset") == "custom"
+            assert mgr.get("hamburger_visible_items")["ocr_document"] is False
+            assert prefs._hamburger_preset_codes[prefs.hamburger_preset_dropdown.get_selected()] == "custom"
+        finally:
+            prefs._on_close_request(prefs)
+            prefs.destroy()
+
+    def test_window_rebuild_hamburger_menu_live_updates(self, tmp_path):
+        from unittest.mock import patch
+        from gi.repository import Adw
+        from word_sys_pdf_editor.settings_manager import (
+            ALL_HAMBURGER_ITEM_KEYS,
+            HAMBURGER_DOCUMENT_ACTION_KEYS,
+            SettingsManager,
+        )
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        cfg_path = tmp_path / "settings.json"
+        mgr = SettingsManager(config_file=cfg_path)
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_hamburger_rebuild")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                win.rebuild_hamburger_menu(settings_manager=mgr)
+                assert set(win.hamburger_visible_action_keys) == set(HAMBURGER_DOCUMENT_ACTION_KEYS)
+
+                # Switch via SettingsManager to minimal -> window listener rebuilds live
+                mgr.set("hamburger_menu_preset", "minimal")
+                assert set(win.hamburger_visible_action_keys) == {"save_as", "export_submenu"}
+
+                # Switch to full -> all 18 configurable items visible
+                mgr.set("hamburger_menu_preset", "full")
+                assert set(win.hamburger_visible_action_keys) == set(ALL_HAMBURGER_ITEM_KEYS)
+
+                # Footer section always remains attached at the end of the menu model
+                n_top = win.hamburger_menu_model.get_n_items()
+                assert n_top >= 2
+                footer_section = win.hamburger_menu_model.get_item_link(n_top - 1, "section")
+                assert footer_section is not None
+                footer_actions = [
+                    footer_section.get_item_attribute_value(i, "action", None).get_string()
+                    for i in range(footer_section.get_n_items())
+                ]
+                assert "win.preferences" in footer_actions
+                assert "win.quick_guide" in footer_actions
+                assert "win.about" in footer_actions
+                assert "app.quit" in footer_actions
+            finally:
+                win.close_document()
+                win.destroy()
+
+
+
 

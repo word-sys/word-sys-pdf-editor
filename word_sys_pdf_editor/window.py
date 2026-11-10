@@ -2016,51 +2016,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.mode_toggle_button.get_style_context().add_class("suggested-action")
         self.mode_toggle_button.connect("clicked", self._toggle_view_edit_mode)
         header.pack_end(self.mode_toggle_button)
-        menu = Gio.Menu()
-        menu.append(_("menu_save_as"), "win.save_as")
-        menu.append(_("menu_compress_document"), "win.compress_document")
-        menu.append(_("protect_document"), "win.protect_document")
-        menu.append(_("digitally_sign_document"), "win.digitally_sign_document")
-        menu.append(_("inspect_digital_signatures"), "win.inspect_digital_signatures")
-        menu.append(_("menu_merge_documents"), "win.merge_documents")
-        menu.append(_("menu_flatten"), "win.flatten_annotations")
-        menu.append(_("menu_manage_stamps"), "win.manage_stamps")
-        menu.append(_("menu_sanitize_document"), "win.sanitize_document")
-        menu.append(_("menu_ocr_document"), "win.ocr_document")
-
-        export_menu = Gio.Menu()
-        export_menu.append(_("menu_export_as"), "win.export_as")
-        export_formats_section = Gio.Menu()
-        export_formats_section.append(_("export_format_docx"), "win.export_docx")
-        export_formats_section.append(_("export_format_pptx"), "win.export_pptx")
-        export_formats_section.append(_("export_format_odt"), "win.export_odt")
-        export_formats_section.append(_("export_format_odp"), "win.export_odp")
-        export_formats_section.append(_("export_format_txt"), "win.export_txt")
-        export_menu.append_section(None, export_formats_section)
-        menu.append_submenu(_("menu_export"), export_menu)
-        
-        pref_section = Gio.Menu()
-        pref_section.append(_("menu_toggle_continuous_scroll"), "win.toggle_continuous_scroll")
-        pref_section.append(_("menu_toggle_eco_mode"), "win.toggle_eco_mode")
-        pref_section.append(_("menu_reveal_ocr_text"), "win.toggle_ocr_overlay")
-        pref_section.append(_("menu_toggle_annotations"), "win.toggle_annotations")
-        pref_section.append(_("menu_confirm_delete"), "win.confirm_delete")
-
-        lang_menu = Gio.Menu()
-        for code, name in get_supported_languages():
-            lang_item = Gio.MenuItem.new(name, f"win.change_language('{code}')")
-            lang_menu.append_item(lang_item)
-        pref_section.append_submenu(_("lang_label"), lang_menu)
-
-        menu.append_section(None, pref_section)
-
-        menu.append_section(None, Gio.Menu())
-        menu.append(_("menu_preferences"), "win.preferences")
-        menu.append(_("menu_quick_guide"), "win.quick_guide")
-        menu.append(_("menu_about"), "win.about")
-        menu.append(_("menu_quit"), "app.quit")
-        popover_menu = Gtk.PopoverMenu.new_from_model(menu)
-        menu_button.set_popover(popover_menu)
+        self.rebuild_hamburger_menu()
 
         self.tab_view = Adw.TabView()
         self.tab_bar = Adw.TabBar()
@@ -15493,6 +15449,118 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         dialog = QuickGuideDialog(self)
         dialog.present()
 
+    def rebuild_hamburger_menu(self, settings_manager=None):
+        """Construct or rebuild the primary hamburger menu according to user visibility preferences."""
+        from .settings_manager import get_settings_manager
+
+        if getattr(self, "_rebuilding_hamburger_menu", False):
+            return getattr(self, "hamburger_menu_model", None)
+
+        self._rebuilding_hamburger_menu = True
+        try:
+            mgr = settings_manager or getattr(self, "_settings_manager", None) or get_settings_manager()
+            if settings_manager is not None:
+                self._settings_manager = settings_manager
+
+            if getattr(self, "_subscribed_hamburger_mgr", None) is not mgr:
+                old_unsub = getattr(self, "_unsub_hamburger_settings", None)
+                if callable(old_unsub):
+                    try:
+                        old_unsub()
+                    except Exception:
+                        pass
+                self._subscribed_hamburger_mgr = mgr
+                self._unsub_hamburger_settings = mgr.subscribe(
+                    lambda _k, _v: self.rebuild_hamburger_menu(),
+                    key="hamburger_visible_items",
+                )
+
+            visible_items = mgr.get("hamburger_visible_items")
+            if not isinstance(visible_items, dict):
+                visible_items = {}
+
+            menu = Gio.Menu()
+            visible_keys = []
+
+            doc_actions = [
+                ("save_as", "menu_save_as", "win.save_as"),
+                ("compress_document", "menu_compress_document", "win.compress_document"),
+                ("protect_document", "protect_document", "win.protect_document"),
+                ("digitally_sign_document", "digitally_sign_document", "win.digitally_sign_document"),
+                ("inspect_digital_signatures", "inspect_digital_signatures", "win.inspect_digital_signatures"),
+                ("merge_documents", "menu_merge_documents", "win.merge_documents"),
+                ("flatten_annotations", "menu_flatten", "win.flatten_annotations"),
+                ("manage_stamps", "menu_manage_stamps", "win.manage_stamps"),
+                ("sanitize_document", "menu_sanitize_document", "win.sanitize_document"),
+                ("ocr_document", "menu_ocr_document", "win.ocr_document"),
+            ]
+            for item_key, label_key, action_name in doc_actions:
+                if visible_items.get(item_key, True):
+                    menu.append(_(label_key), action_name)
+                    visible_keys.append(item_key)
+
+            if visible_items.get("export_submenu", True):
+                export_menu = Gio.Menu()
+                export_menu.append(_("menu_export_as"), "win.export_as")
+                export_formats_section = Gio.Menu()
+                export_formats_section.append(_("export_format_docx"), "win.export_docx")
+                export_formats_section.append(_("export_format_pptx"), "win.export_pptx")
+                export_formats_section.append(_("export_format_odt"), "win.export_odt")
+                export_formats_section.append(_("export_format_odp"), "win.export_odp")
+                export_formats_section.append(_("export_format_txt"), "win.export_txt")
+                export_menu.append_section(None, export_formats_section)
+                menu.append_submenu(_("menu_export"), export_menu)
+                visible_keys.append("export_submenu")
+
+            pref_section = Gio.Menu()
+            inline_toggles = [
+                ("toggle_continuous_scroll", "menu_toggle_continuous_scroll", "win.toggle_continuous_scroll"),
+                ("toggle_eco_mode", "menu_toggle_eco_mode", "win.toggle_eco_mode"),
+                ("toggle_ocr_overlay", "menu_reveal_ocr_text", "win.toggle_ocr_overlay"),
+                ("toggle_annotations", "menu_toggle_annotations", "win.toggle_annotations"),
+                ("confirm_delete", "menu_confirm_delete", "win.confirm_delete"),
+                ("auto_switch_to_select", "prefs_auto_switch_select_title", "win.auto_switch_to_select"),
+            ]
+            for item_key, label_key, action_name in inline_toggles:
+                if visible_items.get(item_key, False):
+                    pref_section.append(_(label_key), action_name)
+                    visible_keys.append(item_key)
+
+            if visible_items.get("language_submenu", False):
+                lang_menu = Gio.Menu()
+                for code, name in get_supported_languages():
+                    lang_item = Gio.MenuItem.new(name, f"win.change_language('{code}')")
+                    lang_menu.append_item(lang_item)
+                pref_section.append_submenu(_("lang_label"), lang_menu)
+                visible_keys.append("language_submenu")
+
+            if pref_section.get_n_items() > 0:
+                menu.append_section(None, pref_section)
+
+            app_section = Gio.Menu()
+            app_section.append(_("menu_preferences"), "win.preferences")
+            app_section.append(_("menu_quick_guide"), "win.quick_guide")
+            app_section.append(_("menu_about"), "win.about")
+            app_section.append(_("menu_quit"), "app.quit")
+            menu.append_section(None, app_section)
+
+            self.hamburger_menu_model = menu
+            self.hamburger_visible_action_keys = visible_keys
+
+            menu_btn = getattr(self, "hamburger_menu_button", None)
+            if menu_btn is not None:
+                popover = getattr(self, "hamburger_menu_popover", None)
+                if popover is not None:
+                    popover.set_menu_model(menu)
+                else:
+                    popover = Gtk.PopoverMenu.new_from_model(menu)
+                    self.hamburger_menu_popover = popover
+                    menu_btn.set_popover(popover)
+
+            return menu
+        finally:
+            self._rebuilding_hamburger_menu = False
+
     def on_preferences_activated(self, action=None, param=None, page_name: Optional[str] = None):
         """Open and present the dedicated GNOME / Libadwaita Preferences Window."""
         from .preferences_dialog import PreferencesWindow
@@ -15505,7 +15573,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     pass
             existing.present()
             return existing
-        dlg = PreferencesWindow(editor_window=self)
+        dlg = PreferencesWindow(
+            editor_window=self,
+            settings_manager=getattr(self, "_settings_manager", None),
+        )
         self._preferences_window = dlg
         if page_name:
             try:

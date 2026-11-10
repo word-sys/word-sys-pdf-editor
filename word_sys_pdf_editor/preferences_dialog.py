@@ -1,8 +1,8 @@
-"""Dedicated GNOME / Libadwaita Preferences Window for Word-Sys PDF Editor."""
+"""Dedicated GNOME / Libadwaita Preferences Window"""
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import gi
 
@@ -12,7 +12,13 @@ from gi.repository import Adw, Gtk
 
 from . import utils
 from .i18n import _, get_language, get_setting, get_supported_languages
-from .settings_manager import SettingsManager, get_settings_manager
+from .settings_manager import (
+    HAMBURGER_DOCUMENT_ACTION_KEYS,
+    HAMBURGER_INLINE_TOGGLE_KEYS,
+    HAMBURGER_ITEM_LABELS,
+    SettingsManager,
+    get_settings_manager,
+)
 
 
 class PreferencesWindow(Adw.PreferencesWindow):
@@ -38,13 +44,11 @@ class PreferencesWindow(Adw.PreferencesWindow):
 
         self._build_general_page()
         self._build_workflow_page()
+        self._build_hamburger_page()
 
         self._unsub_settings = self.settings.subscribe(self._on_setting_changed)
         self.connect("close-request", self._on_close_request)
 
-    # ------------------------------------------------------------------
-    # Page 1: General & Appearance
-    # ------------------------------------------------------------------
     def _build_general_page(self) -> None:
         self.general_page = Adw.PreferencesPage(
             title=_("prefs_page_general"),
@@ -52,13 +56,11 @@ class PreferencesWindow(Adw.PreferencesWindow):
         )
         self.general_page.set_name("general")
 
-        # Group 1: Language & Viewing
         self.appearance_group = Adw.PreferencesGroup(
             title=_("prefs_group_appearance"),
             description=_("prefs_group_appearance_desc"),
         )
 
-        # 1. Application Language selector
         self.language_row = Adw.ActionRow(
             title=_("prefs_lang_title"),
             subtitle=_("prefs_lang_subtitle"),
@@ -76,7 +78,6 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.language_row.set_activatable_widget(self.language_dropdown)
         self.appearance_group.add(self.language_row)
 
-        # 2. Continuous Vertical Scrolling switch
         self.continuous_scroll_row = Adw.ActionRow(
             title=_("prefs_continuous_scroll_title"),
             subtitle=_("prefs_continuous_scroll_subtitle"),
@@ -94,7 +95,6 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.continuous_scroll_row.set_activatable_widget(self.continuous_scroll_switch)
         self.appearance_group.add(self.continuous_scroll_row)
 
-        # 3. Eco / Low-Hardware Performance Mode switch
         self.eco_mode_row = Adw.ActionRow(
             title=_("prefs_eco_mode_title"),
             subtitle=_("prefs_eco_mode_subtitle"),
@@ -114,12 +114,10 @@ class PreferencesWindow(Adw.PreferencesWindow):
 
         self.general_page.add(self.appearance_group)
 
-        # Group 2: Document & Editing Safeguards
         self.behavior_group = Adw.PreferencesGroup(
             title=_("prefs_group_behavior"),
         )
 
-        # 4. Confirm Before Deleting Objects switch
         self.confirm_delete_row = Adw.ActionRow(
             title=_("prefs_confirm_delete_title"),
             subtitle=_("prefs_confirm_delete_subtitle"),
@@ -133,7 +131,6 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.confirm_delete_row.set_activatable_widget(self.confirm_delete_switch)
         self.behavior_group.add(self.confirm_delete_row)
 
-        # 5. Reveal OCR Text Confidence Layer switch
         self.ocr_overlay_row = Adw.ActionRow(
             title=_("prefs_ocr_overlay_title"),
             subtitle=_("prefs_ocr_overlay_subtitle"),
@@ -151,7 +148,6 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.ocr_overlay_row.set_activatable_widget(self.ocr_overlay_switch)
         self.behavior_group.add(self.ocr_overlay_row)
 
-        # 6. Auto-Reload PDF When Modified on Disk switch
         self.auto_reload_row = Adw.ActionRow(
             title=_("prefs_auto_reload_title"),
             subtitle=_("prefs_auto_reload_subtitle"),
@@ -168,9 +164,7 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.general_page.add(self.behavior_group)
         self.add(self.general_page)
 
-    # ------------------------------------------------------------------
-    # Page 2: Tools & Workflow
-    # ------------------------------------------------------------------
+
     def _build_workflow_page(self) -> None:
         self.workflow_page = Adw.PreferencesPage(
             title=_("prefs_page_workflow"),
@@ -178,13 +172,11 @@ class PreferencesWindow(Adw.PreferencesWindow):
         )
         self.workflow_page.set_name("workflow")
 
-        # Group 1: Tool Switching Behavior
         self.tool_switching_group = Adw.PreferencesGroup(
             title=_("prefs_group_tool_switching"),
             description=_("prefs_group_tool_switching_desc"),
         )
 
-        # 1. Automatically switch to Selection tool after creating or editing an object
         self.auto_switch_row = Adw.ActionRow(
             title=_("prefs_auto_switch_select_title"),
             subtitle=_("prefs_auto_switch_select_subtitle"),
@@ -197,7 +189,6 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.auto_switch_row.set_activatable_widget(self.auto_switch_switch)
         self.tool_switching_group.add(self.auto_switch_row)
 
-        # 2. Keep Pen and Highlighter active across multiple strokes
         self.keep_drawing_row = Adw.ActionRow(
             title=_("prefs_keep_drawing_active_title"),
             subtitle=_("prefs_keep_drawing_active_subtitle"),
@@ -212,13 +203,11 @@ class PreferencesWindow(Adw.PreferencesWindow):
 
         self.workflow_page.add(self.tool_switching_group)
 
-        # Group 2: Default Text Formatting
         self.text_defaults_group = Adw.PreferencesGroup(
             title=_("prefs_group_text_defaults"),
             description=_("prefs_group_text_defaults_desc"),
         )
 
-        # 3. Default Font Family selector
         self.default_font_row = Adw.ActionRow(
             title=_("prefs_default_font_family_title"),
             subtitle=_("prefs_default_font_family_subtitle"),
@@ -234,7 +223,6 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.default_font_row.set_activatable_widget(self.default_font_dropdown)
         self.text_defaults_group.add(self.default_font_row)
 
-        # 4. Default Font Size spin button
         self.default_font_size_row = Adw.ActionRow(
             title=_("prefs_default_font_size_title"),
             subtitle=_("prefs_default_font_size_subtitle"),
@@ -250,6 +238,82 @@ class PreferencesWindow(Adw.PreferencesWindow):
 
         self.workflow_page.add(self.text_defaults_group)
         self.add(self.workflow_page)
+
+    def _build_hamburger_page(self) -> None:
+        self.hamburger_page = Adw.PreferencesPage(
+            title=_("prefs_page_hamburger"),
+            icon_name="open-menu-symbolic",
+        )
+        self.hamburger_page.set_name("hamburger")
+
+        self.hamburger_preset_group = Adw.PreferencesGroup(
+            title=_("prefs_group_hamburger_preset"),
+            description=_("prefs_group_hamburger_preset_desc"),
+        )
+
+        self.hamburger_preset_row = Adw.ActionRow(
+            title=_("prefs_hamburger_preset_title"),
+            subtitle=_("prefs_hamburger_preset_subtitle"),
+        )
+        self._hamburger_preset_codes: List[str] = ["standard", "minimal", "full", "custom"]
+        preset_labels: List[str] = [
+            _("prefs_hamburger_preset_standard"),
+            _("prefs_hamburger_preset_minimal"),
+            _("prefs_hamburger_preset_full"),
+            _("prefs_hamburger_preset_custom"),
+        ]
+        self.hamburger_preset_dropdown = Gtk.DropDown.new_from_strings(preset_labels)
+        self.hamburger_preset_dropdown.set_valign(Gtk.Align.CENTER)
+        current_preset = str(self.settings.get("hamburger_menu_preset", "standard"))
+        if current_preset in self._hamburger_preset_codes:
+            self.hamburger_preset_dropdown.set_selected(self._hamburger_preset_codes.index(current_preset))
+        self.hamburger_preset_dropdown.connect("notify::selected", self._on_hamburger_preset_changed)
+        self.hamburger_preset_row.add_suffix(self.hamburger_preset_dropdown)
+        self.hamburger_preset_row.set_activatable_widget(self.hamburger_preset_dropdown)
+        self.hamburger_preset_group.add(self.hamburger_preset_row)
+        self.hamburger_page.add(self.hamburger_preset_group)
+
+        self.hamburger_item_rows: Dict[str, Adw.ActionRow] = {}
+        self.hamburger_item_switches: Dict[str, Gtk.Switch] = {}
+        visible_items: Dict[str, bool] = dict(self.settings.get("hamburger_visible_items"))
+
+        self.hamburger_doc_actions_group = Adw.PreferencesGroup(
+            title=_("prefs_group_hamburger_doc_actions"),
+            description=_("prefs_group_hamburger_doc_actions_desc"),
+        )
+        for item_key in HAMBURGER_DOCUMENT_ACTION_KEYS:
+            label_key = HAMBURGER_ITEM_LABELS.get(item_key, item_key)
+            row = Adw.ActionRow(title=_(label_key))
+            sw = Gtk.Switch()
+            sw.set_valign(Gtk.Align.CENTER)
+            sw.set_active(bool(visible_items.get(item_key, True)))
+            sw.connect("notify::active", self._on_hamburger_item_toggled, item_key)
+            row.add_suffix(sw)
+            row.set_activatable_widget(sw)
+            self.hamburger_doc_actions_group.add(row)
+            self.hamburger_item_rows[item_key] = row
+            self.hamburger_item_switches[item_key] = sw
+        self.hamburger_page.add(self.hamburger_doc_actions_group)
+
+        self.hamburger_inline_toggles_group = Adw.PreferencesGroup(
+            title=_("prefs_group_hamburger_inline_toggles"),
+            description=_("prefs_group_hamburger_inline_toggles_desc"),
+        )
+        for item_key in HAMBURGER_INLINE_TOGGLE_KEYS:
+            label_key = HAMBURGER_ITEM_LABELS.get(item_key, item_key)
+            row = Adw.ActionRow(title=_(label_key))
+            sw = Gtk.Switch()
+            sw.set_valign(Gtk.Align.CENTER)
+            sw.set_active(bool(visible_items.get(item_key, False)))
+            sw.connect("notify::active", self._on_hamburger_item_toggled, item_key)
+            row.add_suffix(sw)
+            row.set_activatable_widget(sw)
+            self.hamburger_inline_toggles_group.add(row)
+            self.hamburger_item_rows[item_key] = row
+            self.hamburger_item_switches[item_key] = sw
+        self.hamburger_page.add(self.hamburger_inline_toggles_group)
+
+        self.add(self.hamburger_page)
 
     @staticmethod
     def _collect_available_font_families() -> List[str]:
@@ -273,9 +337,6 @@ class PreferencesWindow(Adw.PreferencesWindow):
                 seen.add(fam)
         return combined
 
-    # ------------------------------------------------------------------
-    # Signal Handlers
-    # ------------------------------------------------------------------
     def _on_language_dropdown_changed(self, dropdown: Gtk.DropDown, _pspec: Any) -> None:
         if self._syncing_ui:
             return
@@ -357,6 +418,25 @@ class PreferencesWindow(Adw.PreferencesWindow):
         if self.editor_window is not None:
             self.editor_window._last_font_size = val
 
+    def _on_hamburger_preset_changed(self, dropdown: Gtk.DropDown, _pspec: Any) -> None:
+        if self._syncing_ui:
+            return
+        idx = int(dropdown.get_selected())
+        if 0 <= idx < len(self._hamburger_preset_codes):
+            preset_code = self._hamburger_preset_codes[idx]
+            self.settings.set("hamburger_menu_preset", preset_code)
+            if self.editor_window is not None and hasattr(self.editor_window, "rebuild_hamburger_menu"):
+                self.editor_window.rebuild_hamburger_menu()
+
+    def _on_hamburger_item_toggled(self, switch: Gtk.Switch, _pspec: Any, item_key: str) -> None:
+        if self._syncing_ui:
+            return
+        items = dict(self.settings.get("hamburger_visible_items"))
+        items[item_key] = bool(switch.get_active())
+        self.settings.set("hamburger_visible_items", items)
+        if self.editor_window is not None and hasattr(self.editor_window, "rebuild_hamburger_menu"):
+            self.editor_window.rebuild_hamburger_menu()
+
     def _on_setting_changed(self, key: str, value: Any) -> None:
         """Synchronize UI switches if settings are changed externally while PreferencesWindow is open."""
         self._syncing_ui = True
@@ -401,6 +481,16 @@ class PreferencesWindow(Adw.PreferencesWindow):
                         self.default_font_size_spin.set_value(fval)
                 except (TypeError, ValueError):
                     pass
+            elif key == "hamburger_menu_preset" and isinstance(value, str):
+                if value in self._hamburger_preset_codes:
+                    idx = self._hamburger_preset_codes.index(value)
+                    if self.hamburger_preset_dropdown.get_selected() != idx:
+                        self.hamburger_preset_dropdown.set_selected(idx)
+            elif key == "hamburger_visible_items" and isinstance(value, dict):
+                for item_key, sw in self.hamburger_item_switches.items():
+                    bval = bool(value.get(item_key, False))
+                    if sw.get_active() != bval:
+                        sw.set_active(bval)
         finally:
             self._syncing_ui = False
 

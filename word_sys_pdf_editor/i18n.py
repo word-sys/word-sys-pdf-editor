@@ -1107,6 +1107,18 @@ _STRINGS = {
         "prefs_default_font_family_subtitle": "Font family applied to newly created text boxes",
         "prefs_default_font_size_title": "Default Font Size (pt)",
         "prefs_default_font_size_subtitle": "Initial font size in points for new text boxes",
+        "prefs_group_hamburger_preset": "Menu Layout Preset",
+        "prefs_group_hamburger_preset_desc": "Choose a preset layout for the primary application menu or customize individual entries.",
+        "prefs_hamburger_preset_title": "Hamburger Menu Layout",
+        "prefs_hamburger_preset_subtitle": "Preferences, Quick Start Guide, About, and Quit are always kept accessible",
+        "prefs_hamburger_preset_standard": "Standard (Default)",
+        "prefs_hamburger_preset_minimal": "Clean / Minimal",
+        "prefs_hamburger_preset_full": "Full (Legacy)",
+        "prefs_hamburger_preset_custom": "Custom",
+        "prefs_group_hamburger_doc_actions": "Document Operations",
+        "prefs_group_hamburger_doc_actions_desc": "Choose which document actions appear in the top section of the hamburger menu.",
+        "prefs_group_hamburger_inline_toggles": "Inline Quick-Toggle Entries",
+        "prefs_group_hamburger_inline_toggles_desc": "Optionally display quick-toggle preference switches and language selector directly inside the hamburger menu.",
     },
 
     "tr": {

@@ -260,6 +260,27 @@ ALL_HAMBURGER_ITEM_KEYS: Tuple[str, ...] = (
     HAMBURGER_DOCUMENT_ACTION_KEYS + HAMBURGER_INLINE_TOGGLE_KEYS
 )
 
+HAMBURGER_ITEM_LABELS: Dict[str, str] = {
+    "save_as": "menu_save_as",
+    "compress_document": "menu_compress_document",
+    "protect_document": "protect_document",
+    "digitally_sign_document": "digitally_sign_document",
+    "inspect_digital_signatures": "inspect_digital_signatures",
+    "merge_documents": "menu_merge_documents",
+    "flatten_annotations": "menu_flatten",
+    "manage_stamps": "menu_manage_stamps",
+    "sanitize_document": "menu_sanitize_document",
+    "ocr_document": "menu_ocr_document",
+    "export_submenu": "menu_export",
+    "toggle_continuous_scroll": "menu_toggle_continuous_scroll",
+    "toggle_eco_mode": "menu_toggle_eco_mode",
+    "toggle_ocr_overlay": "menu_reveal_ocr_text",
+    "toggle_annotations": "menu_toggle_annotations",
+    "confirm_delete": "menu_confirm_delete",
+    "auto_switch_to_select": "prefs_auto_switch_select_title",
+    "language_submenu": "lang_label",
+}
+
 VALID_HAMBURGER_PRESETS: Tuple[str, ...] = (
     "standard",
     "minimal",
