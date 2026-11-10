@@ -2598,3 +2598,96 @@ class TestSettingsManagerSchemaAndPersistence:
         assert mgr2.get("auto_switch_to_select") is True
 
 
+class TestPreferencesWindowGeneralAndWorkflow:
+    """Verify PreferencesWindow General & Workflow pages, controls, and live editor synchronization."""
+
+    def test_general_and_workflow_pages_toggle_and_sync_settings(self, tmp_path):
+        from unittest.mock import MagicMock
+        from word_sys_pdf_editor.preferences_dialog import PreferencesWindow
+        from word_sys_pdf_editor.settings_manager import SettingsManager
+
+        cfg_path = tmp_path / "settings.json"
+        mgr = SettingsManager(config_file=cfg_path)
+
+        mock_win = MagicMock()
+        mock_win.continuous_scroll = True
+        mock_win.is_eco_mode = False
+        mock_win.show_ocr_overlay = False
+        mock_win._last_font_family = "Liberation Sans"
+        mock_win._last_font_size = 11.0
+
+        prefs = PreferencesWindow(editor_window=mock_win, settings_manager=mgr)
+        try:
+            # Verify Page 1 controls
+            assert len(prefs._lang_codes) == 7
+            assert set(prefs._lang_codes) == {"en", "tr", "de", "fr", "es", "it", "ru"}
+
+            prefs.continuous_scroll_switch.set_active(False)
+            assert mgr.get("continuous_scroll") is False
+            mock_win.set_continuous_scroll_mode.assert_called_with(False)
+
+            prefs.eco_mode_switch.set_active(True)
+            assert mgr.get("is_eco_mode") is True
+            mock_win.set_eco_mode.assert_called_with(True)
+
+            prefs.confirm_delete_switch.set_active(True)
+            assert mgr.get("confirm_delete") is True
+            mock_win._update_confirm_delete_menu_state.assert_called_with(True)
+
+            prefs.ocr_overlay_switch.set_active(True)
+            assert mgr.get("show_ocr_overlay") is True
+            mock_win.set_ocr_overlay_mode.assert_called_with(True)
+
+            prefs.auto_reload_switch.set_active(False)
+            assert mgr.get("auto_reload_modified_pdf") is False
+
+            # Verify Page 2 controls
+            prefs.auto_switch_switch.set_active(False)
+            assert mgr.get("auto_switch_to_select") is False
+            mock_win._update_auto_switch_select_menu_state.assert_called_with(False)
+
+            prefs.keep_drawing_switch.set_active(False)
+            assert mgr.get("keep_drawing_tools_active") is False
+
+            prefs.default_font_size_spin.set_value(16.5)
+            assert mgr.get("default_font_size") == 16.5
+            assert mock_win._last_font_size == 16.5
+
+            if "Liberation Serif" in prefs._font_families:
+                idx = prefs._font_families.index("Liberation Serif")
+                prefs.default_font_dropdown.set_selected(idx)
+                assert mgr.get("default_font_family") == "Liberation Serif"
+                assert mock_win._last_font_family == "Liberation Serif"
+
+            # Verify external setting change updates UI switch live
+            mgr.set("auto_switch_to_select", True)
+            assert prefs.auto_switch_switch.get_active() is True
+        finally:
+            prefs._on_close_request(prefs)
+            prefs.destroy()
+
+    def test_window_registers_preferences_action_and_ctrl_comma_shortcut(self):
+        from unittest.mock import patch
+        from gi.repository import Adw, Gdk
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_prefs_action")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                act = win.lookup_action("preferences")
+                assert act is not None
+                with patch.object(win, "on_preferences_activated") as mock_open_prefs:
+                    handled = win.on_key_pressed(None, Gdk.KEY_comma, 0, Gdk.ModifierType.CONTROL_MASK)
+                    assert handled is True
+                    mock_open_prefs.assert_called_once()
+            finally:
+                win.close_document()
+                win.destroy()
+
+
+

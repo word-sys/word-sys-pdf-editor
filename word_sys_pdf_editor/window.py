@@ -820,8 +820,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.pending_format_change_obj = None
         self.before_format_change_state = None
         self.is_repaired_file = False
-        self._last_font_family = None
-        self._last_font_size = 11.0
+        self._last_font_family = get_setting("default_font_family", None)
+        try:
+            self._last_font_size = float(get_setting("default_font_size", 11.0) or 11.0)
+        except (TypeError, ValueError):
+            self._last_font_size = 11.0
+        self._preferences_window = None
         self._last_is_bold = False
         self._last_is_italic = False
         self._last_is_strikethrough = False
@@ -1984,6 +1988,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         header.pack_start(self.redo_button)
 
         menu_button = Gtk.MenuButton(icon_name="open-menu-symbolic")
+        self.hamburger_menu_button = menu_button
         header.pack_end(menu_button)
 
         self.toggle_annotations_button = Gtk.ToggleButton(icon_name="sidebar-show-right-symbolic")
@@ -2050,6 +2055,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         menu.append_section(None, pref_section)
 
         menu.append_section(None, Gio.Menu())
+        menu.append(_("menu_preferences"), "win.preferences")
         menu.append(_("menu_quick_guide"), "win.quick_guide")
         menu.append(_("menu_about"), "win.about")
         menu.append(_("menu_quit"), "app.quit")
@@ -3150,6 +3156,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_quick_guide.connect('activate', self._on_quick_guide_activated)
         self.add_action(action_quick_guide)
 
+        action_preferences = Gio.SimpleAction.new('preferences', None)
+        action_preferences.connect('activate', self.on_preferences_activated)
+        self.add_action(action_preferences)
+
         action_save = Gio.SimpleAction.new('save', None)
         action_save.connect('activate', lambda a, p: self.on_save_clicked(None))
         self.add_action(action_save)
@@ -3265,6 +3275,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             app.set_accels_for_action("win.undo", ["<Control>z"])
             app.set_accels_for_action("win.redo", ["<Control>y", "<Control><Shift>z"])
             app.set_accels_for_action("win.print", ["<Control>p"])
+            app.set_accels_for_action("win.preferences", ["<Control>comma"])
             app.set_accels_for_action("win.quick_guide", ["F1"])
             app.set_accels_for_action("win.toggle_annotations", ["F7"])
             app.set_accels_for_action("win.toggle_continuous_scroll", ["<Control><Shift>c"])
@@ -13248,6 +13259,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.toggle_annotations_sidebar()
             return True
 
+        if ctrl and keyval == Gdk.KEY_comma:
+            self.on_preferences_activated()
+            return True
+
         if self.view_mode:
             if keyval == Gdk.KEY_Escape:
                 self.view_sel_rect = None
@@ -13352,6 +13367,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return True
         elif ctrl and keyval in (Gdk.KEY_s, Gdk.KEY_S):
             self.on_save_clicked(None)
+            return True
+        elif ctrl and keyval == Gdk.KEY_comma:
+            self.on_preferences_activated()
             return True
         elif ctrl and keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
             self.on_zoom_in(focal_point=getattr(self, '_last_pointer_pos', None))
@@ -15474,6 +15492,28 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Display the interactive quick user guide dialog."""
         dialog = QuickGuideDialog(self)
         dialog.present()
+
+    def on_preferences_activated(self, action=None, param=None, page_name: Optional[str] = None):
+        """Open and present the dedicated GNOME / Libadwaita Preferences Window."""
+        from .preferences_dialog import PreferencesWindow
+        existing = getattr(self, "_preferences_window", None)
+        if existing is not None:
+            if page_name:
+                try:
+                    existing.set_visible_page_name(page_name)
+                except Exception:
+                    pass
+            existing.present()
+            return existing
+        dlg = PreferencesWindow(editor_window=self)
+        self._preferences_window = dlg
+        if page_name:
+            try:
+                dlg.set_visible_page_name(page_name)
+            except Exception:
+                pass
+        dlg.present()
+        return dlg
 
     def _update_undo_redo_buttons(self, *args):
         """Sync undo/redo toolbar button sensitivity with UndoManager stacks."""
