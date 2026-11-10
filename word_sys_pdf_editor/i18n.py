@@ -2232,11 +2232,41 @@ else:
     _active_lang: str = _detect_system_language()
 
 def get_setting(key: str, default=None):
-    return _settings.get(key, default)
+    if key in _settings:
+        return _settings[key]
+    if key == "confirm_delete" and "confirm_delete_objects" in _settings:
+        return _settings["confirm_delete_objects"]
+    if key == "confirm_delete_objects" and "confirm_delete" in _settings:
+        return _settings["confirm_delete"]
+    if key == "continuous_scroll" and "view_mode" in _settings:
+        return _settings["view_mode"] == "continuous"
+    if key == "is_eco_mode" and "eco_mode" in _settings:
+        return _settings["eco_mode"]
+    if key == "eco_mode" and "is_eco_mode" in _settings:
+        return _settings["is_eco_mode"]
+    return default
 
 def set_setting(key: str, value):
     _settings[key] = value
+    if key == "confirm_delete":
+        _settings["confirm_delete_objects"] = bool(value)
+    elif key == "confirm_delete_objects":
+        _settings["confirm_delete"] = bool(value)
+    elif key == "continuous_scroll":
+        _settings["view_mode"] = "continuous" if bool(value) else "single"
+    elif key == "view_mode":
+        _settings["continuous_scroll"] = (value == "continuous")
+    elif key == "is_eco_mode":
+        _settings["eco_mode"] = None if value is None else bool(value)
+    elif key == "eco_mode":
+        _settings["is_eco_mode"] = None if value is None else bool(value)
     _save_settings(_settings)
+    try:
+        from . import settings_manager
+        if settings_manager._default_manager is not None:
+            settings_manager._default_manager._notify_listeners(key, value)
+    except Exception:
+        pass
 
 def get_language() -> str:
     return _active_lang

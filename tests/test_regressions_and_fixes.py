@@ -2485,3 +2485,116 @@ class TestAppImagePythonIsolation:
         assert str(poison_dir) not in data["sys_path"]
         assert data["argv"] == ["--test-arg", "sample.pdf"]
 
+
+class TestSettingsManagerSchemaAndPersistence:
+    """Verify SettingsManager schema validation, presets, listener callbacks, and atomic JSON persistence."""
+
+    def test_canonical_defaults_and_validation(self, tmp_path):
+        from word_sys_pdf_editor.settings_manager import (
+            DEFAULT_TOOLBAR_TOOLS_ORDER,
+            HAMBURGER_MENU_PRESETS,
+            SYNCTEX_EDITOR_PRESETS,
+            SettingsManager,
+        )
+
+        cfg_path = tmp_path / "settings.json"
+        mgr = SettingsManager(config_file=cfg_path)
+
+        assert mgr.get("auto_switch_to_select") is True
+        assert mgr.get("keep_drawing_tools_active") is True
+        assert mgr.get("confirm_delete") is False
+        assert mgr.get("continuous_scroll") is True
+        assert isinstance(mgr.get("is_eco_mode"), bool)
+        assert mgr.get("auto_reload_modified_pdf") is True
+        assert mgr.get("hamburger_menu_preset") == "standard"
+        assert mgr.get("hamburger_visible_items") == HAMBURGER_MENU_PRESETS["standard"]
+        assert mgr.get("toolbar_tools_order") == list(DEFAULT_TOOLBAR_TOOLS_ORDER)
+        assert len(mgr.get("toolbar_tools_order")) == 16
+        assert mgr.get("toolbar_visible_tools")["select"] is True
+        assert mgr.get("synctex_enabled") is True
+        assert mgr.get("synctex_editor_preset") == "vscode"
+        assert mgr.get("synctex_editor_command") == SYNCTEX_EDITOR_PRESETS["vscode"]
+
+    def test_toolbar_order_and_visibility_validation_keeps_select_accessible(self, tmp_path):
+        from word_sys_pdf_editor.settings_manager import (
+            DEFAULT_TOOLBAR_TOOLS_ORDER,
+            SettingsManager,
+        )
+
+        cfg_path = tmp_path / "settings.json"
+        mgr = SettingsManager(config_file=cfg_path)
+
+        # Partial or invalid tool list is normalized to include all 16 tools without duplicates
+        mgr.set("toolbar_tools_order", ["add_text", "clone_patch", "invalid_tool", "add_text", "select"])
+        order = mgr.get("toolbar_tools_order")
+        assert order[:3] == ["add_text", "clone_patch", "select"]
+        assert len(order) == len(DEFAULT_TOOLBAR_TOOLS_ORDER)
+        assert set(order) == set(DEFAULT_TOOLBAR_TOOLS_ORDER)
+
+        # Attempting to hide 'select' is always overridden to True
+        mgr.set("toolbar_visible_tools", {"select": False, "add_text": True, "pen": False})
+        vis = mgr.get("toolbar_visible_tools")
+        assert vis["select"] is True
+        assert vis["add_text"] is True
+        assert vis["pen"] is False
+
+    def test_hamburger_presets_and_custom_detection(self, tmp_path):
+        from word_sys_pdf_editor.settings_manager import (
+            HAMBURGER_MENU_PRESETS,
+            SettingsManager,
+        )
+
+        cfg_path = tmp_path / "settings.json"
+        mgr = SettingsManager(config_file=cfg_path)
+
+        mgr.set("hamburger_menu_preset", "minimal")
+        assert mgr.get("hamburger_visible_items") == HAMBURGER_MENU_PRESETS["minimal"]
+        assert mgr.get("hamburger_visible_items")["save_as"] is True
+        assert mgr.get("hamburger_visible_items")["compress_document"] is False
+
+        mgr.set("hamburger_menu_preset", "full")
+        assert mgr.get("hamburger_visible_items") == HAMBURGER_MENU_PRESETS["full"]
+        assert mgr.get("hamburger_visible_items")["toggle_continuous_scroll"] is True
+
+        # Modifying an individual item switches preset to 'custom'
+        custom_items = dict(mgr.get("hamburger_visible_items"))
+        custom_items["ocr_document"] = False
+        mgr.set("hamburger_visible_items", custom_items)
+        assert mgr.get("hamburger_menu_preset") == "custom"
+        assert mgr.get("hamburger_visible_items")["ocr_document"] is False
+
+    def test_listener_callbacks_and_atomic_persistence_roundtrip(self, tmp_path):
+        from word_sys_pdf_editor.settings_manager import (
+            SYNCTEX_EDITOR_PRESETS,
+            SettingsManager,
+        )
+
+        cfg_path = tmp_path / "settings.json"
+        mgr = SettingsManager(config_file=cfg_path)
+
+        events = []
+        unsub_specific = mgr.subscribe(lambda k, v: events.append(("specific", k, v)), key="auto_switch_to_select")
+        unsub_all = mgr.subscribe(lambda k, v: events.append(("wildcard", k, v)))
+
+        mgr.set("auto_switch_to_select", False)
+        assert ("specific", "auto_switch_to_select", False) in events
+        assert ("wildcard", "auto_switch_to_select", False) in events
+
+        unsub_specific()
+        events.clear()
+        mgr.set("auto_switch_to_select", True)
+        assert ("specific", "auto_switch_to_select", True) not in events
+        assert ("wildcard", "auto_switch_to_select", True) in events
+        unsub_all()
+
+        # SyncTeX preset automatically updates command template
+        mgr.set("synctex_editor_preset", "texstudio")
+        assert mgr.get("synctex_editor_command") == SYNCTEX_EDITOR_PRESETS["texstudio"]
+
+        # Reload into a second SettingsManager instance from disk
+        mgr2 = SettingsManager(config_file=cfg_path)
+        assert mgr2.get("synctex_editor_preset") == "texstudio"
+        assert mgr2.get("synctex_editor_command") == SYNCTEX_EDITOR_PRESETS["texstudio"]
+        assert mgr2.get("auto_switch_to_select") is True
+
+
