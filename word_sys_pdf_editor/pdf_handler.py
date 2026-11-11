@@ -4925,6 +4925,511 @@ def merge_pdf_pages(target_doc, source_pdf_path, insert_position=None):
     except Exception as e:
         return False, _("err_merging_pdf", e), 0
 
+
+def copy_pages_between_docs(
+    src_doc: Any,
+    src_page_indices: Union[int, List[int], Tuple[int, ...]],
+    dst_doc: Any,
+    dst_insert_idx: Optional[int] = None,
+) -> Tuple[bool, str, List[int]]:
+    """Copy one or more pages from `src_doc` into `dst_doc` starting at `dst_insert_idx`.
+
+    Supports both cross-document copying (`src_doc is not dst_doc`) and same-document
+    page duplication (`src_doc is dst_doc`), shifting internal `_page_snapshots` and
+    `_page_original_links` on `dst_doc` and saving initial snapshots for inserted pages.
+    """
+    global _page_snapshots, _page_original_links
+    if src_doc is None or dst_doc is None:
+        return False, _("err_no_doc_msg_alt"), []
+
+    if isinstance(src_page_indices, int):
+        page_list = [int(src_page_indices)]
+    elif isinstance(src_page_indices, (list, tuple)):
+        page_list = [int(p) for p in src_page_indices]
+    else:
+        return False, _("err_invalid_page_index"), []
+
+    if not page_list:
+        return False, _("err_invalid_page_index"), []
+
+    for p in page_list:
+        if p < 0 or p >= src_doc.page_count:
+            return False, _("err_invalid_page_index"), []
+
+    num_inserted = len(page_list)
+    if dst_insert_idx is None or dst_insert_idx < 0 or dst_insert_idx > dst_doc.page_count:
+        target_start = dst_doc.page_count
+    else:
+        target_start = int(dst_insert_idx)
+
+    src_doc_id = id(src_doc)
+    dst_doc_id = id(dst_doc)
+
+    # Capture source snapshots before any in-place insertion if src_doc is dst_doc
+    copied_src_snapshots: List[Optional[bytes]] = [
+        _page_snapshots.get((src_doc_id, p)) for p in page_list
+    ]
+    copied_src_links: List[Optional[Any]] = [
+        copy.deepcopy(_page_original_links.get((src_doc_id, p))) for p in page_list
+    ]
+
+    temp_source_doc = None
+    try:
+        if src_doc is dst_doc:
+            # PyMuPDF insert_pdf requires distinct source and target documents
+            temp_source_doc = fitz.open()
+            for p in page_list:
+                # Extract single page via a lightweight in-memory stream
+                single_bytes = src_doc.tobytes()
+                mem_src = fitz.open(stream=single_bytes, filetype="pdf")
+                try:
+                    temp_source_doc.insert_pdf(mem_src, from_page=p, to_page=p)
+                finally:
+                    mem_src.close()
+            effective_src = temp_source_doc
+            effective_indices = list(range(num_inserted))
+        else:
+            effective_src = src_doc
+            effective_indices = page_list
+
+        # Shift existing snapshots and links on dst_doc at or after target_start
+        new_snapshots = {}
+        for (did, pno), content in _page_snapshots.raw_items():
+            if did == dst_doc_id and pno >= target_start:
+                new_snapshots[(did, pno + num_inserted)] = content
+            else:
+                new_snapshots[(did, pno)] = content
+        _page_snapshots.clear()
+        _page_snapshots.update(new_snapshots)
+
+        new_links = {}
+        for (did, pno), links in _page_original_links.items():
+            if did == dst_doc_id and pno >= target_start:
+                new_links[(did, pno + num_inserted)] = links
+            else:
+                new_links[(did, pno)] = links
+        _page_original_links = new_links
+
+        inserted_indices: List[int] = []
+        for offset, src_p in enumerate(effective_indices):
+            insert_at = target_start + offset
+            start_at_arg = -1 if insert_at >= dst_doc.page_count else insert_at
+            dst_doc.insert_pdf(
+                effective_src,
+                from_page=src_p,
+                to_page=src_p,
+                start_at=start_at_arg,
+            )
+            inserted_indices.append(insert_at)
+
+        for offset, dst_pno in enumerate(inserted_indices):
+            snap = copied_src_snapshots[offset]
+            if snap is not None:
+                _page_snapshots[(dst_doc_id, dst_pno)] = snap
+            else:
+                save_page_snapshot(dst_doc, dst_pno, force=True)
+            links = copied_src_links[offset]
+            if links is not None:
+                _page_original_links[(dst_doc_id, dst_pno)] = links
+
+        invalidate_page_cache(dst_doc)
+        return True, _("success_merged_pages", num_inserted), inserted_indices
+    except Exception as e:
+        return False, str(e), []
+    finally:
+        if temp_source_doc is not None:
+            try:
+                temp_source_doc.close()
+            except Exception:
+                pass
+
+
+def _get_session_object_cache(session_or_win: Any) -> Optional[Dict[int, Dict[str, List[Any]]]]:
+    if session_or_win is None:
+        return None
+    cache = getattr(session_or_win, "page_objects_cache", None)
+    if isinstance(cache, dict):
+        return cache
+    cache2 = getattr(session_or_win, "_page_objects_cache", None)
+    if isinstance(cache2, dict):
+        return cache2
+    return None
+
+
+def clone_page_editor_objects(
+    src_session: Any,
+    src_page_idx: int,
+    dst_page_idx: int,
+    dst_session: Any = None,
+    shift_downstream: bool = True,
+) -> Dict[str, Any]:
+    """Deep-copy all uncommitted in-memory editor objects from `src_session` at `src_page_idx` to `dst_page_idx`.
+
+    Clones `texts`, `images` (including `PatchObject` and linked text references), `shapes`,
+    `strokes`, `form_fields`, `sticky_notes`, `measurements`, `redaction_marks`, and
+    `scale_calibration`. If `dst_session` is provided, shifts downstream pages in
+    `dst_session` (when `shift_downstream=True`) and inserts the cloned objects at `dst_page_idx`.
+    """
+    raw_texts: List[Any] = []
+    raw_images: List[Any] = []
+    raw_shapes: List[Any] = []
+    raw_strokes: List[Any] = []
+    raw_forms: List[Any] = []
+
+    if src_session is not None:
+        src_cache = _get_session_object_cache(src_session)
+        curr_idx = getattr(src_session, "current_page_index", None)
+        has_active = curr_idx == src_page_idx and any(
+            bool(getattr(src_session, attr, None))
+            for attr in (
+                "editable_texts",
+                "editable_images",
+                "editable_shapes",
+                "editable_strokes",
+                "form_fields",
+            )
+        )
+        if has_active:
+            raw_texts = list(getattr(src_session, "editable_texts", []) or [])
+            raw_images = list(getattr(src_session, "editable_images", []) or [])
+            raw_shapes = list(getattr(src_session, "editable_shapes", []) or [])
+            raw_strokes = list(getattr(src_session, "editable_strokes", []) or [])
+            raw_forms = list(getattr(src_session, "form_fields", []) or [])
+        elif isinstance(src_cache, dict) and src_page_idx in src_cache:
+            cached = src_cache[src_page_idx] or {}
+            raw_texts = list(cached.get("texts", []) or [])
+            raw_images = list(cached.get("images", []) or [])
+            raw_shapes = list(cached.get("shapes", []) or [])
+            raw_strokes = list(cached.get("strokes", []) or [])
+            raw_forms = list(cached.get("form_fields", []) or [])
+        elif getattr(src_session, "doc", None) is not None and 0 <= src_page_idx < len(src_session.doc):
+            doc = src_session.doc
+            t_list, _ = extract_editable_text(doc, src_page_idx)
+            i_list, _ = extract_editable_images(doc, src_page_idx)
+            sh_list, _ = extract_editable_shapes(doc, src_page_idx)
+            st_list, _ = extract_editable_strokes(doc, src_page_idx)
+            f_list, _ = extract_acroform_fields(doc, src_page_idx)
+            raw_texts = t_list or []
+            raw_images = i_list or []
+            raw_shapes = sh_list or []
+            raw_strokes = st_list or []
+            raw_forms = f_list or []
+
+    old_to_new: Dict[int, Any] = {}
+    cloned_texts: List[Any] = []
+    for t in raw_texts:
+        ct = copy.deepcopy(t)
+        ct.page_number = int(dst_page_idx)
+        ct.selected = False
+        old_to_new[id(t)] = ct
+        cloned_texts.append(ct)
+
+    cloned_images: List[Any] = []
+    for img in raw_images:
+        cimg = copy.deepcopy(img)
+        cimg.page_number = int(dst_page_idx)
+        cimg.selected = False
+        old_to_new[id(img)] = cimg
+        cloned_images.append(cimg)
+
+    # Relink PatchObject <-> EditableText pairs to the newly cloned instances
+    for ct in cloned_texts:
+        lp = getattr(ct, "linked_patch", None)
+        if lp is not None and id(lp) in old_to_new:
+            ct.linked_patch = old_to_new[id(lp)]
+    for cimg in cloned_images:
+        lt = getattr(cimg, "linked_text", None)
+        if lt is not None and id(lt) in old_to_new:
+            cimg.linked_text = old_to_new[id(lt)]
+
+    cloned_shapes: List[Any] = []
+    for sh in raw_shapes:
+        csh = copy.deepcopy(sh)
+        csh.page_number = int(dst_page_idx)
+        csh.selected = False
+        cloned_shapes.append(csh)
+
+    cloned_strokes: List[Any] = []
+    for st in raw_strokes:
+        cst = copy.deepcopy(st)
+        cst.page_number = int(dst_page_idx)
+        cst.selected = False
+        cloned_strokes.append(cst)
+
+    cloned_forms: List[Any] = []
+    for ff in raw_forms:
+        cff = copy.deepcopy(ff)
+        cff.page_number = int(dst_page_idx)
+        cff.selected = False
+        cff.widget = None
+        cff.label_widget = None
+        cloned_forms.append(cff)
+
+    cloned_sticky_notes: List[Any] = []
+    src_notes_map = getattr(src_session, "sticky_notes", None) if src_session is not None else None
+    if isinstance(src_notes_map, dict) and src_page_idx in src_notes_map:
+        for note in src_notes_map.get(src_page_idx, []) or []:
+            cn = copy.deepcopy(note)
+            cn.page_number = int(dst_page_idx)
+            cloned_sticky_notes.append(cn)
+
+    cloned_measurements: List[Any] = []
+    src_meas_map = getattr(src_session, "measurements", None) if src_session is not None else None
+    if isinstance(src_meas_map, dict) and src_page_idx in src_meas_map:
+        for m in src_meas_map.get(src_page_idx, []) or []:
+            cm = copy.deepcopy(m)
+            cm.page_number = int(dst_page_idx)
+            cm.selected = False
+            cloned_measurements.append(cm)
+    elif src_session is not None and hasattr(src_session, "measurement_objects"):
+        for m in getattr(src_session, "measurement_objects", []) or []:
+            if getattr(m, "page_number", None) == src_page_idx:
+                cm = copy.deepcopy(m)
+                cm.page_number = int(dst_page_idx)
+                cm.selected = False
+                cloned_measurements.append(cm)
+
+    cloned_redaction_marks: List[Any] = []
+    src_redact_map = getattr(src_session, "redaction_marks", None) if src_session is not None else None
+    if isinstance(src_redact_map, dict) and src_page_idx in src_redact_map:
+        for rm in src_redact_map.get(src_page_idx, []) or []:
+            crm = copy.deepcopy(rm)
+            crm.page_number = int(dst_page_idx)
+            crm.selected = False
+            cloned_redaction_marks.append(crm)
+
+    cloned_calibration = None
+    src_cal_map = getattr(src_session, "scale_calibrations", None) if src_session is not None else None
+    if isinstance(src_cal_map, dict) and src_page_idx in src_cal_map:
+        cloned_calibration = copy.deepcopy(src_cal_map[src_page_idx])
+
+    bundle: Dict[str, Any] = {
+        "texts": cloned_texts,
+        "images": cloned_images,
+        "shapes": cloned_shapes,
+        "strokes": cloned_strokes,
+        "form_fields": cloned_forms,
+        "sticky_notes": cloned_sticky_notes,
+        "measurements": cloned_measurements,
+        "redaction_marks": cloned_redaction_marks,
+        "scale_calibration": cloned_calibration,
+    }
+
+    if dst_session is not None:
+        apply_cloned_page_objects(
+            dst_session,
+            bundle,
+            dst_page_idx=dst_page_idx,
+            shift_downstream=shift_downstream,
+        )
+
+    return bundle
+
+
+def apply_cloned_page_objects(
+    dst_session: Any,
+    cloned_bundle: Dict[str, Any],
+    dst_page_idx: int,
+    shift_downstream: bool = True,
+) -> Dict[str, Any]:
+    """Insert a cloned page object bundle into `dst_session` at `dst_page_idx`, shifting downstream pages."""
+    if dst_session is None or not isinstance(cloned_bundle, dict):
+        return cloned_bundle
+
+    # Make a fresh copy of the bundle with page_number set to dst_page_idx
+    old_to_new: Dict[int, Any] = {}
+    texts = []
+    for t in cloned_bundle.get("texts", []) or []:
+        ct = copy.deepcopy(t)
+        ct.page_number = int(dst_page_idx)
+        ct.selected = False
+        old_to_new[id(t)] = ct
+        texts.append(ct)
+
+    images = []
+    for img in cloned_bundle.get("images", []) or []:
+        cimg = copy.deepcopy(img)
+        cimg.page_number = int(dst_page_idx)
+        cimg.selected = False
+        old_to_new[id(img)] = cimg
+        images.append(cimg)
+
+    for ct in texts:
+        lp = getattr(ct, "linked_patch", None)
+        if lp is not None and id(lp) in old_to_new:
+            ct.linked_patch = old_to_new[id(lp)]
+    for cimg in images:
+        lt = getattr(cimg, "linked_text", None)
+        if lt is not None and id(lt) in old_to_new:
+            cimg.linked_text = old_to_new[id(lt)]
+
+    shapes = []
+    for sh in cloned_bundle.get("shapes", []) or []:
+        csh = copy.deepcopy(sh)
+        csh.page_number = int(dst_page_idx)
+        csh.selected = False
+        shapes.append(csh)
+
+    strokes = []
+    for st in cloned_bundle.get("strokes", []) or []:
+        cst = copy.deepcopy(st)
+        cst.page_number = int(dst_page_idx)
+        cst.selected = False
+        strokes.append(cst)
+
+    forms = []
+    for ff in cloned_bundle.get("form_fields", []) or []:
+        cff = copy.deepcopy(ff)
+        cff.page_number = int(dst_page_idx)
+        cff.selected = False
+        cff.widget = None
+        cff.label_widget = None
+        forms.append(cff)
+
+    notes = []
+    for n in cloned_bundle.get("sticky_notes", []) or []:
+        cn = copy.deepcopy(n)
+        cn.page_number = int(dst_page_idx)
+        notes.append(cn)
+
+    meas = []
+    for m in cloned_bundle.get("measurements", []) or []:
+        cm = copy.deepcopy(m)
+        cm.page_number = int(dst_page_idx)
+        cm.selected = False
+        meas.append(cm)
+
+    redacts = []
+    for r in cloned_bundle.get("redaction_marks", []) or []:
+        cr = copy.deepcopy(r)
+        cr.page_number = int(dst_page_idx)
+        cr.selected = False
+        redacts.append(cr)
+
+    cal = copy.deepcopy(cloned_bundle.get("scale_calibration"))
+
+    dst_cache = _get_session_object_cache(dst_session)
+    if isinstance(dst_cache, dict):
+        if shift_downstream:
+            new_cache: Dict[int, Dict[str, List[Any]]] = {}
+            for p, objs in dst_cache.items():
+                if p >= dst_page_idx:
+                    new_cache[p + 1] = objs
+                    for coll_key in ("texts", "images", "shapes", "strokes", "form_fields"):
+                        for obj in objs.get(coll_key, []) or []:
+                            if hasattr(obj, "page_number") and obj.page_number is not None:
+                                obj.page_number += 1
+                else:
+                    new_cache[p] = objs
+            dst_cache.clear()
+            dst_cache.update(new_cache)
+
+        dst_cache[int(dst_page_idx)] = {
+            "texts": texts,
+            "images": images,
+            "shapes": shapes,
+            "strokes": strokes,
+            "form_fields": forms,
+        }
+
+    for map_attr, new_items in (
+        ("sticky_notes", notes),
+        ("measurements", meas),
+        ("redaction_marks", redacts),
+    ):
+        m_dict = getattr(dst_session, map_attr, None)
+        if isinstance(m_dict, dict):
+            if shift_downstream:
+                shifted_map = {}
+                for p, item_list in m_dict.items():
+                    if p >= dst_page_idx:
+                        shifted_map[p + 1] = item_list
+                        for obj in item_list or []:
+                            if hasattr(obj, "page_number") and obj.page_number is not None:
+                                obj.page_number += 1
+                    else:
+                        shifted_map[p] = item_list
+                m_dict.clear()
+                m_dict.update(shifted_map)
+            if new_items:
+                m_dict[int(dst_page_idx)] = new_items
+
+    cal_dict = getattr(dst_session, "scale_calibrations", None)
+    if isinstance(cal_dict, dict):
+        if shift_downstream:
+            shifted_cal = {
+                (p + 1 if p >= dst_page_idx else p): c
+                for p, c in cal_dict.items()
+            }
+            cal_dict.clear()
+            cal_dict.update(shifted_cal)
+        if cal is not None:
+            cal_dict[int(dst_page_idx)] = cal
+
+    return {
+        "texts": texts,
+        "images": images,
+        "shapes": shapes,
+        "strokes": strokes,
+        "form_fields": forms,
+        "sticky_notes": notes,
+        "measurements": meas,
+        "redaction_marks": redacts,
+        "scale_calibration": cal,
+    }
+
+
+def shift_session_page_objects_on_delete(dst_session: Any, deleted_page_idx: int) -> None:
+    """Remove cached editor objects at `deleted_page_idx` and shift downstream page indices down by 1."""
+    if dst_session is None:
+        return
+    dst_cache = _get_session_object_cache(dst_session)
+    if isinstance(dst_cache, dict):
+        new_cache: Dict[int, Dict[str, List[Any]]] = {}
+        for p, objs in dst_cache.items():
+            if p == deleted_page_idx:
+                continue
+            elif p > deleted_page_idx:
+                new_cache[p - 1] = objs
+                for coll_key in ("texts", "images", "shapes", "strokes", "form_fields"):
+                    for obj in objs.get(coll_key, []) or []:
+                        if hasattr(obj, "page_number") and obj.page_number is not None:
+                            obj.page_number -= 1
+            else:
+                new_cache[p] = objs
+        dst_cache.clear()
+        dst_cache.update(new_cache)
+
+    for map_attr in ("sticky_notes", "measurements", "redaction_marks"):
+        m_dict = getattr(dst_session, map_attr, None)
+        if isinstance(m_dict, dict):
+            shifted_map = {}
+            for p, item_list in m_dict.items():
+                if p == deleted_page_idx:
+                    continue
+                elif p > deleted_page_idx:
+                    shifted_map[p - 1] = item_list
+                    for obj in item_list or []:
+                        if hasattr(obj, "page_number") and obj.page_number is not None:
+                            obj.page_number -= 1
+                else:
+                    shifted_map[p] = item_list
+            m_dict.clear()
+            m_dict.update(shifted_map)
+
+    cal_dict = getattr(dst_session, "scale_calibrations", None)
+    if isinstance(cal_dict, dict):
+        shifted_cal = {}
+        for p, c in cal_dict.items():
+            if p == deleted_page_idx:
+                continue
+            elif p > deleted_page_idx:
+                shifted_cal[p - 1] = c
+            else:
+                shifted_cal[p] = c
+        cal_dict.clear()
+        cal_dict.update(shifted_cal)
+
 def move_page(doc, from_index, to_index):
     """Reorder a page from from_index to to_index in document."""
     try:

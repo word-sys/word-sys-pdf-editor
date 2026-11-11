@@ -1,7 +1,7 @@
 import copy
 import collections
 import re
-from typing import Any, Optional, List, Dict, Tuple
+from typing import Any, Optional, List, Dict, Tuple, Union
 try:
     import pymupdf as fitz
 except ImportError:
@@ -2123,3 +2123,247 @@ class EmbedOCRTextCommand(Command):
                 self.window.status_label.set_text(_("reverted"))
             if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
                 self.window.pdf_view.queue_draw()
+
+
+class InsertCopiedPagesCommand(Command):
+    """Undoable command for cross-tab page copying, same-tab page duplication, and page clipboard pasting."""
+
+    def __init__(
+        self,
+        window,
+        dst_insert_idx: int,
+        src_doc: Any = None,
+        src_page_indices: Optional[Union[int, List[int]]] = None,
+        src_session: Any = None,
+        dst_session: Any = None,
+        copied_pdf_bytes: Optional[bytes] = None,
+        copied_page_bundles: Optional[List[Dict[str, Any]]] = None,
+    ):
+        super().__init__(window)
+        if dst_session is not None:
+            self.session = dst_session
+
+        if src_doc is None and src_session is not None:
+            src_doc = getattr(src_session, "doc", None)
+
+        if isinstance(src_page_indices, int):
+            page_list = [int(src_page_indices)]
+        elif isinstance(src_page_indices, (list, tuple)):
+            page_list = [int(p) for p in src_page_indices]
+        else:
+            page_list = []
+
+        self.src_page_indices: List[int] = page_list
+        self.dst_insert_idx: int = int(dst_insert_idx)
+        self.inserted_indices: List[int] = []
+        self.copied_snapshots: List[Optional[bytes]] = []
+
+        if copied_pdf_bytes is not None:
+            self.copied_pdf_bytes: Optional[bytes] = bytes(copied_pdf_bytes)
+        elif src_doc is not None and page_list:
+            temp_doc = fitz.open()
+            try:
+                src_bytes = src_doc.tobytes()
+                mem_src = fitz.open(stream=src_bytes, filetype="pdf")
+                try:
+                    for p in page_list:
+                        if 0 <= p < len(mem_src):
+                            temp_doc.insert_pdf(mem_src, from_page=p, to_page=p)
+                            self.copied_snapshots.append(
+                                pdf_handler._page_snapshots.get((id(src_doc), p))
+                            )
+                finally:
+                    mem_src.close()
+                self.copied_pdf_bytes = temp_doc.tobytes() if len(temp_doc) > 0 else None
+            finally:
+                temp_doc.close()
+        else:
+            self.copied_pdf_bytes = None
+
+        if copied_page_bundles is not None:
+            self.copied_page_bundles: List[Dict[str, Any]] = [
+                copy.deepcopy(b) for b in copied_page_bundles
+            ]
+        else:
+            self.copied_page_bundles = []
+            effective_src_session = src_session if src_session is not None else window
+            for p in page_list:
+                bundle = pdf_handler.clone_page_editor_objects(
+                    effective_src_session,
+                    src_page_idx=p,
+                    dst_page_idx=0,
+                    dst_session=None,
+                    shift_downstream=False,
+                )
+                self.copied_page_bundles.append(bundle)
+
+        sess = self._get_target_session()
+        self.prev_page_index: int = int(
+            getattr(sess, "current_page_index", getattr(self.window, "current_page_index", 0)) or 0
+        )
+        self.pre_document_modified: bool = bool(
+            getattr(sess, "is_modified", getattr(self.window, "document_modified", False))
+        )
+
+    @staticmethod
+    def _stash_session_current_page(target: Any) -> None:
+        if target is None:
+            return
+        curr_idx = getattr(target, "current_page_index", None)
+        doc = getattr(target, "doc", None)
+        if curr_idx is None or doc is None or not (0 <= curr_idx < len(doc)):
+            return
+        cache = pdf_handler._get_session_object_cache(target)
+        if isinstance(cache, dict):
+            cache[curr_idx] = {
+                "texts": list(getattr(target, "editable_texts", []) or []),
+                "images": list(getattr(target, "editable_images", []) or []),
+                "shapes": list(getattr(target, "editable_shapes", []) or []),
+                "strokes": list(getattr(target, "editable_strokes", []) or []),
+                "form_fields": list(getattr(target, "form_fields", []) or []),
+            }
+
+    @staticmethod
+    def _sync_session_active_collections(target: Any, page_idx: int) -> None:
+        if target is None:
+            return
+        cache = pdf_handler._get_session_object_cache(target)
+        if isinstance(cache, dict) and page_idx in cache:
+            cached = cache[page_idx] or {}
+            target.editable_texts = list(cached.get("texts", []) or [])
+            target.editable_images = list(cached.get("images", []) or [])
+            target.editable_shapes = list(cached.get("shapes", []) or [])
+            target.editable_strokes = list(cached.get("strokes", []) or [])
+            target.form_fields = list(cached.get("form_fields", []) or [])
+
+    def execute(self):
+        doc = self._get_doc()
+        if not doc or not self.copied_pdf_bytes:
+            return False
+
+        sess = self._get_target_session()
+        target_holder = sess if sess is not None else self.window
+
+        if self._is_session_active() and hasattr(self.window, "_stash_page_objects"):
+            curr = getattr(self.window, "current_page_index", None)
+            if curr is not None:
+                self.window._stash_page_objects(curr)
+        else:
+            self._stash_session_current_page(target_holder)
+
+        mem_src = fitz.open(stream=self.copied_pdf_bytes, filetype="pdf")
+        try:
+            ok, msg, inserted_indices = pdf_handler.copy_pages_between_docs(
+                mem_src,
+                list(range(len(mem_src))),
+                doc,
+                self.dst_insert_idx,
+            )
+        finally:
+            mem_src.close()
+
+        if not ok or not inserted_indices:
+            return False
+
+        self.inserted_indices = list(inserted_indices)
+        doc_id = id(doc)
+        for offset, dst_pno in enumerate(self.inserted_indices):
+            if offset < len(self.copied_snapshots) and self.copied_snapshots[offset] is not None:
+                pdf_handler._page_snapshots[(doc_id, dst_pno)] = self.copied_snapshots[offset]
+            bundle = (
+                self.copied_page_bundles[offset]
+                if offset < len(self.copied_page_bundles)
+                else {}
+            )
+            pdf_handler.apply_cloned_page_objects(
+                target_holder,
+                bundle,
+                dst_page_idx=dst_pno,
+                shift_downstream=True,
+            )
+
+        if sess is not None:
+            sess.is_modified = True
+            if hasattr(sess, "document_modified"):
+                sess.document_modified = True
+        if hasattr(self.window, "document_modified"):
+            self.window.document_modified = True
+
+        first_inserted = self.inserted_indices[0]
+        if self._is_session_active():
+            self.window.current_page_index = None
+            if hasattr(self.window, "_invalidate_continuous_layout"):
+                self.window._invalidate_continuous_layout()
+            if hasattr(self.window, "_load_page"):
+                self.window._load_page(first_inserted, reload_objects=False)
+            else:
+                self.window.current_page_index = first_inserted
+                self._sync_session_active_collections(target_holder, first_inserted)
+            if hasattr(self.window, "_load_thumbnails"):
+                self.window._load_thumbnails(target_page=first_inserted)
+            if hasattr(self.window, "_update_ui_state"):
+                self.window._update_ui_state()
+            if hasattr(self.window, "status_label") and self.window.status_label:
+                self.window.status_label.set_text(msg)
+            if hasattr(self.window, "pdf_view") and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()
+        elif sess is not None:
+            sess.current_page_index = first_inserted
+            self._sync_session_active_collections(sess, first_inserted)
+
+        return True
+
+    def undo(self):
+        doc = self._get_doc()
+        if not doc or not self.inserted_indices:
+            return False
+
+        sess = self._get_target_session()
+        target_holder = sess if sess is not None else self.window
+
+        if self._is_session_active() and hasattr(self.window, "_stash_page_objects"):
+            curr = getattr(self.window, "current_page_index", None)
+            if curr is not None:
+                self.window._stash_page_objects(curr)
+        else:
+            self._stash_session_current_page(target_holder)
+
+        for pno in sorted(self.inserted_indices, reverse=True):
+            if 0 <= pno < len(doc) and len(doc) > 1:
+                pdf_handler.delete_page(doc, pno)
+                pdf_handler.shift_session_page_objects_on_delete(target_holder, pno)
+
+        if sess is not None:
+            sess.is_modified = self.pre_document_modified
+            if hasattr(sess, "document_modified"):
+                sess.document_modified = self.pre_document_modified
+        if hasattr(self.window, "document_modified"):
+            self.window.document_modified = self.pre_document_modified
+
+        target_page = max(0, min(self.prev_page_index, len(doc) - 1))
+        if self._is_session_active():
+            self.window.current_page_index = None
+            if hasattr(self.window, "_invalidate_continuous_layout"):
+                self.window._invalidate_continuous_layout()
+            if hasattr(self.window, "_load_page"):
+                self.window._load_page(target_page, reload_objects=False)
+            else:
+                self.window.current_page_index = target_page
+                self._sync_session_active_collections(target_holder, target_page)
+            if hasattr(self.window, "_load_thumbnails"):
+                self.window._load_thumbnails(target_page=target_page)
+            if hasattr(self.window, "_update_ui_state"):
+                self.window._update_ui_state()
+            if hasattr(self.window, "status_label") and self.window.status_label:
+                self.window.status_label.set_text(_("reverted"))
+            if hasattr(self.window, "pdf_view") and self.window.pdf_view:
+                self.window.pdf_view.queue_draw()
+        elif sess is not None:
+            sess.current_page_index = target_page
+            self._sync_session_active_collections(sess, target_page)
+
+        return True
+
+    def redo(self):
+        return self.execute()
+

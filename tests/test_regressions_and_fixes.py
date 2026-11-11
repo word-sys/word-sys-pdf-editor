@@ -2897,6 +2897,223 @@ class TestCustomizableToolbarAndToolArrangement:
                 win.destroy()
 
 
+class TestCrossDocumentPageCopyBackend:
+    """Verify cross-document page copying, deep-copying of uncommitted editor objects, and undo/redo via InsertCopiedPagesCommand."""
+
+    def test_copy_pages_between_docs_cross_doc_and_same_doc(self):
+        from word_sys_pdf_editor import pdf_handler
+
+        src_doc = fitz.open()
+        p0 = src_doc.new_page(width=500, height=700)
+        p0.insert_text((50, 100), "Source Page One")
+        p1 = src_doc.new_page(width=500, height=700)
+        p1.insert_text((50, 100), "Source Page Two")
+
+        dst_doc = fitz.open()
+        d0 = dst_doc.new_page(width=600, height=800)
+        d0.insert_text((50, 100), "Target Page One")
+        d1 = dst_doc.new_page(width=600, height=800)
+        d1.insert_text((50, 100), "Target Page Two")
+        pdf_handler.save_page_snapshot(dst_doc, 0, force=True)
+        pdf_handler.save_page_snapshot(dst_doc, 1, force=True)
+
+        try:
+            ok, _msg, inserted = pdf_handler.copy_pages_between_docs(src_doc, [1], dst_doc, dst_insert_idx=1)
+            assert ok is True
+            assert inserted == [1]
+            assert len(dst_doc) == 3
+            assert "Target Page One" in dst_doc[0].get_text()
+            assert "Source Page Two" in dst_doc[1].get_text()
+            assert "Target Page Two" in dst_doc[2].get_text()
+
+            # Same-document duplication (src_doc is dst_doc)
+            ok2, _msg2, inserted2 = pdf_handler.copy_pages_between_docs(dst_doc, 0, dst_doc, dst_insert_idx=2)
+            assert ok2 is True
+            assert inserted2 == [2]
+            assert len(dst_doc) == 4
+            assert "Target Page One" in dst_doc[2].get_text()
+            assert "Target Page Two" in dst_doc[3].get_text()
+        finally:
+            src_doc.close()
+            dst_doc.close()
+
+    def test_clone_page_editor_objects_deep_copies_all_types_and_shifts_downstream(self):
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.models import (
+            AcroFormField,
+            DocumentSession,
+            EditableShape,
+            EditableStroke,
+            EditableText,
+            MeasurementObject,
+            PatchObject,
+            RedactionMark,
+            StickyNoteObject,
+        )
+
+        src_sess = DocumentSession()
+        src_sess.current_page_index = 0
+        txt = EditableText(10, 20, "Uncommitted Hello", 12.0, "Helvetica", (0, 0, 0), page_number=0, is_new=True)
+        patch_obj = PatchObject((10, 20, 100, 50), 0, b"fake_png", is_new=True)
+        patch_obj.linked_text = txt
+        txt.linked_patch = patch_obj
+        shape = EditableShape("rectangle", (30, 40, 90, 90), page_number=0, is_new=True)
+        stroke = EditableStroke([(10, 10), (20, 20)], (255, 0, 0), 2.0, tool_type="pen", page_number=0, is_new=True)
+        field = AcroFormField(
+            field_id="f1",
+            xref=0,
+            page_number=0,
+            rect=(50, 50, 150, 80),
+            field_name="user_name",
+            field_type="text",
+            value="Alice",
+        )
+        note = StickyNoteObject(page_number=0, x=100.0, y=120.0, content="Review comment")
+        meas = MeasurementObject("distance", [(0.0, 0.0), (100.0, 0.0)], page_number=0)
+        redact = RedactionMark(page_number=0, bbox=(15, 15, 60, 35), overlay_text="CONFIDENTIAL")
+
+        src_sess.editable_texts = [txt]
+        src_sess.editable_images = [patch_obj]
+        src_sess.editable_shapes = [shape]
+        src_sess.editable_strokes = [stroke]
+        src_sess.form_fields = [field]
+        src_sess.sticky_notes[0] = [note]
+        src_sess.measurements[0] = [meas]
+        src_sess.redaction_marks[0] = [redact]
+
+        dst_sess = DocumentSession()
+        existing_p1_txt = EditableText(5, 5, "Existing Page 1", 11.0, "Helvetica", (0, 0, 0), page_number=1, is_new=True)
+        dst_sess.page_objects_cache[1] = {
+            "texts": [existing_p1_txt],
+            "images": [],
+            "shapes": [],
+            "strokes": [],
+            "form_fields": [],
+        }
+        existing_p1_note = StickyNoteObject(page_number=1, x=40.0, y=40.0, content="Existing P1 Note")
+        dst_sess.sticky_notes[1] = [existing_p1_note]
+
+        bundle = pdf_handler.clone_page_editor_objects(
+            src_sess,
+            src_page_idx=0,
+            dst_page_idx=1,
+            dst_session=dst_sess,
+            shift_downstream=True,
+        )
+
+        # Verify cloned objects at page 1 in dst_sess
+        assert 1 in dst_sess.page_objects_cache
+        c_texts = dst_sess.page_objects_cache[1]["texts"]
+        c_images = dst_sess.page_objects_cache[1]["images"]
+        assert len(c_texts) == 1
+        assert c_texts[0] is not txt
+        assert c_texts[0].text == "Uncommitted Hello"
+        assert c_texts[0].page_number == 1
+        assert len(c_images) == 1
+        assert c_images[0] is not patch_obj
+        assert c_images[0].page_number == 1
+        # Verify linked_text and linked_patch point to the cloned counterparts
+        assert c_images[0].linked_text is c_texts[0]
+        assert c_texts[0].linked_patch is c_images[0]
+
+        assert len(dst_sess.page_objects_cache[1]["shapes"]) == 1
+        assert dst_sess.page_objects_cache[1]["shapes"][0].page_number == 1
+        assert len(dst_sess.page_objects_cache[1]["strokes"]) == 1
+        assert dst_sess.page_objects_cache[1]["strokes"][0].page_number == 1
+        assert len(dst_sess.page_objects_cache[1]["form_fields"]) == 1
+        assert dst_sess.page_objects_cache[1]["form_fields"][0].page_number == 1
+        assert len(dst_sess.sticky_notes[1]) == 1
+        assert dst_sess.sticky_notes[1][0].content == "Review comment"
+        assert dst_sess.sticky_notes[1][0].page_number == 1
+        assert len(dst_sess.measurements[1]) == 1
+        assert dst_sess.measurements[1][0].page_number == 1
+        assert len(dst_sess.redaction_marks[1]) == 1
+        assert dst_sess.redaction_marks[1][0].page_number == 1
+
+        # Verify downstream page 1 was shifted to page 2
+        assert 2 in dst_sess.page_objects_cache
+        assert dst_sess.page_objects_cache[2]["texts"][0] is existing_p1_txt
+        assert existing_p1_txt.page_number == 2
+        assert dst_sess.sticky_notes[2][0] is existing_p1_note
+        assert existing_p1_note.page_number == 2
+        assert bundle["texts"][0].text == "Uncommitted Hello"
+
+    def test_insert_copied_pages_command_undo_redo_even_after_source_closed(self):
+        from unittest.mock import MagicMock
+        from word_sys_pdf_editor.models import DocumentSession, EditableText
+        from word_sys_pdf_editor.undo_manager import InsertCopiedPagesCommand
+
+        src_doc = fitz.open()
+        sp0 = src_doc.new_page(width=500, height=700)
+        sp0.insert_text((50, 100), "Copied From Tab A")
+        src_sess = DocumentSession(doc=src_doc)
+        src_sess.current_page_index = 0
+        src_sess.editable_texts = [
+            EditableText(60, 120, "Uncommitted Overlay A", 14.0, "Helvetica", (0, 0, 0), page_number=0, is_new=True)
+        ]
+
+        dst_doc = fitz.open()
+        dp0 = dst_doc.new_page(width=600, height=800)
+        dp0.insert_text((50, 100), "Tab B Page 1")
+        dp1 = dst_doc.new_page(width=600, height=800)
+        dp1.insert_text((50, 100), "Tab B Page 2")
+        dst_sess = DocumentSession(doc=dst_doc)
+        dst_sess.current_page_index = 0
+        p1_txt = EditableText(40, 80, "Tab B Page 2 Overlay", 12.0, "Helvetica", (0, 0, 0), page_number=1, is_new=True)
+        dst_sess.page_objects_cache[1] = {
+            "texts": [p1_txt],
+            "images": [],
+            "shapes": [],
+            "strokes": [],
+            "form_fields": [],
+        }
+
+        mock_win = MagicMock()
+        mock_win._active_session = dst_sess
+        mock_win.doc = dst_doc
+        mock_win.current_page_index = 0
+        mock_win.document_modified = False
+
+        try:
+            cmd = InsertCopiedPagesCommand(
+                mock_win,
+                dst_insert_idx=1,
+                src_session=src_sess,
+                src_page_indices=[0],
+                dst_session=dst_sess,
+            )
+            # Close source session before executing/undoing/redoing to prove command is self-contained
+            src_sess.close()
+
+            assert cmd.execute() is True
+            assert len(dst_doc) == 3
+            assert "Copied From Tab A" in dst_doc[1].get_text()
+            assert dst_sess.page_objects_cache[1]["texts"][0].text == "Uncommitted Overlay A"
+            assert dst_sess.page_objects_cache[1]["texts"][0].page_number == 1
+            assert dst_sess.page_objects_cache[2]["texts"][0] is p1_txt
+            assert p1_txt.page_number == 2
+            assert dst_sess.is_modified is True
+
+            # Undo removes the inserted page and shifts Page 2 back to index 1
+            assert cmd.undo() is True
+            assert len(dst_doc) == 2
+            assert "Tab B Page 2" in dst_doc[1].get_text()
+            assert dst_sess.page_objects_cache[1]["texts"][0] is p1_txt
+            assert p1_txt.page_number == 1
+            assert dst_sess.is_modified is False
+
+            # Redo re-inserts the page and clones the overlay objects again
+            assert cmd.redo() is True
+            assert len(dst_doc) == 3
+            assert "Copied From Tab A" in dst_doc[1].get_text()
+            assert dst_sess.page_objects_cache[1]["texts"][0].text == "Uncommitted Overlay A"
+            assert dst_sess.page_objects_cache[2]["texts"][0] is p1_txt
+            assert p1_txt.page_number == 2
+        finally:
+            dst_sess.close()
+
+
+
 
 
 

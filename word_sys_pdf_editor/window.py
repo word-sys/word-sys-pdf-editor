@@ -7,7 +7,7 @@ from .undo_manager import (
     DeleteFormFieldCommand, MoveResizeFormFieldCommand, EditFormFieldChoicesCommand,
     ReplaceImageCommand, CalibrateScaleCommand, AddMeasurementCommand, DeleteMeasurementCommand,
     AddStickyNoteCommand, DeleteStickyNoteCommand, EditStickyNoteCommand, MoveStickyNoteCommand,
-    ReorderObjectCommand, CompositeCommand, EmbedOCRTextCommand
+    ReorderObjectCommand, CompositeCommand, EmbedOCRTextCommand, InsertCopiedPagesCommand
 )
 from .i18n import _, get_language, set_language, get_supported_languages, get_setting, set_setting
 
