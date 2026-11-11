@@ -8,14 +8,17 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gtk
+from gi.repository import Adw, Gdk, GObject, Gtk
 
 from . import utils
 from .i18n import _, get_language, get_setting, get_supported_languages
 from .settings_manager import (
+    DEFAULT_TOOLBAR_TOOLS_ORDER,
     HAMBURGER_DOCUMENT_ACTION_KEYS,
     HAMBURGER_INLINE_TOGGLE_KEYS,
     HAMBURGER_ITEM_LABELS,
+    TOOLBAR_LAYOUT_PRESETS,
+    TOOLBAR_TOOL_METADATA,
     SettingsManager,
     get_settings_manager,
 )
@@ -45,6 +48,7 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self._build_general_page()
         self._build_workflow_page()
         self._build_hamburger_page()
+        self._build_toolbar_page()
 
         self._unsub_settings = self.settings.subscribe(self._on_setting_changed)
         self.connect("close-request", self._on_close_request)
@@ -315,6 +319,254 @@ class PreferencesWindow(Adw.PreferencesWindow):
 
         self.add(self.hamburger_page)
 
+    def _build_toolbar_page(self) -> None:
+        self.toolbar_page = Adw.PreferencesPage(
+            title=_("prefs_page_toolbar"),
+            icon_name="view-grid-symbolic",
+        )
+        self.toolbar_page.set_name("toolbar")
+
+        self.toolbar_preset_group = Adw.PreferencesGroup(
+            title=_("prefs_group_toolbar_presets"),
+            description=_("prefs_group_toolbar_presets_desc"),
+        )
+        self.toolbar_preset_row = Adw.ActionRow(
+            title=_("prefs_toolbar_preset_title"),
+            subtitle=_("prefs_toolbar_preset_subtitle"),
+        )
+        self._toolbar_preset_codes: List[str] = [
+            "default",
+            "essential",
+            "annotation",
+            "forms_signing",
+            "custom",
+        ]
+        preset_labels: List[str] = [
+            _("prefs_toolbar_preset_default"),
+            _("prefs_toolbar_preset_essential"),
+            _("prefs_toolbar_preset_annotation"),
+            _("prefs_toolbar_preset_forms"),
+            _("prefs_toolbar_preset_custom"),
+        ]
+        self.toolbar_preset_dropdown = Gtk.DropDown.new_from_strings(preset_labels)
+        self.toolbar_preset_dropdown.set_valign(Gtk.Align.CENTER)
+        detected_preset = self._detect_current_toolbar_preset()
+        if detected_preset in self._toolbar_preset_codes:
+            self.toolbar_preset_dropdown.set_selected(self._toolbar_preset_codes.index(detected_preset))
+        self.toolbar_preset_dropdown.connect("notify::selected", self._on_toolbar_preset_changed)
+
+        self.toolbar_reset_button = Gtk.Button(label=_("prefs_toolbar_reset_btn"))
+        self.toolbar_reset_button.set_valign(Gtk.Align.CENTER)
+        self.toolbar_reset_button.set_tooltip_text(_("prefs_toolbar_reset_tip"))
+        self.toolbar_reset_button.connect("clicked", self._on_toolbar_reset_clicked)
+
+        self.toolbar_preset_row.add_suffix(self.toolbar_preset_dropdown)
+        self.toolbar_preset_row.add_suffix(self.toolbar_reset_button)
+        self.toolbar_preset_group.add(self.toolbar_preset_row)
+        self.toolbar_page.add(self.toolbar_preset_group)
+
+        self.toolbar_tools_group = Adw.PreferencesGroup(
+            title=_("prefs_group_toolbar_tools"),
+            description=_("prefs_group_toolbar_tools_desc"),
+        )
+        self.toolbar_tools_listbox = Gtk.ListBox()
+        self.toolbar_tools_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.toolbar_tools_listbox.add_css_class("boxed-list")
+        self.toolbar_tools_group.add(self.toolbar_tools_listbox)
+        self.toolbar_page.add(self.toolbar_tools_group)
+
+        self.toolbar_tool_rows: Dict[str, Adw.ActionRow] = {}
+        self.toolbar_tool_switches: Dict[str, Gtk.Switch] = {}
+        self.toolbar_move_up_buttons: Dict[str, Gtk.Button] = {}
+        self.toolbar_move_down_buttons: Dict[str, Gtk.Button] = {}
+        self._refresh_toolbar_rows()
+
+        self.add(self.toolbar_page)
+
+    def _detect_current_toolbar_preset(self) -> str:
+        order = list(self.settings.get("toolbar_tools_order", DEFAULT_TOOLBAR_TOOLS_ORDER))
+        visible = dict(self.settings.get("toolbar_visible_tools", {}))
+        for preset_name, preset_data in TOOLBAR_LAYOUT_PRESETS.items():
+            if order == list(preset_data["order"]) and visible == dict(preset_data["visible"]):
+                return preset_name
+        return "custom"
+
+    def _refresh_toolbar_rows(self) -> None:
+        was_syncing = self._syncing_ui
+        self._syncing_ui = True
+        try:
+            child = self.toolbar_tools_listbox.get_first_child()
+            while child is not None:
+                nxt = child.get_next_sibling()
+                self.toolbar_tools_listbox.remove(child)
+                child = nxt
+
+            self.toolbar_tool_rows.clear()
+            self.toolbar_tool_switches.clear()
+            self.toolbar_move_up_buttons.clear()
+            self.toolbar_move_down_buttons.clear()
+
+            order: List[str] = list(self.settings.get("toolbar_tools_order", DEFAULT_TOOLBAR_TOOLS_ORDER))
+            visible: Dict[str, bool] = dict(self.settings.get("toolbar_visible_tools", {}))
+            total = len(order)
+
+            for idx, tool_id in enumerate(order):
+                meta = TOOLBAR_TOOL_METADATA.get(tool_id, {})
+                label_key = meta.get("label_key", tool_id)
+                tip_key = meta.get("tip_key", "")
+                icon_name = meta.get("icon", "applications-graphics-symbolic")
+                shortcut = meta.get("shortcut", "")
+
+                row = Adw.ActionRow(
+                    title=_(label_key),
+                    subtitle=_(tip_key) if tip_key else "",
+                )
+
+                prefix_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                prefix_box.set_valign(Gtk.Align.CENTER)
+                drag_icon = Gtk.Image.new_from_icon_name("list-drag-handle-symbolic")
+                drag_icon.add_css_class("dim-label")
+                tool_icon = Gtk.Image.new_from_icon_name(icon_name)
+                prefix_box.append(drag_icon)
+                prefix_box.append(tool_icon)
+                row.add_prefix(prefix_box)
+
+                if shortcut:
+                    sc_lbl = Gtk.Label(label=shortcut)
+                    sc_lbl.set_valign(Gtk.Align.CENTER)
+                    sc_lbl.add_css_class("dim-label")
+                    sc_lbl.add_css_class("caption")
+                    row.add_suffix(sc_lbl)
+
+                up_btn = Gtk.Button.new_from_icon_name("go-up-symbolic")
+                up_btn.add_css_class("flat")
+                up_btn.set_valign(Gtk.Align.CENTER)
+                up_btn.set_tooltip_text(_("prefs_tool_move_up_tip"))
+                up_btn.set_sensitive(idx > 0)
+                up_btn.connect("clicked", lambda _b, tid=tool_id: self.move_tool(tid, -1))
+                row.add_suffix(up_btn)
+
+                down_btn = Gtk.Button.new_from_icon_name("go-down-symbolic")
+                down_btn.add_css_class("flat")
+                down_btn.set_valign(Gtk.Align.CENTER)
+                down_btn.set_tooltip_text(_("prefs_tool_move_down_tip"))
+                down_btn.set_sensitive(idx < total - 1)
+                down_btn.connect("clicked", lambda _b, tid=tool_id: self.move_tool(tid, 1))
+                row.add_suffix(down_btn)
+
+                sw = Gtk.Switch()
+                sw.set_valign(Gtk.Align.CENTER)
+                is_vis = True if tool_id == "select" else bool(visible.get(tool_id, True))
+                sw.set_active(is_vis)
+                if tool_id == "select":
+                    sw.set_sensitive(False)
+                    sw.set_tooltip_text(_("prefs_tool_select_always_visible_tip"))
+                else:
+                    sw.set_tooltip_text(_("prefs_tool_visible_tip"))
+                    sw.connect(
+                        "notify::active",
+                        lambda s, _pspec, tid=tool_id: self._on_toolbar_tool_switch_toggled(s, tid),
+                    )
+                row.add_suffix(sw)
+
+                try:
+                    drag_source = Gtk.DragSource.new()
+                    drag_source.set_actions(Gdk.DragAction.MOVE)
+                    drag_source.connect(
+                        "prepare",
+                        lambda _src, _x, _y, tid=tool_id: Gdk.ContentProvider.new_for_value(tid),
+                    )
+                    row.add_controller(drag_source)
+
+                    drop_target = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+                    drop_target.connect(
+                        "drop",
+                        lambda _tgt, val, _x, _y, target_idx=idx: self._on_tool_row_dropped(val, target_idx),
+                    )
+                    row.add_controller(drop_target)
+                except Exception:
+                    pass
+
+                self.toolbar_tools_listbox.append(row)
+                self.toolbar_tool_rows[tool_id] = row
+                self.toolbar_tool_switches[tool_id] = sw
+                self.toolbar_move_up_buttons[tool_id] = up_btn
+                self.toolbar_move_down_buttons[tool_id] = down_btn
+
+            detected = self._detect_current_toolbar_preset()
+            if detected in self._toolbar_preset_codes:
+                p_idx = self._toolbar_preset_codes.index(detected)
+                if self.toolbar_preset_dropdown.get_selected() != p_idx:
+                    self.toolbar_preset_dropdown.set_selected(p_idx)
+        finally:
+            self._syncing_ui = was_syncing
+
+    def _on_tool_row_dropped(self, dragged_tool_id: Any, target_index: int) -> bool:
+        if not isinstance(dragged_tool_id, str):
+            return False
+        self.move_tool_to_index(dragged_tool_id, target_index)
+        return True
+
+    def move_tool(self, tool_id: str, delta: int) -> List[str]:
+        """Move `tool_id` by `delta` positions (-1 up, +1 down) in the toolbar ordering."""
+        order = list(self.settings.get("toolbar_tools_order", DEFAULT_TOOLBAR_TOOLS_ORDER))
+        if tool_id not in order:
+            return order
+        cur_idx = order.index(tool_id)
+        new_idx = max(0, min(len(order) - 1, cur_idx + int(delta)))
+        return self.move_tool_to_index(tool_id, new_idx)
+
+    def move_tool_to_index(self, tool_id: str, new_index: int) -> List[str]:
+        """Move `tool_id` to `new_index` in the toolbar ordering and rebuild live."""
+        order = list(self.settings.get("toolbar_tools_order", DEFAULT_TOOLBAR_TOOLS_ORDER))
+        if tool_id not in order:
+            return order
+        cur_idx = order.index(tool_id)
+        clamped_idx = max(0, min(len(order) - 1, int(new_index)))
+        if cur_idx == clamped_idx:
+            return order
+        order.pop(cur_idx)
+        order.insert(clamped_idx, tool_id)
+        self.settings.set("toolbar_tools_order", order)
+        self._refresh_toolbar_rows()
+        if self.editor_window is not None and hasattr(self.editor_window, "rebuild_tools_grid"):
+            self.editor_window.rebuild_tools_grid()
+        return order
+
+    def set_tool_visibility(self, tool_id: str, is_visible: bool) -> Dict[str, bool]:
+        """Set visibility of `tool_id` on the primary toolbar (keeping 'select' always visible)."""
+        vis_map = dict(self.settings.get("toolbar_visible_tools", {}))
+        vis_map[tool_id] = True if tool_id == "select" else bool(is_visible)
+        vis_map["select"] = True
+        self.settings.set("toolbar_visible_tools", vis_map)
+        self._refresh_toolbar_rows()
+        if self.editor_window is not None and hasattr(self.editor_window, "rebuild_tools_grid"):
+            self.editor_window.rebuild_tools_grid()
+        return vis_map
+
+    def _on_toolbar_tool_switch_toggled(self, switch: Gtk.Switch, tool_id: str) -> None:
+        if self._syncing_ui:
+            return
+        self.set_tool_visibility(tool_id, bool(switch.get_active()))
+
+    def _on_toolbar_preset_changed(self, dropdown: Gtk.DropDown, _pspec: Any) -> None:
+        if self._syncing_ui:
+            return
+        idx = int(dropdown.get_selected())
+        if 0 <= idx < len(self._toolbar_preset_codes):
+            preset_code = self._toolbar_preset_codes[idx]
+            if preset_code in TOOLBAR_LAYOUT_PRESETS:
+                self.settings.apply_toolbar_preset(preset_code)
+                self._refresh_toolbar_rows()
+                if self.editor_window is not None and hasattr(self.editor_window, "rebuild_tools_grid"):
+                    self.editor_window.rebuild_tools_grid()
+
+    def _on_toolbar_reset_clicked(self, _button: Gtk.Button) -> None:
+        self.settings.reset_toolbar_to_default()
+        self._refresh_toolbar_rows()
+        if self.editor_window is not None and hasattr(self.editor_window, "rebuild_tools_grid"):
+            self.editor_window.rebuild_tools_grid()
+
     @staticmethod
     def _collect_available_font_families() -> List[str]:
         base_families = [
@@ -491,6 +743,8 @@ class PreferencesWindow(Adw.PreferencesWindow):
                     bval = bool(value.get(item_key, False))
                     if sw.get_active() != bval:
                         sw.set_active(bval)
+            elif key in ("toolbar_tools_order", "toolbar_visible_tools"):
+                self._refresh_toolbar_rows()
         finally:
             self._syncing_ui = False
 

@@ -2338,6 +2338,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.calibrate_tool_button = None
         self.stamp_menu_button = None
+        self.tools_grid = tools_grid
+        self.tool_buttons_by_id = {
+            "select": self.select_tool_button,
+            "add_text": self.add_text_tool_button,
+            "add_image": self.add_image_tool_button,
+            "redact": self.redact_tool_button,
+            "add_ellipse": self.add_ellipse_tool_button,
+            "add_rectangle": self.add_rectangle_tool_button,
+            "pen": self.pen_tool_button,
+            "highlighter": self.highlighter_tool_button,
+            "add_checkmark": self.checkmark_tool_button,
+            "add_cross": self.cross_tool_button,
+            "form_builder": self.form_builder_tool_button,
+            "add_stamp": self.stamp_tool_button,
+            "measure_distance": self.measure_distance_tool_button,
+            "measure_area": self.measure_area_tool_button,
+            "clone_patch": self.clone_patch_tool_button,
+            "place_signature": self.signature_tool_button,
+        }
+        self.rebuild_tools_grid()
         
         sidebar_box.append(tools_grid)
 
@@ -15560,6 +15580,140 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return menu
         finally:
             self._rebuilding_hamburger_menu = False
+
+    def rebuild_tools_grid(self, settings_manager=None):
+        """Rebuild the sidebar tools grid according to user-configured tool order and visibility."""
+        from .settings_manager import (
+            DEFAULT_TOOLBAR_TOOLS_ORDER,
+            TOOLBAR_TOOL_METADATA,
+            get_settings_manager,
+        )
+
+        if getattr(self, "_rebuilding_tools_grid", False):
+            return getattr(self, "tools_grid", None)
+
+        grid = getattr(self, "tools_grid", None)
+        btn_map = getattr(self, "tool_buttons_by_id", None)
+        if grid is None or not isinstance(btn_map, dict):
+            return None
+
+        self._rebuilding_tools_grid = True
+        try:
+            mgr = settings_manager or getattr(self, "_settings_manager", None) or get_settings_manager()
+            if settings_manager is not None:
+                self._settings_manager = settings_manager
+
+            if getattr(self, "_subscribed_toolbar_mgr", None) is not mgr:
+                for unsub_attr in ("_unsub_toolbar_order", "_unsub_toolbar_vis"):
+                    old_unsub = getattr(self, unsub_attr, None)
+                    if callable(old_unsub):
+                        try:
+                            old_unsub()
+                        except Exception:
+                            pass
+                self._subscribed_toolbar_mgr = mgr
+                self._unsub_toolbar_order = mgr.subscribe(
+                    lambda _k, _v: self.rebuild_tools_grid(),
+                    key="toolbar_tools_order",
+                )
+                self._unsub_toolbar_vis = mgr.subscribe(
+                    lambda _k, _v: self.rebuild_tools_grid(),
+                    key="toolbar_visible_tools",
+                )
+
+            order = list(mgr.get("toolbar_tools_order", DEFAULT_TOOLBAR_TOOLS_ORDER))
+            visible_map = dict(mgr.get("toolbar_visible_tools", {}))
+            visible_map["select"] = True
+
+            child = grid.get_first_child()
+            while child is not None:
+                nxt = child.get_next_sibling()
+                grid.remove(child)
+                child = nxt
+
+            visible_tool_ids = [t for t in order if visible_map.get(t, True) and t in btn_map]
+            if "select" not in visible_tool_ids and "select" in btn_map:
+                visible_tool_ids.insert(0, "select")
+            hidden_tool_ids = [t for t in order if t not in visible_tool_ids and t in btn_map]
+
+            self.visible_toolbar_tool_ids = list(visible_tool_ids)
+            self.hidden_toolbar_tool_ids = list(hidden_tool_ids)
+
+            for idx, tool_id in enumerate(visible_tool_ids):
+                btn = btn_map.get(tool_id)
+                if btn is not None:
+                    col = idx % 2
+                    row = idx // 2
+                    grid.attach(btn, col, row, 1, 1)
+
+            if hidden_tool_ids:
+                more_btn = Gtk.MenuButton()
+                more_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                more_box.set_halign(Gtk.Align.CENTER)
+                more_img = Gtk.Image.new_from_icon_name("view-more-symbolic")
+                more_lbl = Gtk.Label(label=_("more_tools_btn"))
+                more_box.append(more_img)
+                more_box.append(more_lbl)
+                more_btn.set_child(more_box)
+                more_btn.set_tooltip_text(_("more_tools_tip"))
+                more_btn.add_css_class("tool-button")
+
+                popover = Gtk.Popover()
+                pop_box = Gtk.Box(
+                    orientation=Gtk.Orientation.VERTICAL,
+                    spacing=4,
+                    margin_start=6,
+                    margin_end=6,
+                    margin_top=6,
+                    margin_bottom=6,
+                )
+                self.more_tools_popover_buttons = {}
+                for h_tid in hidden_tool_ids:
+                    meta = TOOLBAR_TOOL_METADATA.get(h_tid, {})
+                    h_btn = Gtk.Button()
+                    h_btn.add_css_class("flat")
+                    h_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                    h_icon = Gtk.Image.new_from_icon_name(
+                        meta.get("icon", "applications-graphics-symbolic")
+                    )
+                    h_label = Gtk.Label(
+                        label=_(meta.get("label_key", h_tid)),
+                        xalign=0.0,
+                        hexpand=True,
+                    )
+                    h_row.append(h_icon)
+                    h_row.append(h_label)
+                    h_btn.set_child(h_row)
+                    tip_key = meta.get("tip_key", "")
+                    if tip_key:
+                        h_btn.set_tooltip_text(_(tip_key))
+
+                    def _on_hidden_tool_clicked(_b, tid=h_tid, pop=popover):
+                        try:
+                            pop.popdown()
+                        except Exception:
+                            pass
+                        self.on_tool_selected(btn_map.get(tid), tid)
+
+                    h_btn.connect("clicked", _on_hidden_tool_clicked)
+                    pop_box.append(h_btn)
+                    self.more_tools_popover_buttons[h_tid] = h_btn
+
+                popover.set_child(pop_box)
+                more_btn.set_popover(popover)
+
+                more_idx = len(visible_tool_ids)
+                grid.attach(more_btn, more_idx % 2, more_idx // 2, 1, 1)
+                self.more_tools_button = more_btn
+                self.more_tools_popover = popover
+            else:
+                self.more_tools_button = None
+                self.more_tools_popover = None
+                self.more_tools_popover_buttons = {}
+
+            return grid
+        finally:
+            self._rebuilding_tools_grid = False
 
     def on_preferences_activated(self, action=None, param=None, page_name: Optional[str] = None):
         """Open and present the dedicated GNOME / Libadwaita Preferences Window."""

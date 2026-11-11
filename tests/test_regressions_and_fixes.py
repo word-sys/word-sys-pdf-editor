@@ -2794,5 +2794,109 @@ class TestHamburgerMenuCustomizationAndPresets:
                 win.destroy()
 
 
+class TestCustomizableToolbarAndToolArrangement:
+    """Verify Toolbar & Tools page reordering, visibility toggles, presets, and live sidebar tools_grid rebuilding."""
+
+    def test_toolbar_page_reordering_visibility_presets_and_reset(self, tmp_path):
+        from unittest.mock import MagicMock
+        from word_sys_pdf_editor.preferences_dialog import PreferencesWindow
+        from word_sys_pdf_editor.settings_manager import (
+            DEFAULT_TOOLBAR_TOOLS_ORDER,
+            SettingsManager,
+        )
+
+        cfg_path = tmp_path / "settings.json"
+        mgr = SettingsManager(config_file=cfg_path)
+        mock_win = MagicMock()
+
+        prefs = PreferencesWindow(editor_window=mock_win, settings_manager=mgr)
+        try:
+            assert list(prefs.toolbar_tool_rows.keys()) == DEFAULT_TOOLBAR_TOOLS_ORDER
+            assert prefs.toolbar_tool_switches["select"].get_active() is True
+            assert prefs.toolbar_tool_switches["select"].get_sensitive() is False
+            assert prefs.toolbar_move_up_buttons["select"].get_sensitive() is False
+            assert prefs.toolbar_move_down_buttons["place_signature"].get_sensitive() is False
+
+            # Move clone_patch to index 2 (Select -> Text -> Clone/Patch -> Image)
+            new_order = prefs.move_tool_to_index("clone_patch", 2)
+            assert new_order[:4] == ["select", "add_text", "clone_patch", "add_image"]
+            assert mgr.get("toolbar_tools_order")[:4] == ["select", "add_text", "clone_patch", "add_image"]
+            assert prefs._toolbar_preset_codes[prefs.toolbar_preset_dropdown.get_selected()] == "custom"
+            mock_win.rebuild_tools_grid.assert_called()
+
+            # Move clone_patch up one slot via move_tool(-1)
+            new_order_2 = prefs.move_tool("clone_patch", -1)
+            assert new_order_2[:3] == ["select", "clone_patch", "add_text"]
+
+            # Apply Essential Editing preset via dropdown
+            essential_idx = prefs._toolbar_preset_codes.index("essential")
+            prefs.toolbar_preset_dropdown.set_selected(essential_idx)
+            assert mgr.get("toolbar_tools_order")[:4] == ["select", "add_text", "clone_patch", "add_image"]
+            vis_map = mgr.get("toolbar_visible_tools")
+            assert vis_map["select"] is True
+            assert vis_map["add_text"] is True
+            assert vis_map["clone_patch"] is True
+            assert vis_map["add_image"] is True
+            assert vis_map["pen"] is False
+
+            # Reset to default via Reset button
+            prefs._on_toolbar_reset_clicked(prefs.toolbar_reset_button)
+            assert mgr.get("toolbar_tools_order") == DEFAULT_TOOLBAR_TOOLS_ORDER
+            assert all(mgr.get("toolbar_visible_tools").values())
+            assert prefs._toolbar_preset_codes[prefs.toolbar_preset_dropdown.get_selected()] == "default"
+        finally:
+            prefs._on_close_request(prefs)
+            prefs.destroy()
+
+    def test_window_rebuild_tools_grid_and_more_tools_popover(self, tmp_path):
+        from unittest.mock import patch
+        from gi.repository import Adw
+        from word_sys_pdf_editor.settings_manager import (
+            DEFAULT_TOOLBAR_TOOLS_ORDER,
+            SettingsManager,
+        )
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        cfg_path = tmp_path / "settings.json"
+        mgr = SettingsManager(config_file=cfg_path)
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_toolbar_rebuild")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                win.rebuild_tools_grid(settings_manager=mgr)
+                assert win.visible_toolbar_tool_ids == DEFAULT_TOOLBAR_TOOLS_ORDER
+                assert win.hidden_toolbar_tool_ids == []
+                assert win.more_tools_button is None
+                assert win.tools_grid.get_child_at(0, 0) is win.select_tool_button
+                assert win.tools_grid.get_child_at(1, 0) is win.add_text_tool_button
+
+                # Apply Essential preset -> live rebuild places Select, Text, Clone/Patch, Image + More...
+                mgr.apply_toolbar_preset("essential")
+                assert win.visible_toolbar_tool_ids == ["select", "add_text", "clone_patch", "add_image"]
+                assert len(win.hidden_toolbar_tool_ids) == 12
+                assert win.tools_grid.get_child_at(0, 0) is win.select_tool_button
+                assert win.tools_grid.get_child_at(1, 0) is win.add_text_tool_button
+                assert win.tools_grid.get_child_at(0, 1) is win.clone_patch_tool_button
+                assert win.tools_grid.get_child_at(1, 1) is win.add_image_tool_button
+                assert win.more_tools_button is not None
+                assert win.tools_grid.get_child_at(0, 2) is win.more_tools_button
+
+                # Clicking a hidden tool inside the More Tools popover activates that tool mode
+                win.view_mode = False
+                pen_hidden_btn = win.more_tools_popover_buttons.get("pen")
+                assert pen_hidden_btn is not None
+                pen_hidden_btn.emit("clicked")
+                assert win.tool_mode == "pen"
+            finally:
+                win.close_document()
+                win.destroy()
+
+
+
 
 
