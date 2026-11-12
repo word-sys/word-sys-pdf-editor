@@ -3252,6 +3252,176 @@ class TestCrossTabThumbnailDragAndDrop:
                 win.destroy()
 
 
+class TestPageClipboardAndContextMenuActions:
+    """Verify page clipboard copy/paste across tabs (including after closing source tab), page duplication, and thumbnail context menu items."""
+
+    def test_copy_and_paste_page_across_tabs_even_after_source_tab_closed(self):
+        from unittest.mock import patch
+        from gi.repository import Adw
+        from word_sys_pdf_editor.models import EditableShape, EditableText
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc_a = fitz.open()
+        pa = doc_a.new_page(width=500, height=700)
+        pa.insert_text((50, 100), "Clipboard Source Page")
+
+        doc_b = fitz.open()
+        pb0 = doc_b.new_page(width=600, height=800)
+        pb0.insert_text((50, 100), "Target Page 1")
+        pb1 = doc_b.new_page(width=600, height=800)
+        pb1.insert_text((50, 100), "Target Page 2")
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_page_clipboard")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess_a = win.create_session(doc=doc_a, filepath="/tmp/clip_src.pdf")
+                sess_b = win.create_session(doc=doc_b, filepath="/tmp/clip_dst.pdf")
+                win.add_session(sess_a, switch_to=True)
+                win.add_session(sess_b, switch_to=False)
+
+                # Add uncommitted editor objects to Page 0 of Tab A
+                t_obj = EditableText(x=60, y=140, text="Copied Overlay Text", page_number=0, is_new=True)
+                s_obj = EditableShape(shape_type="rectangle", bbox=(70, 200, 170, 260), page_number=0)
+                sess_a.editable_texts = [t_obj]
+                sess_a.editable_shapes = [s_obj]
+
+                # Copy Page 0 while in View Mode (copying is read-only and allowed in View Mode)
+                assert win.has_page_clipboard() is False
+                assert win.on_copy_page_action() is True
+                assert win.has_page_clipboard() is True
+
+                # Close Tab A completely
+                win.remove_session(sess_a)
+                assert win._active_session is sess_b
+
+                # Switch Tab B to Edit Mode and paste BEFORE Page 0
+                win.view_mode = False
+                win._update_ui_state()
+                assert win.paste_page_from_clipboard(insert_index=0, position="before", page_index=0) is True
+                assert len(sess_b.doc) == 3
+                assert "Clipboard Source Page" in sess_b.doc[0].get_text()
+                assert len(sess_b.page_objects_cache[0]["texts"]) == 1
+                assert sess_b.page_objects_cache[0]["texts"][0].text == "Copied Overlay Text"
+                assert sess_b.page_objects_cache[0]["texts"][0] is not t_obj
+                assert len(sess_b.page_objects_cache[0]["shapes"]) == 1
+
+                # Paste AFTER Page 1 via win.on_paste_page_action
+                win.current_page_index = 1
+                assert win.on_paste_page_action(None, "after") is True
+                assert len(sess_b.doc) == 4
+                assert "Clipboard Source Page" in sess_b.doc[2].get_text()
+
+                # Undo both pastes
+                sess_b.undo_manager.undo()
+                assert len(sess_b.doc) == 3
+                sess_b.undo_manager.undo()
+                assert len(sess_b.doc) == 2
+
+                # Redo
+                sess_b.undo_manager.redo()
+                assert len(sess_b.doc) == 3
+                assert "Clipboard Source Page" in sess_b.doc[0].get_text()
+            finally:
+                win.close_document()
+                win.destroy()
+
+    def test_thumbnail_context_menu_items_duplicate_and_copy_to_open_tab(self):
+        from unittest.mock import patch
+        from gi.repository import Adw, Gtk
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc_a = fitz.open()
+        pa0 = doc_a.new_page(width=500, height=700)
+        pa0.insert_text((50, 100), "Source Tab Page 1")
+        pa1 = doc_a.new_page(width=500, height=700)
+        pa1.insert_text((50, 100), "Source Tab Page 2")
+
+        doc_b = fitz.open()
+        pb0 = doc_b.new_page(width=600, height=800)
+        pb0.insert_text((50, 100), "Second Tab Page 1")
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_thumb_ctx_menu")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess_a = win.create_session(doc=doc_a, filepath="/tmp/menu_src.pdf")
+                sess_b = win.create_session(doc=doc_b, filepath="/tmp/menu_dst.pdf")
+                win.add_session(sess_a, switch_to=True)
+                win.add_session(sess_b, switch_to=False)
+                sess_a.is_modified = False
+                sess_b.is_modified = False
+
+                win.view_mode = False
+                win._update_ui_state()
+
+                dummy_parent = Gtk.Box()
+                win.show_thumbnail_context_menu(dummy_parent, 10, 10, 0)
+                popover = win._thumb_context_popover
+                assert popover is not None
+                btns = getattr(popover, "_menu_buttons", {})
+                assert "rotate_cw" in btns
+                assert "rotate_ccw" in btns
+                assert "copy_page" in btns
+                assert "paste_page_before" in btns
+                assert "paste_page_after" in btns
+                assert "duplicate_page" in btns
+                assert "copy_page_to_doc" in btns
+                assert "delete_page" in btns
+
+                # Before copying a page, paste buttons are insensitive
+                assert btns["paste_page_before"].get_sensitive() is False
+                assert btns["paste_page_after"].get_sensitive() is False
+
+                # Copy page via context menu button
+                btns["copy_page"].emit("clicked")
+                assert win.has_page_clipboard() is True
+
+                # Re-open context menu: paste buttons are now sensitive
+                win.show_thumbnail_context_menu(dummy_parent, 10, 10, 0)
+                popover = win._thumb_context_popover
+                btns = popover._menu_buttons
+                assert btns["paste_page_before"].get_sensitive() is True
+                assert btns["paste_page_after"].get_sensitive() is True
+
+                # Duplicate page 0 via context menu button
+                btns["duplicate_page"].emit("clicked")
+                assert len(sess_a.doc) == 3
+                assert "Source Tab Page 1" in sess_a.doc[1].get_text()
+
+                # Undo duplication so sess_a is back to unmodified 2 pages
+                sess_a.undo_manager.undo()
+                assert len(sess_a.doc) == 2
+                sess_a.is_modified = False
+
+                # One-click copy page 0 to open Tab B from context menu without switching tabs
+                win.show_thumbnail_context_menu(dummy_parent, 10, 10, 0)
+                popover = win._thumb_context_popover
+                target_btns = getattr(popover, "_copy_to_tab_buttons", [])
+                assert len(target_btns) == 1
+                target_btns[0].emit("clicked")
+
+                assert len(sess_b.doc) == 2
+                assert "Source Tab Page 1" in sess_b.doc[1].get_text()
+                assert sess_b.is_modified is True
+                assert sess_a.is_modified is False
+            finally:
+                if getattr(win, "_thumb_context_popover", None):
+                    win._thumb_context_popover.unparent()
+                    win._thumb_context_popover = None
+                win.close_document()
+                win.destroy()
+
+
+
 
 
 

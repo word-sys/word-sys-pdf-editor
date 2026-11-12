@@ -2286,7 +2286,12 @@ class InsertCopiedPagesCommand(Command):
             sess.is_modified = True
             if hasattr(sess, "document_modified"):
                 sess.document_modified = True
-        if hasattr(self.window, "document_modified"):
+            if hasattr(self.window, "_update_tab_title"):
+                try:
+                    self.window._update_tab_title(sess)
+                except Exception:
+                    pass
+        if self._is_session_active() and hasattr(self.window, "document_modified"):
             self.window.document_modified = True
 
         first_inserted = self.inserted_indices[0]
@@ -2337,7 +2342,12 @@ class InsertCopiedPagesCommand(Command):
             sess.is_modified = self.pre_document_modified
             if hasattr(sess, "document_modified"):
                 sess.document_modified = self.pre_document_modified
-        if hasattr(self.window, "document_modified"):
+            if hasattr(self.window, "_update_tab_title"):
+                try:
+                    self.window._update_tab_title(sess)
+                except Exception:
+                    pass
+        if self._is_session_active() and hasattr(self.window, "document_modified"):
             self.window.document_modified = self.pre_document_modified
 
         target_page = max(0, min(self.prev_page_index, len(doc) - 1))

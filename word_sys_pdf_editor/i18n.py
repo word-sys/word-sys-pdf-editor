@@ -1140,6 +1140,15 @@ _STRINGS = {
         "more_tools_tip": "More Tools (Hidden from Primary Toolbar)",
         "status_page_copied_to_doc": "Copied page {} to page {}",
         "status_page_duplicated": "Duplicated page {} at page {}",
+        "copy_page": "Copy Page",
+        "paste_page": "Paste Page",
+        "paste_page_before": "Paste Page Before",
+        "paste_page_after": "Paste Page After",
+        "duplicate_page": "Duplicate Page",
+        "copy_page_to_doc": "Copy Page to Document…",
+        "status_page_copied_clipboard": "Copied page {} to page clipboard",
+        "status_page_pasted": "Pasted page at page {}",
+        "status_page_copied_to_tab": "Copied page {} to '{}'",
     },
 
     "tr": {
@@ -2210,6 +2219,17 @@ _STRINGS = {
         "guide_sc_tool_signature": "Dijital İmza Aracı",
         "guide_sc_tool_ocr_region": "OCR Bölge Aracı",
         "guide_sc_tool_form_builder": "Form Alanı Oluşturucu Aracı",
+        "status_page_copied_to_doc": "Sayfa {} -> {}. sayfaya kopyalandı",
+        "status_page_duplicated": "Sayfa {} -> {}. sayfada çoğaltıldı",
+        "copy_page": "Sayfayı Kopyala",
+        "paste_page": "Sayfayı Yapıştır",
+        "paste_page_before": "Sayfayı Öncesine Yapıştır",
+        "paste_page_after": "Sayfayı Sonrasına Yapıştır",
+        "duplicate_page": "Sayfayı Çoğalt",
+        "copy_page_to_doc": "Sayfayı Belgeye Kopyala…",
+        "status_page_copied_clipboard": "Sayfa {} sayfa panosuna kopyalandı",
+        "status_page_pasted": "Sayfa {}. sayfaya yapıştırıldı",
+        "status_page_copied_to_tab": "Sayfa {} '{}' belgesine kopyalandı",
     },
 }
 

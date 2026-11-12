@@ -797,6 +797,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.signature_tool_button = None
         self.stamp_menu_button = None
         self.selected_sticky_note = None
+        self._page_clipboard = None
         self.active_sticky_popover = None
         self.dragged_sticky_note = None
         self.sticky_note_start_coords = None
@@ -1225,6 +1226,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, 'pdf_scroll'):
                 has_objects = bool(session.editable_texts or session.editable_shapes or session.editable_strokes or session.editable_images or session.form_fields or session.is_modified)
                 self._load_page(session.current_page_index, reload_objects=(not has_objects))
+            if (
+                session.pages_model is not None
+                and hasattr(session.pages_model, 'get_n_items')
+                and session.pages_model.get_n_items() != len(session.doc)
+                and hasattr(self, '_load_thumbnails')
+            ):
+                self._load_thumbnails(target_page=session.current_page_index)
             if hasattr(self, 'thumbnail_selection_model') and self.thumbnail_selection_model:
                 try:
                     self.thumbnail_selection_model.set_selected(session.current_page_index)
@@ -1595,11 +1603,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     if hasattr(self, 'tab_bar') and self.tab_bar:
                         self.tab_bar.set_visible(False)
 
-    def get_session_by_id(self, session_id: str):
+    def get_session_by_id(self, session_id: Optional[str]):
         """Retrieve session by UUID."""
-        for s in self.sessions:
-            if s.session_id == session_id:
+        if not session_id:
+            return getattr(self, "_active_session", None)
+        for s in getattr(self, "sessions", []) or []:
+            if getattr(s, "session_id", None) == session_id:
                 return s
+        active = getattr(self, "_active_session", None)
+        if active is not None and getattr(active, "session_id", None) == session_id:
+            return active
         return None
 
     def get_session_by_path(self, filepath: str):
@@ -3399,6 +3412,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_send_bkwd.connect('activate', lambda a, p: self.reorder_selected_object("backward"))
         self.add_action(action_send_bkwd)
 
+        action_copy_page = Gio.SimpleAction.new('copy_page', None)
+        action_copy_page.connect('activate', self.on_copy_page_action)
+        self.add_action(action_copy_page)
+
+        action_paste_page = Gio.SimpleAction.new('paste_page', None)
+        action_paste_page.connect('activate', self.on_paste_page_action)
+        self.add_action(action_paste_page)
+
+        action_paste_page_before = Gio.SimpleAction.new('paste_page_before', None)
+        action_paste_page_before.connect('activate', lambda a, p: self.on_paste_page_action(a, "before"))
+        self.add_action(action_paste_page_before)
+
+        action_paste_page_after = Gio.SimpleAction.new('paste_page_after', None)
+        action_paste_page_after.connect('activate', lambda a, p: self.on_paste_page_action(a, "after"))
+        self.add_action(action_paste_page_after)
+
+        action_duplicate_page = Gio.SimpleAction.new('duplicate_page', None)
+        action_duplicate_page.connect('activate', self.on_duplicate_page_action)
+        self.add_action(action_duplicate_page)
+
     def _update_ui_state(self):
         """Update UI state."""
         has_doc = self.doc is not None
@@ -3500,6 +3533,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.lookup_action("rotate_page_cw").set_enabled(has_doc and has_pages)
         if self.lookup_action("rotate_page_ccw"):
             self.lookup_action("rotate_page_ccw").set_enabled(has_doc and has_pages)
+        if self.lookup_action("copy_page"):
+            self.lookup_action("copy_page").set_enabled(has_doc and has_pages)
+        can_paste_page = in_edit and has_doc and self.has_page_clipboard()
+        for paste_act in ("paste_page", "paste_page_before", "paste_page_after"):
+            if self.lookup_action(paste_act):
+                self.lookup_action(paste_act).set_enabled(can_paste_page)
+        if self.lookup_action("duplicate_page"):
+            self.lookup_action("duplicate_page").set_enabled(in_edit and has_doc and has_pages)
 
         if hasattr(self, 'delete_page_button'):
             self.delete_page_button.set_sensitive(in_edit and has_doc and page_count > 1)
@@ -12138,7 +12179,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.status_label.set_text(_(msg_key, target_idx + 1))
 
     def show_thumbnail_context_menu(self, parent_widget, x, y, page_index):
-        """Show context menu for a page thumbnail with rotation and deletion options."""
+        """Show context menu for a page thumbnail with rotation, clipboard, duplication, cross-tab copy, and deletion options."""
         if not self.doc:
             return
 
@@ -12154,6 +12195,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         popover_box.set_margin_top(6)
         popover_box.set_margin_bottom(6)
 
+        menu_buttons = {}
+        copy_to_tab_buttons = []
+
         btn_cw = Gtk.Button(label=_("rotate_cw"))
         btn_cw.add_css_class("flat")
         btn_cw.set_tooltip_text("Ctrl+Shift+R")
@@ -12162,6 +12206,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.rotate_current_page(90, page_index=page_index)
         btn_cw.connect("clicked", on_cw)
         popover_box.append(btn_cw)
+        menu_buttons["rotate_cw"] = btn_cw
 
         btn_ccw = Gtk.Button(label=_("rotate_ccw"))
         btn_ccw.add_css_class("flat")
@@ -12171,8 +12216,89 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.rotate_current_page(-90, page_index=page_index)
         btn_ccw.connect("clicked", on_ccw)
         popover_box.append(btn_ccw)
+        menu_buttons["rotate_ccw"] = btn_ccw
+
+        popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        btn_copy_page = Gtk.Button(label=_("copy_page"))
+        btn_copy_page.add_css_class("flat")
+        def on_copy_page(b):
+            popover.popdown()
+            self.copy_page_to_clipboard(page_index=page_index)
+        btn_copy_page.connect("clicked", on_copy_page)
+        popover_box.append(btn_copy_page)
+        menu_buttons["copy_page"] = btn_copy_page
 
         in_edit = not getattr(self, 'view_mode', False)
+        has_clip = self.has_page_clipboard()
+        if in_edit:
+            btn_paste_before = Gtk.Button(label=_("paste_page_before"))
+            btn_paste_before.add_css_class("flat")
+            btn_paste_before.set_sensitive(has_clip)
+            def on_paste_before(b):
+                popover.popdown()
+                self.paste_page_from_clipboard(
+                    insert_index=page_index,
+                    position="before",
+                    page_index=page_index,
+                )
+            btn_paste_before.connect("clicked", on_paste_before)
+            popover_box.append(btn_paste_before)
+            menu_buttons["paste_page_before"] = btn_paste_before
+
+            btn_paste_after = Gtk.Button(label=_("paste_page_after"))
+            btn_paste_after.add_css_class("flat")
+            btn_paste_after.set_sensitive(has_clip)
+            def on_paste_after(b):
+                popover.popdown()
+                self.paste_page_from_clipboard(
+                    insert_index=page_index + 1,
+                    position="after",
+                    page_index=page_index,
+                )
+            btn_paste_after.connect("clicked", on_paste_after)
+            popover_box.append(btn_paste_after)
+            menu_buttons["paste_page_after"] = btn_paste_after
+
+            btn_duplicate = Gtk.Button(label=_("duplicate_page"))
+            btn_duplicate.add_css_class("flat")
+            def on_duplicate(b):
+                popover.popdown()
+                self.duplicate_page_at_index(page_index=page_index)
+            btn_duplicate.connect("clicked", on_duplicate)
+            popover_box.append(btn_duplicate)
+            menu_buttons["duplicate_page"] = btn_duplicate
+
+        other_sessions = self.get_other_open_document_sessions()
+        popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        btn_copy_to_doc = Gtk.Button(label=_("copy_page_to_doc"))
+        btn_copy_to_doc.add_css_class("flat")
+        btn_copy_to_doc.set_sensitive(bool(other_sessions) or hasattr(self, "show_copy_pages_to_tab_dialog"))
+        def on_copy_to_doc(b):
+            popover.popdown()
+            if hasattr(self, "show_copy_pages_to_tab_dialog") and len(other_sessions) != 1:
+                self.show_copy_pages_to_tab_dialog(initial_page_index=page_index)
+            elif other_sessions:
+                self.copy_page_to_target_session(page_index, other_sessions[0])
+        btn_copy_to_doc.connect("clicked", on_copy_to_doc)
+        popover_box.append(btn_copy_to_doc)
+        menu_buttons["copy_page_to_doc"] = btn_copy_to_doc
+
+        for target_sess in other_sessions:
+            tab_title = getattr(target_sess, "display_title", None) or _("untitled_document")
+            btn_target = Gtk.Button(label=f"  → {tab_title}")
+            btn_target.add_css_class("flat")
+            btn_target._target_session = target_sess
+            def on_copy_to_target(b, ts=target_sess):
+                popover.popdown()
+                self.copy_page_to_target_session(page_index, ts)
+            btn_target.connect("clicked", on_copy_to_target)
+            popover_box.append(btn_target)
+            copy_to_tab_buttons.append(btn_target)
+            sid = getattr(target_sess, "session_id", None)
+            if sid:
+                menu_buttons[f"copy_to_session:{sid}"] = btn_target
+
         page_count = pdf_handler.get_page_count(self.doc) if self.doc else 0
         if in_edit and page_count > 1:
             popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
@@ -12184,9 +12310,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._delete_page_at_index(page_index)
             btn_del.connect("clicked", on_del)
             popover_box.append(btn_del)
+            menu_buttons["delete_page"] = btn_del
 
+        popover._menu_buttons = menu_buttons
+        popover._copy_to_tab_buttons = copy_to_tab_buttons
         popover.set_child(popover_box)
-        popover.set_parent(parent_widget)
+        if parent_widget is not None:
+            popover.set_parent(parent_widget)
         rect = Gdk.Rectangle()
         rect.x = int(x)
         rect.y = int(y)
@@ -12194,7 +12324,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         rect.height = 1
         popover.set_pointing_to(rect)
         self._thumb_context_popover = popover
-        popover.popup()
+        if (
+            parent_widget is not None
+            and hasattr(parent_widget, "get_root")
+            and parent_widget.get_root() is not None
+            and hasattr(parent_widget, "get_mapped")
+            and parent_widget.get_mapped()
+        ):
+            popover.popup()
 
     def update_page_label(self):
         """Update the page indicator label with current page number and total count."""
@@ -12325,18 +12462,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
          else:
              show_error_dialog(self, message, _("err_move_page_title"))
 
-    def get_session_by_id(self, session_id: Optional[str]) -> Optional[DocumentSession]:
-        """Look up an open DocumentSession by its `session_id`."""
-        if not session_id:
-            return getattr(self, "_active_session", None)
-        for s in getattr(self, "sessions", []) or []:
-            if getattr(s, "session_id", None) == session_id:
-                return s
-        active = getattr(self, "_active_session", None)
-        if active is not None and getattr(active, "session_id", None) == session_id:
-            return active
-        return None
-
     def copy_page_from_session(
         self,
         source_session_id: Optional[str],
@@ -12366,6 +12491,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if src_session is not None and src_session is getattr(self, "_active_session", None):
             if hasattr(self, "_stash_page_objects") and getattr(self, "current_page_index", None) is not None:
                 self._stash_page_objects(self.current_page_index)
+        elif src_session is None and getattr(self, "doc", None) is src_doc:
+            if hasattr(self, "_stash_page_objects") and getattr(self, "current_page_index", None) is not None:
+                self._stash_page_objects(self.current_page_index)
 
         cmd = InsertCopiedPagesCommand(
             self,
@@ -12385,10 +12513,235 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if target_undo is not None:
                 target_undo.add_command(cmd)
             if hasattr(self, "status_label") and self.status_label is not None:
-                is_same_sess = (src_session is not None and dst_session is not None and src_session is dst_session)
+                is_same_sess = (
+                    (src_session is not None and dst_session is not None and src_session is dst_session)
+                    or (src_doc is dst_doc)
+                )
                 msg_key = "status_page_duplicated" if is_same_sess else "status_page_copied_to_doc"
                 self.status_label.set_text(_(msg_key, int(from_index) + 1, insert_idx + 1))
         return ok
+
+    def has_page_clipboard(self) -> bool:
+        """Return True if a page is currently stored in the internal page clipboard."""
+        clip = getattr(self, "_page_clipboard", None)
+        return isinstance(clip, dict) and bool(clip.get("pdf_bytes"))
+
+    def copy_page_to_clipboard(
+        self,
+        page_index: Optional[int] = None,
+        session: Optional[DocumentSession] = None,
+    ) -> bool:
+        """Copy a page's PDF stream and all uncommitted editor objects into `self._page_clipboard`."""
+        src_session = session if session is not None else getattr(self, "_active_session", None)
+        src_doc = getattr(src_session, "doc", None) if src_session is not None else getattr(self, "doc", None)
+        if src_doc is None:
+            return False
+
+        if page_index is not None:
+            target_idx = int(page_index)
+        else:
+            target_idx = int(
+                getattr(src_session, "current_page_index", getattr(self, "current_page_index", 0)) or 0
+            )
+        if not (0 <= target_idx < len(src_doc)):
+            return False
+
+        if (src_session is not None and src_session is getattr(self, "_active_session", None)) or (
+            src_session is None and getattr(self, "doc", None) is src_doc
+        ):
+            if hasattr(self, "_stash_page_objects") and getattr(self, "current_page_index", None) is not None:
+                self._stash_page_objects(self.current_page_index)
+
+        temp_doc = fitz.open()
+        try:
+            src_bytes = src_doc.tobytes()
+            mem_src = fitz.open(stream=src_bytes, filetype="pdf")
+            try:
+                temp_doc.insert_pdf(mem_src, from_page=target_idx, to_page=target_idx)
+            finally:
+                mem_src.close()
+            copied_pdf_bytes = temp_doc.tobytes() if len(temp_doc) > 0 else None
+        finally:
+            temp_doc.close()
+
+        if not copied_pdf_bytes:
+            return False
+
+        snapshot = pdf_handler._page_snapshots.get((id(src_doc), target_idx))
+        effective_src = src_session if src_session is not None else self
+        bundle = pdf_handler.clone_page_editor_objects(
+            effective_src,
+            src_page_idx=target_idx,
+            dst_page_idx=0,
+            dst_session=None,
+            shift_downstream=False,
+        )
+
+        self._page_clipboard = {
+            "pdf_bytes": copied_pdf_bytes,
+            "page_bundles": [copy.deepcopy(bundle)],
+            "snapshots": [snapshot],
+            "source_session_id": getattr(src_session, "session_id", None) if src_session is not None else None,
+            "source_page_index": target_idx,
+            "source_title": getattr(src_session, "display_title", None) if src_session is not None else None,
+        }
+
+        if hasattr(self, "_update_ui_state"):
+            try:
+                self._update_ui_state()
+            except Exception:
+                pass
+        if hasattr(self, "status_label") and self.status_label is not None:
+            self.status_label.set_text(_("status_page_copied_clipboard", target_idx + 1))
+        return True
+
+    def paste_page_from_clipboard(
+        self,
+        insert_index: Optional[int] = None,
+        position: str = "after",
+        page_index: Optional[int] = None,
+        target_session: Optional[DocumentSession] = None,
+    ) -> bool:
+        """Paste the page stored in `self._page_clipboard` into `target_session` (or active session)."""
+        if not self.has_page_clipboard() or getattr(self, "is_saving", False) is True:
+            return False
+
+        dst_session = target_session if target_session is not None else getattr(self, "_active_session", None)
+        dst_doc = getattr(dst_session, "doc", None) if dst_session is not None else getattr(self, "doc", None)
+        if dst_doc is None:
+            return False
+
+        if insert_index is not None:
+            dst_insert_idx = max(0, min(int(insert_index), len(dst_doc)))
+        else:
+            if page_index is not None:
+                ref_page = int(page_index)
+            else:
+                ref_page = int(
+                    getattr(dst_session, "current_page_index", getattr(self, "current_page_index", 0)) or 0
+                )
+            ref_page = max(0, min(ref_page, max(0, len(dst_doc) - 1)))
+            if str(position).strip().lower() == "before":
+                dst_insert_idx = ref_page
+            else:
+                dst_insert_idx = min(len(dst_doc), ref_page + 1)
+
+        clip = self._page_clipboard
+        cmd = InsertCopiedPagesCommand(
+            self,
+            dst_insert_idx=dst_insert_idx,
+            dst_session=dst_session,
+            copied_pdf_bytes=clip.get("pdf_bytes"),
+            copied_page_bundles=clip.get("page_bundles"),
+        )
+        if clip.get("snapshots"):
+            cmd.copied_snapshots = list(clip.get("snapshots"))
+
+        ok = bool(cmd.execute())
+        if ok:
+            target_undo = (
+                getattr(dst_session, "undo_manager", None)
+                if dst_session is not None and getattr(dst_session, "undo_manager", None) is not None
+                else getattr(self, "undo_manager", None)
+            )
+            if target_undo is not None:
+                target_undo.add_command(cmd)
+            if hasattr(self, "status_label") and self.status_label is not None:
+                self.status_label.set_text(_("status_page_pasted", dst_insert_idx + 1))
+        return ok
+
+    def duplicate_page_at_index(
+        self,
+        page_index: Optional[int] = None,
+        insert_index: Optional[int] = None,
+        session: Optional[DocumentSession] = None,
+    ) -> bool:
+        """Duplicate `page_index` (or current page) within `session` (or active session)."""
+        if getattr(self, "is_saving", False) is True:
+            return False
+        target_session = session if session is not None else getattr(self, "_active_session", None)
+        doc = getattr(target_session, "doc", None) if target_session is not None else getattr(self, "doc", None)
+        if doc is None:
+            return False
+
+        if page_index is not None:
+            src_idx = int(page_index)
+        else:
+            src_idx = int(
+                getattr(target_session, "current_page_index", getattr(self, "current_page_index", 0)) or 0
+            )
+        if not (0 <= src_idx < len(doc)):
+            return False
+
+        dst_idx = int(insert_index) if insert_index is not None else (src_idx + 1)
+        src_session_id = getattr(target_session, "session_id", None) if target_session is not None else None
+        return self.copy_page_from_session(
+            src_session_id,
+            src_idx,
+            to_index=dst_idx,
+            target_session=target_session,
+        )
+
+    def get_other_open_document_sessions(
+        self,
+        exclude_session: Optional[DocumentSession] = None,
+    ) -> List[DocumentSession]:
+        """Return all currently open DocumentSessions with loaded documents except `exclude_session` (or active session)."""
+        current_sess = exclude_session if exclude_session is not None else getattr(self, "_active_session", None)
+        result: List[DocumentSession] = []
+        for s in getattr(self, "sessions", []) or []:
+            if s is not current_sess and getattr(s, "doc", None) is not None:
+                result.append(s)
+        return result
+
+    def copy_page_to_target_session(
+        self,
+        page_index: int,
+        target_session: DocumentSession,
+        to_index: Optional[int] = None,
+    ) -> bool:
+        """Copy `page_index` from the active session into `target_session` at `to_index` (defaults to end of target doc)."""
+        if target_session is None or getattr(target_session, "doc", None) is None:
+            return False
+        src_session = getattr(self, "_active_session", None)
+        src_session_id = getattr(src_session, "session_id", None) if src_session is not None else None
+        insert_idx = len(target_session.doc) if to_index is None else int(to_index)
+        ok = self.copy_page_from_session(
+            src_session_id,
+            int(page_index),
+            to_index=insert_idx,
+            target_session=target_session,
+        )
+        if ok and hasattr(self, "status_label") and self.status_label is not None:
+            target_title = getattr(target_session, "display_title", None) or _("untitled_document")
+            self.status_label.set_text(_("status_page_copied_to_tab", int(page_index) + 1, target_title))
+        return ok
+
+    def on_copy_page_action(self, action=None, param=None) -> bool:
+        """Action handler for `win.copy_page`."""
+        return self.copy_page_to_clipboard()
+
+    def on_paste_page_action(self, action=None, param=None) -> bool:
+        """Action handler for `win.paste_page`, `win.paste_page_before`, and `win.paste_page_after`."""
+        if getattr(self, "view_mode", False):
+            return False
+        position = "after"
+        if isinstance(param, str) and param in ("before", "after"):
+            position = param
+        elif param is not None and hasattr(param, "get_string"):
+            try:
+                val = param.get_string()
+                if val in ("before", "after"):
+                    position = val
+            except Exception:
+                pass
+        return self.paste_page_from_clipboard(position=position)
+
+    def on_duplicate_page_action(self, action=None, param=None) -> bool:
+        """Action handler for `win.duplicate_page`."""
+        if getattr(self, "view_mode", False):
+            return False
+        return self.duplicate_page_at_index()
 
     def on_canvas_page_thumbnail_drop(self, target, value, x, y) -> bool:
         """Handle dropping a dragged page thumbnail directly onto the main PDF canvas (`self.pdf_view`)."""
