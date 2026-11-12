@@ -61,13 +61,46 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
         self.connect("unbind", self._on_unbind)
         self.connect("teardown", self._on_teardown)
 
+    @staticmethod
+    def parse_drag_payload(value, editor_window=None):
+        """Extract `(source_session_id, from_idx)` from a drag drop value or active window drag state."""
+        source_session_id = None
+        from_idx = None
+
+        if isinstance(value, str):
+            if ":" in value:
+                sid_part, idx_part = value.rsplit(":", 1)
+                source_session_id = sid_part if sid_part else None
+                try:
+                    from_idx = int(idx_part)
+                except (TypeError, ValueError):
+                    from_idx = None
+            else:
+                try:
+                    from_idx = int(value)
+                except (TypeError, ValueError):
+                    from_idx = None
+        elif isinstance(value, int) and not isinstance(value, bool):
+            from_idx = int(value)
+
+        if editor_window is not None:
+            active_drag = getattr(editor_window, "_active_thumbnail_drag", None)
+            if isinstance(active_drag, tuple) and len(active_drag) == 2:
+                drag_sid, drag_idx = active_drag
+                if from_idx is None:
+                    from_idx = drag_idx
+                if source_session_id is None and isinstance(drag_sid, str) and drag_sid:
+                    source_session_id = drag_sid
+
+        return source_session_id, from_idx
+
     def _ensure_controllers(self, box, list_item):
         """Attach drag, drop, and right-click controllers to the thumbnail box once."""
         if getattr(box, '_controllers_attached', False):
             return
 
         drag_source = Gtk.DragSource.new()
-        drag_source.set_actions(Gdk.DragAction.MOVE)
+        drag_source.set_actions(Gdk.DragAction.MOVE | Gdk.DragAction.COPY)
 
         def on_prepare(source, x, y):
             if self.editor_window and getattr(self.editor_window, 'view_mode', False):
@@ -75,8 +108,27 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
             pdf_pg = list_item.get_item()
             if not pdf_pg:
                 return None
-            val = GObject.Value(GObject.TYPE_INT, pdf_pg.index)
-            return Gdk.ContentProvider.new_for_value(val)
+
+            source_session_id = None
+            if self.editor_window is not None:
+                active_sess = getattr(self.editor_window, '_active_session', None)
+                sid = getattr(active_sess, 'session_id', None) if active_sess is not None else None
+                if isinstance(sid, str) and sid:
+                    source_session_id = sid
+                self.editor_window._active_thumbnail_drag = (source_session_id, int(pdf_pg.index))
+
+            int_val = GObject.Value(GObject.TYPE_INT, int(pdf_pg.index))
+            int_provider = Gdk.ContentProvider.new_for_value(int_val)
+            if source_session_id:
+                str_val = GObject.Value(
+                    GObject.TYPE_STRING,
+                    f"{source_session_id}:{int(pdf_pg.index)}",
+                )
+                str_provider = Gdk.ContentProvider.new_for_value(str_val)
+                if hasattr(Gdk.ContentProvider, "new_union"):
+                    return Gdk.ContentProvider.new_union([str_provider, int_provider])
+                return str_provider
+            return int_provider
 
         def on_drag_begin(source, drag):
             pdf_pg = list_item.get_item()
@@ -84,20 +136,76 @@ class PageThumbnailFactory(Gtk.SignalListItemFactory):
                 tex = Gdk.Texture.new_for_pixbuf(pdf_pg.thumbnail)
                 Gtk.DragSource.set_icon(source, tex, 0, 0)
 
+        def on_drag_end(source, drag, delete_data):
+            if self.editor_window is not None:
+                self.editor_window._active_thumbnail_drag = None
+                if hasattr(self.editor_window, "_cancel_tab_hover_switch_timer"):
+                    self.editor_window._cancel_tab_hover_switch_timer()
+
         drag_source.connect("prepare", on_prepare)
         drag_source.connect("drag-begin", on_drag_begin)
+        drag_source.connect("drag-end", on_drag_end)
         box.add_controller(drag_source)
 
-        drop_target = Gtk.DropTarget.new(GObject.TYPE_INT, Gdk.DragAction.MOVE)
+        drop_target = Gtk.DropTarget.new(
+            GObject.TYPE_INT,
+            Gdk.DragAction.MOVE | Gdk.DragAction.COPY,
+        )
+        drop_target.set_gtypes([GObject.TYPE_INT, GObject.TYPE_STRING])
 
         def on_drop(target, value, x, y):
+            source_session_id, from_idx = self.parse_drag_payload(value, self.editor_window)
+            target_session_id = None
+            if self.editor_window is not None:
+                active_sess = getattr(self.editor_window, '_active_session', None)
+                sid = getattr(active_sess, 'session_id', None) if active_sess is not None else None
+                if isinstance(sid, str) and sid:
+                    target_session_id = sid
+
+            is_cross_tab = (
+                source_session_id is not None
+                and target_session_id is not None
+                and source_session_id != target_session_id
+            )
+
             if self.editor_window and getattr(self.editor_window, 'view_mode', False):
-                return False
+                if is_cross_tab:
+                    self.editor_window.view_mode = False
+                    if hasattr(self.editor_window, '_update_ui_state'):
+                        self.editor_window._update_ui_state()
+                else:
+                    return False
+
             pdf_pg = list_item.get_item()
-            if not pdf_pg:
+            if not pdf_pg or from_idx is None:
                 return False
-            to_idx = pdf_pg.index
-            from_idx = value
+
+            to_idx = int(pdf_pg.index)
+            if self.editor_window is not None:
+                self.editor_window._active_thumbnail_drag = None
+
+            is_copy_action = bool(
+                getattr(self.editor_window, "_thumbnail_drag_copy_modifier", False)
+            )
+            current_drop = target.get_current_drop() if hasattr(target, "get_current_drop") else None
+            if current_drop is not None and hasattr(current_drop, "get_actions"):
+                try:
+                    if current_drop.get_actions() == Gdk.DragAction.COPY:
+                        is_copy_action = True
+                except Exception:
+                    pass
+
+            if is_cross_tab or is_copy_action:
+                if self.editor_window and hasattr(self.editor_window, 'copy_page_from_session'):
+                    return bool(
+                        self.editor_window.copy_page_from_session(
+                            source_session_id,
+                            from_idx,
+                            to_idx,
+                        )
+                    )
+                return False
+
             if from_idx == to_idx:
                 return False
             if self.editor_window and hasattr(self.editor_window, 'on_page_reorder'):

@@ -3113,6 +3113,146 @@ class TestCrossDocumentPageCopyBackend:
             dst_sess.close()
 
 
+class TestCrossTabThumbnailDragAndDrop:
+    """Verify cross-tab page thumbnail drag-and-drop, same-index cross-tab drops, Ctrl-drag duplication, and tab-hover auto-switching."""
+
+    def test_cross_tab_thumbnail_drop_copies_page_even_at_same_index(self):
+        from unittest.mock import MagicMock
+        from gi.repository import GObject, Gtk
+        from word_sys_pdf_editor.models import DocumentSession, PdfPage
+        from word_sys_pdf_editor.ui_components import PageThumbnailFactory
+
+        sess_a = DocumentSession(session_id="sess-tab-a")
+        sess_b = DocumentSession(session_id="sess-tab-b")
+
+        mock_win = MagicMock()
+        mock_win.view_mode = False
+        mock_win.edit_mode = True
+        mock_win._active_session = sess_a
+        mock_win._thumbnail_drag_copy_modifier = False
+        mock_win.copy_page_from_session.return_value = True
+
+        factory = PageThumbnailFactory(editor_window=mock_win)
+        list_item = MagicMock()
+        holder = [None]
+        list_item.set_child.side_effect = lambda c: holder.__setitem__(0, c)
+        list_item.get_child.side_effect = lambda: holder[0]
+        list_item.get_item.return_value = PdfPage(index=0, thumbnail=None)
+
+        factory._on_setup(factory, list_item)
+        factory._on_bind(factory, list_item)
+        box = list_item.get_child()
+
+        drag_source = next(c for c in box.observe_controllers() if isinstance(c, Gtk.DragSource))
+        drop_target = next(c for c in box.observe_controllers() if isinstance(c, Gtk.DropTarget))
+
+        # 1. Start drag on Page 0 in Tab A
+        provider = drag_source.emit("prepare", 0.0, 0.0)
+        assert provider is not None
+        assert mock_win._active_thumbnail_drag == ("sess-tab-a", 0)
+
+        # 2. Switch active tab to Tab B and drop onto Page 0 of Tab B (same page index 0!)
+        mock_win._active_session = sess_b
+        val = GObject.Value(GObject.TYPE_STRING, "sess-tab-a:0")
+        res = drop_target.emit("drop", val, 0.0, 0.0)
+        assert res is True
+        mock_win.copy_page_from_session.assert_called_once_with("sess-tab-a", 0, 0)
+        mock_win.on_page_reorder.assert_not_called()
+
+    def test_same_tab_ctrl_drag_duplicates_page_and_normal_drag_reorders(self):
+        from unittest.mock import MagicMock
+        from gi.repository import GObject, Gtk
+        from word_sys_pdf_editor.models import DocumentSession, PdfPage
+        from word_sys_pdf_editor.ui_components import PageThumbnailFactory
+
+        sess_a = DocumentSession(session_id="sess-tab-a")
+        mock_win = MagicMock()
+        mock_win.view_mode = False
+        mock_win.edit_mode = True
+        mock_win._active_session = sess_a
+        mock_win._thumbnail_drag_copy_modifier = True
+        mock_win.copy_page_from_session.return_value = True
+
+        factory = PageThumbnailFactory(editor_window=mock_win)
+        list_item = MagicMock()
+        holder = [None]
+        list_item.set_child.side_effect = lambda c: holder.__setitem__(0, c)
+        list_item.get_child.side_effect = lambda: holder[0]
+        list_item.get_item.return_value = PdfPage(index=1, thumbnail=None)
+
+        factory._on_setup(factory, list_item)
+        factory._on_bind(factory, list_item)
+        box = list_item.get_child()
+        drop_target = next(c for c in box.observe_controllers() if isinstance(c, Gtk.DropTarget))
+
+        # Ctrl-drag within same tab duplicates page 0 at index 1
+        val = GObject.Value(GObject.TYPE_STRING, "sess-tab-a:0")
+        res = drop_target.emit("drop", val, 0.0, 0.0)
+        assert res is True
+        mock_win.copy_page_from_session.assert_called_once_with("sess-tab-a", 0, 1)
+        mock_win.on_page_reorder.assert_not_called()
+
+        # Normal drag within same tab reorders page 0 to index 1
+        mock_win.copy_page_from_session.reset_mock()
+        mock_win._thumbnail_drag_copy_modifier = False
+        res2 = drop_target.emit("drop", val, 0.0, 0.0)
+        assert res2 is True
+        mock_win.on_page_reorder.assert_called_once_with(0, 1)
+
+    def test_tab_bar_hover_auto_switch_and_direct_tab_header_drop(self):
+        from unittest.mock import patch
+        from gi.repository import Adw
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc_a = fitz.open()
+        pa = doc_a.new_page(width=500, height=700)
+        pa.insert_text((50, 100), "Document A Page 1")
+
+        doc_b = fitz.open()
+        pb = doc_b.new_page(width=600, height=800)
+        pb.insert_text((50, 100), "Document B Page 1")
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_cross_tab_dnd")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess_a = win.create_session(doc=doc_a, filepath="/tmp/doc_a.pdf")
+                sess_b = win.create_session(doc=doc_b, filepath="/tmp/doc_b.pdf")
+                win.add_session(sess_a, switch_to=True)
+                win.add_session(sess_b, switch_to=False)
+                assert win._active_session is sess_a
+
+                # Simulate active thumbnail drag from Tab A and 350ms hover timeout over Tab B
+                win._active_thumbnail_drag = (sess_a.session_id, 0)
+                win._on_tab_hover_switch_timeout(sess_b.tab_page)
+                assert win._active_session is sess_b
+                assert win.view_mode is False
+
+                # Drop thumbnail directly onto Tab B's header via _on_tab_extra_drag_drop
+                dropped = win._on_tab_extra_drag_drop(
+                    win.tab_bar,
+                    sess_b.tab_page,
+                    f"{sess_a.session_id}:0",
+                )
+                assert dropped is True
+                assert len(sess_b.doc) == 2
+                assert "Document B Page 1" in sess_b.doc[0].get_text()
+                assert "Document A Page 1" in sess_b.doc[1].get_text()
+                assert sess_b.undo_manager.can_undo() is True
+
+                # Undo in Tab B removes the copied page cleanly
+                sess_b.undo_manager.undo()
+                assert len(sess_b.doc) == 1
+            finally:
+                win.close_document()
+                win.destroy()
+
+
+
 
 
 

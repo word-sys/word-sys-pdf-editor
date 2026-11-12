@@ -1138,6 +1138,8 @@ _STRINGS = {
         "prefs_tool_select_always_visible_tip": "The Select tool is always kept visible on the toolbar",
         "more_tools_btn": "More…",
         "more_tools_tip": "More Tools (Hidden from Primary Toolbar)",
+        "status_page_copied_to_doc": "Copied page {} to page {}",
+        "status_page_duplicated": "Duplicated page {} at page {}",
     },
 
     "tr": {

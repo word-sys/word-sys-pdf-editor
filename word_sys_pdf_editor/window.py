@@ -1419,12 +1419,104 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.sessions.insert(position, session)
 
     def _on_tab_extra_drag_drop(self, tab_bar, page, value):
-        """Handle dropping a PDF file onto the TabBar to open it in a new tab."""
+        """Handle dropping a PDF file or a dragged page thumbnail onto a TabBar header."""
+        self._cancel_tab_hover_switch_timer()
         if isinstance(value, Gio.File):
             filepath = value.get_path()
             if filepath and filepath.lower().endswith('.pdf'):
                 GLib.idle_add(self.load_document, filepath, 0, True)
                 return True
+            return False
+
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            from .ui_components import PageThumbnailFactory
+            source_session_id, from_idx = PageThumbnailFactory.parse_drag_payload(value, self)
+            self._active_thumbnail_drag = None
+            target_session = self.get_session_by_tab_page(page) if page is not None else self._active_session
+            if target_session is not None and target_session.doc is not None and from_idx is not None:
+                if target_session != self._active_session:
+                    self.set_active_session(target_session)
+                if getattr(self, "view_mode", False):
+                    self.view_mode = False
+                    self._update_ui_state()
+                append_idx = len(target_session.doc)
+                return bool(
+                    self.copy_page_from_session(
+                        source_session_id,
+                        from_idx,
+                        to_index=append_idx,
+                        target_session=target_session,
+                    )
+                )
+        return False
+
+    def _resolve_tab_page_at_x(self, x: float):
+        """Resolve which Adw.TabPage in `self.tab_view` corresponds to horizontal coordinate `x` on `self.tab_bar`."""
+        if not hasattr(self, "tab_view") or self.tab_view is None:
+            return None
+        n_pages = self.tab_view.get_n_pages()
+        if n_pages <= 0:
+            return None
+        bar_width = 0.0
+        if hasattr(self, "tab_bar") and self.tab_bar is not None and hasattr(self.tab_bar, "get_width"):
+            try:
+                bar_width = float(self.tab_bar.get_width())
+            except Exception:
+                bar_width = 0.0
+        if bar_width <= 1.0:
+            bar_width = float(max(200, n_pages * 160))
+        slot_w = max(1.0, bar_width / float(n_pages))
+        idx = max(0, min(n_pages - 1, int(float(x) / slot_w)))
+        return self.tab_view.get_nth_page(idx)
+
+    def _cancel_tab_hover_switch_timer(self):
+        """Cancel any pending 350 ms tab-hover auto-switch timer."""
+        timer_id = getattr(self, "_tab_hover_switch_timer_id", None)
+        if timer_id is not None:
+            try:
+                GLib.source_remove(timer_id)
+            except Exception:
+                pass
+            self._tab_hover_switch_timer_id = None
+        self._tab_hover_target_page = None
+
+    def _on_tab_bar_drop_motion(self, _controller, x: float, y: float):
+        """Schedule a 350 ms tab switch when hovering a dragged page thumbnail over another tab header."""
+        if getattr(self, "_active_thumbnail_drag", None) is None:
+            self._cancel_tab_hover_switch_timer()
+            return
+        hovered_page = self._resolve_tab_page_at_x(x)
+        if hovered_page is None or hovered_page == self.tab_view.get_selected_page():
+            self._cancel_tab_hover_switch_timer()
+            return
+        if getattr(self, "_tab_hover_target_page", None) is hovered_page:
+            return
+        self._cancel_tab_hover_switch_timer()
+        self._tab_hover_target_page = hovered_page
+        self._tab_hover_switch_timer_id = GLib.timeout_add(
+            350,
+            self._on_tab_hover_switch_timeout,
+            hovered_page,
+        )
+
+    def _on_tab_bar_drop_leave(self, _controller):
+        """Cancel pending tab-hover switch when the drag pointer leaves the tab bar."""
+        self._cancel_tab_hover_switch_timer()
+
+    def _on_tab_hover_switch_timeout(self, page) -> bool:
+        """Switch to the hovered tab after 350 ms during a page thumbnail drag."""
+        self._tab_hover_switch_timer_id = None
+        self._tab_hover_target_page = None
+        if getattr(self, "_active_thumbnail_drag", None) is None:
+            return False
+        target_session = self.get_session_by_tab_page(page)
+        if target_session is not None and target_session != self._active_session:
+            if hasattr(self, "tab_view") and self.tab_view is not None:
+                self.tab_view.set_selected_page(page)
+            self.set_active_session(target_session)
+            if getattr(self, "view_mode", False):
+                self.view_mode = False
+                self._update_ui_state()
         return False
 
     def create_session(self, doc=None, filepath=None) -> DocumentSession:
@@ -2031,10 +2123,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.tab_bar.set_end_action_widget(new_tab_btn)
 
         try:
-            self.tab_bar.setup_extra_drop_target(Gdk.DragAction.COPY, [Gio.File])
+            self.tab_bar.setup_extra_drop_target(
+                Gdk.DragAction.COPY | Gdk.DragAction.MOVE,
+                [Gio.File, GObject.TYPE_STRING, GObject.TYPE_INT],
+            )
             self.tab_bar.connect("extra-drag-drop", self._on_tab_extra_drag_drop)
         except Exception:
             pass
+
+        try:
+            self.tab_bar_drop_motion = Gtk.DropControllerMotion.new()
+            self.tab_bar_drop_motion.connect("motion", self._on_tab_bar_drop_motion)
+            self.tab_bar_drop_motion.connect("leave", self._on_tab_bar_drop_leave)
+            self.tab_bar.add_controller(self.tab_bar_drop_motion)
+        except Exception:
+            self.tab_bar_drop_motion = None
 
         self.tab_view.connect("notify::selected-page", self._on_tab_selected_page_changed)
         self.tab_view.connect("close-page", self._on_tab_close_page)
@@ -3004,6 +3107,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         thumbnail_drop = Gtk.DropTarget.new(Gio.File, Gdk.DragAction.COPY)
         thumbnail_drop.connect('drop', self.on_thumbnail_drop)
         self.thumbnails_list.add_controller(thumbnail_drop)
+
+        canvas_page_drop = Gtk.DropTarget.new(
+            GObject.TYPE_INT,
+            Gdk.DragAction.MOVE | Gdk.DragAction.COPY,
+        )
+        canvas_page_drop.set_gtypes([GObject.TYPE_STRING, GObject.TYPE_INT])
+        canvas_page_drop.connect("drop", self.on_canvas_page_thumbnail_drop)
+        self.pdf_view.add_controller(canvas_page_drop)
 
     def _on_undo_activated(self, *args):
         """Undo either in the currently active text editor widget or the document undo manager."""
@@ -12173,10 +12284,39 @@ class PdfEditorWindow(Adw.ApplicationWindow):
              return
          if from_index == to_index or from_index < 0 or to_index < 0:
              return
-         
+
+         if hasattr(self, '_stash_page_objects') and getattr(self, 'current_page_index', None) is not None:
+             self._stash_page_objects(self.current_page_index)
+
          success, message = pdf_handler.move_page(self.doc, from_index, to_index)
-         
+
          if success:
+             def _remap_idx(p):
+                 if from_index < to_index:
+                     if p == from_index:
+                         return to_index
+                     if from_index < p <= to_index:
+                         return p - 1
+                 else:
+                     if p == from_index:
+                         return to_index
+                     if to_index <= p < from_index:
+                         return p + 1
+                 return p
+
+             if hasattr(self, '_page_objects_cache') and isinstance(self._page_objects_cache, dict) and self._page_objects_cache:
+                 remapped_cache = {}
+                 for p, objs in self._page_objects_cache.items():
+                     new_p = _remap_idx(p)
+                     remapped_cache[new_p] = objs
+                     for coll_key in ('texts', 'images', 'shapes', 'strokes', 'form_fields'):
+                         for obj in objs.get(coll_key, []) or []:
+                             if hasattr(obj, 'page_number') and obj.page_number is not None:
+                                 obj.page_number = new_p
+                 self._page_objects_cache.clear()
+                 self._page_objects_cache.update(remapped_cache)
+
+             self.current_page_index = None
              self.document_modified = True
              self.status_label.set_text(message)
              self._load_page(to_index)
@@ -12184,6 +12324,106 @@ class PdfEditorWindow(Adw.ApplicationWindow):
              self._update_ui_state()
          else:
              show_error_dialog(self, message, _("err_move_page_title"))
+
+    def get_session_by_id(self, session_id: Optional[str]) -> Optional[DocumentSession]:
+        """Look up an open DocumentSession by its `session_id`."""
+        if not session_id:
+            return getattr(self, "_active_session", None)
+        for s in getattr(self, "sessions", []) or []:
+            if getattr(s, "session_id", None) == session_id:
+                return s
+        active = getattr(self, "_active_session", None)
+        if active is not None and getattr(active, "session_id", None) == session_id:
+            return active
+        return None
+
+    def copy_page_from_session(
+        self,
+        source_session_id: Optional[str],
+        from_index: int,
+        to_index: Optional[int] = None,
+        target_session: Optional[DocumentSession] = None,
+    ) -> bool:
+        """Copy page `from_index` from `source_session_id` into `target_session` (or active session) at `to_index`."""
+        self._cancel_tab_hover_switch_timer()
+        src_session = self.get_session_by_id(source_session_id)
+        dst_session = target_session if target_session is not None else getattr(self, "_active_session", None)
+
+        src_doc = getattr(src_session, "doc", None) if src_session is not None else getattr(self, "doc", None)
+        dst_doc = getattr(dst_session, "doc", None) if dst_session is not None else getattr(self, "doc", None)
+        if src_doc is None or dst_doc is None:
+            return False
+
+        if not (0 <= int(from_index) < len(src_doc)):
+            return False
+
+        if to_index is None or int(to_index) < 0 or int(to_index) > len(dst_doc):
+            insert_idx = len(dst_doc)
+        else:
+            insert_idx = int(to_index)
+
+        # Ensure any uncommitted active edits on src_session are stashed into its cache before cloning
+        if src_session is not None and src_session is getattr(self, "_active_session", None):
+            if hasattr(self, "_stash_page_objects") and getattr(self, "current_page_index", None) is not None:
+                self._stash_page_objects(self.current_page_index)
+
+        cmd = InsertCopiedPagesCommand(
+            self,
+            dst_insert_idx=insert_idx,
+            src_doc=src_doc,
+            src_page_indices=[int(from_index)],
+            src_session=src_session,
+            dst_session=dst_session,
+        )
+        ok = bool(cmd.execute())
+        if ok:
+            target_undo = (
+                getattr(dst_session, "undo_manager", None)
+                if dst_session is not None and getattr(dst_session, "undo_manager", None) is not None
+                else getattr(self, "undo_manager", None)
+            )
+            if target_undo is not None:
+                target_undo.add_command(cmd)
+            if hasattr(self, "status_label") and self.status_label is not None:
+                is_same_sess = (src_session is not None and dst_session is not None and src_session is dst_session)
+                msg_key = "status_page_duplicated" if is_same_sess else "status_page_copied_to_doc"
+                self.status_label.set_text(_(msg_key, int(from_index) + 1, insert_idx + 1))
+        return ok
+
+    def on_canvas_page_thumbnail_drop(self, target, value, x, y) -> bool:
+        """Handle dropping a dragged page thumbnail directly onto the main PDF canvas (`self.pdf_view`)."""
+        from .ui_components import PageThumbnailFactory
+
+        source_session_id, from_idx = PageThumbnailFactory.parse_drag_payload(value, self)
+        self._active_thumbnail_drag = None
+        if from_idx is None:
+            return False
+
+        active_sess = getattr(self, "_active_session", None)
+        target_session_id = getattr(active_sess, "session_id", None) if active_sess is not None else None
+        is_cross_tab = (
+            source_session_id is not None
+            and target_session_id is not None
+            and source_session_id != target_session_id
+        )
+        is_copy = bool(getattr(self, "_thumbnail_drag_copy_modifier", False))
+        if not is_cross_tab and not is_copy:
+            return False
+
+        if getattr(self, "view_mode", False):
+            self.view_mode = False
+            self._update_ui_state()
+
+        curr_idx = int(getattr(self, "current_page_index", 0) or 0)
+        insert_idx = curr_idx + 1 if self.doc and curr_idx < len(self.doc) else 0
+        return bool(
+            self.copy_page_from_session(
+                source_session_id,
+                from_idx,
+                to_index=insert_idx,
+                target_session=active_sess,
+            )
+        )
 
     def get_selected_object(self):
         """Return the currently selected canvas object, if any."""
