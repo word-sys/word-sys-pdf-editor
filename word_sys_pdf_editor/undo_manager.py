@@ -1,6 +1,7 @@
 import copy
 import collections
 import re
+import math
 from typing import Any, Optional, List, Dict, Tuple, Union
 try:
     import pymupdf as fitz

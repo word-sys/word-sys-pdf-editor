@@ -3593,6 +3593,167 @@ class TestMultiPageRangeCopyAndBatchTabTransferDialog:
                 win.destroy()
 
 
+class TestAcroFormRichTextModelAndXhtmlParserSerializer:
+    """Verify AcroFormField rich text model, FIELD_FLAG_RICH_TEXT, and Adobe XFA/XHTML /RV + /DS parser/serializer."""
+
+    def test_field_flag_rich_text_and_acroform_field_model(self):
+        from word_sys_pdf_editor.form_fields import (
+            FIELD_FLAG_RICH_TEXT,
+            AcroFormField,
+            RichTextRun,
+        )
+        from word_sys_pdf_editor.models import AcroFormField as ModelsAcroFormField
+        from word_sys_pdf_editor.models import snapshot_object_state
+
+        assert FIELD_FLAG_RICH_TEXT == (1 << 25) == 33554432
+        assert AcroFormField is ModelsAcroFormField
+
+        # Initializing with bit 26 set automatically enables rich_text_enabled
+        f_flagged = AcroFormField(
+            field_id="f1",
+            xref=10,
+            page_number=0,
+            rect=(50.0, 50.0, 250.0, 80.0),
+            field_name="notes",
+            field_flags=FIELD_FLAG_RICH_TEXT,
+        )
+        assert f_flagged.rich_text_enabled is True
+
+        # Setting styled runs on a standard text field auto-enables rich_text_enabled and bit 26
+        f_std = AcroFormField(
+            field_id="f2",
+            xref=11,
+            page_number=0,
+            rect=(50.0, 100.0, 250.0, 130.0),
+            field_name="bio",
+            text_fontsize=12.0,
+            text_color=(0.0, 0.0, 0.0),
+        )
+        assert f_std.rich_text_enabled is False
+        runs = [
+            RichTextRun(text="Normal ", bold=False, italic=False),
+            RichTextRun(text="BoldItalic", bold=True, italic=True, underline=True),
+        ]
+        f_std.set_rich_text_runs(runs)
+        assert f_std.rich_text_enabled is True
+        assert bool(f_std.field_flags & FIELD_FLAG_RICH_TEXT) is True
+        assert f_std.value == "Normal BoldItalic"
+        assert "Acroform:2.7.0.0" in f_std.rv_xhtml
+        assert "font:" in f_std.default_style
+
+        # Round-trip to_dict / from_dict and snapshot_object_state isolation
+        d = f_std.to_dict()
+        restored = AcroFormField.from_dict(d)
+        assert restored.rich_text_enabled is True
+        assert len(restored.rich_text_runs) == 2
+        assert restored.rich_text_runs[1].bold is True
+        assert restored.rich_text_runs[1].italic is True
+        assert restored.rich_text_runs[1].underline is True
+
+        snap = snapshot_object_state(f_std)
+        f_std.rich_text_runs[1].text = "Mutated"
+        assert snap["rich_text_runs"][1].text == "BoldItalic"
+
+    def test_parse_rv_xhtml_to_runs_and_serialize_round_trip(self):
+        from word_sys_pdf_editor.form_fields import (
+            RichTextRun,
+            parse_rv_xhtml_to_runs,
+            serialize_runs_to_rv_xhtml,
+        )
+
+        input_runs = [
+            RichTextRun(text="Hello ", font_family="Helvetica", font_size=12.0, color=(0.0, 0.0, 0.0)),
+            RichTextRun(
+                text="Bold & Italic",
+                bold=True,
+                italic=True,
+                font_family="Helvetica",
+                font_size=12.0,
+                color=(0.0, 0.0, 0.0),
+            ),
+            RichTextRun(
+                text="\nSecond Line Red Underlined",
+                underline=True,
+                strikethrough=True,
+                font_family="Times",
+                font_size=15.0,
+                color=(1.0, 0.0, 0.0),
+            ),
+        ]
+
+        plain_v, rv_xhtml, ds_style = serialize_runs_to_rv_xhtml(
+            input_runs,
+            default_font="Helvetica",
+            default_size=12.0,
+            default_color=(0.0, 0.0, 0.0),
+            align=1,
+        )
+        assert plain_v == "Hello Bold & Italic\nSecond Line Red Underlined"
+        assert 'xmlns="http://www.w3.org/1999/xhtml"' in rv_xhtml
+        assert 'xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"' in rv_xhtml
+        assert 'xfa:APIVersion="Acroform:2.7.0.0"' in rv_xhtml
+        assert 'xfa:spec="2.1"' in rv_xhtml
+        assert "text-align:center" in ds_style
+
+        parsed = parse_rv_xhtml_to_runs(rv_xhtml, ds_style)
+        assert "".join(r.text for r in parsed) == plain_v
+        assert any(r.bold and r.italic and "Bold & Italic" in r.text for r in parsed)
+        assert any(
+            r.underline
+            and r.strikethrough
+            and r.font_size == 15.0
+            and r.color == (1.0, 0.0, 0.0)
+            and "Second Line Red Underlined" in r.text
+            for r in parsed
+        )
+
+        # Also test parsing raw Adobe Acrobat style-only spans
+        acrobat_rv = (
+            '<body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/" '
+            'xfa:APIVersion="Acroform:2.7.0.0" xfa:spec="2.1">'
+            '<p dir="ltr"><span style="font-weight:bold">Important: </span>'
+            '<span style="font-style:italic;text-decoration:underline;color:#008000">Approved</span></p>'
+            "</body>"
+        )
+        acrobat_runs = parse_rv_xhtml_to_runs(
+            acrobat_rv,
+            "font: Helvetica,sans-serif 11.0pt; text-align:left; color:#000000",
+        )
+        assert len(acrobat_runs) == 2
+        assert acrobat_runs[0].text == "Important: "
+        assert acrobat_runs[0].bold is True
+        assert acrobat_runs[0].italic is False
+        assert acrobat_runs[1].text == "Approved"
+        assert acrobat_runs[1].italic is True
+        assert acrobat_runs[1].underline is True
+        assert abs(acrobat_runs[1].color[1] - (128 / 255.0)) < 0.01
+
+    def test_runs_to_pango_markup_generation(self):
+        from word_sys_pdf_editor.form_fields import AcroFormField, RichTextRun
+
+        field = AcroFormField(
+            field_id="f_markup",
+            xref=20,
+            page_number=0,
+            rect=(0.0, 0.0, 200.0, 40.0),
+            field_name="markup_test",
+            text_fontsize=12.0,
+            text_color=(0.0, 0.0, 0.0),
+        )
+        field.set_rich_text_runs(
+            [
+                RichTextRun(text="A < B & ", bold=True),
+                RichTextRun(text="Italic", italic=True, underline=True, color=(0.0, 0.0, 1.0), font_size=14.0),
+            ]
+        )
+        markup = field.to_pango_markup()
+        assert "<b>A &lt; B &amp; </b>" in markup
+        assert "<i><u>Italic</u></i>" in markup
+        assert 'foreground="#0000ff"' in markup
+        assert f'size="{14 * 1024}"' in markup
+
+
+
 
 
 

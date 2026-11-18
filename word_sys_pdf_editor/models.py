@@ -307,6 +307,8 @@ def snapshot_object_state(obj_or_dict: Any) -> Optional[Dict[str, Any]]:
             out[k] = v
         elif k == 'char_boxes' and isinstance(v, list):
             out[k] = [dict(cb) for cb in v]
+        elif k == 'rich_text_runs' and isinstance(v, list):
+            out[k] = [copy.deepcopy(r) for r in v]
         elif k in ('points', 'original_points') and isinstance(v, list):
             out[k] = list(v)
         elif isinstance(v, list):
@@ -1143,98 +1145,22 @@ class MeasurementObject:
         return clone
 
 
-@dataclass
-class AcroFormField:
-    """Data model representing an interactive AcroForm field."""
-    field_id: str
-    xref: int
-    page_number: int
-    rect: Tuple[float, float, float, float]
-    field_name: str
-    field_label: str = ""
-    field_type: str = "text"
-    field_type_id: int = 0
-    value: Any = ""
-    default_value: Any = None
-    choice_values: List[str] = field(default_factory=list)
-    button_states: Optional[Dict[str, Any]] = None
-    field_flags: int = 0
-    is_read_only: bool = False
-    is_required: bool = False
-    is_no_export: bool = False
-    is_multiline: bool = False
-    is_password: bool = False
-    is_comb: bool = False
-    max_length: int = 0
-    text_fontsize: float = 0.0
-    text_color: Optional[Tuple[float, float, float]] = None
-    fill_color: Optional[Tuple[float, float, float]] = None
-    border_color: Optional[Tuple[float, float, float]] = None
-    border_width: float = 1.0
-    is_modified: bool = False
-
-    @property
-    def x(self) -> float:
-        return self.rect[0]
-
-    @property
-    def y(self) -> float:
-        return self.rect[1]
-
-    @property
-    def width(self) -> float:
-        return max(0.0, self.rect[2] - self.rect[0])
-
-    @property
-    def height(self) -> float:
-        return max(0.0, self.rect[3] - self.rect[1])
-
-    @property
-    def bbox(self) -> Tuple[float, float, float, float]:
-        return self.rect
-
-    @property
-    def is_checked(self) -> bool:
-        if self.field_type in ("checkbox", "radio"):
-            if isinstance(self.value, bool):
-                return self.value
-            val_str = str(self.value).strip().lower()
-            return val_str not in ("off", "no", "false", "0", "", "none", "/off")
-        return False
-
-    def set_value(self, new_val: Any):
-        self.value = new_val
-        self.is_modified = True
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "field_id": self.field_id,
-            "xref": self.xref,
-            "page_number": self.page_number,
-            "rect": self.rect,
-            "field_name": self.field_name,
-            "field_label": self.field_label,
-            "field_type": self.field_type,
-            "field_type_id": self.field_type_id,
-            "value": self.value,
-            "default_value": self.default_value,
-            "choice_values": list(self.choice_values),
-            "button_states": self.button_states,
-            "field_flags": self.field_flags,
-            "is_read_only": self.is_read_only,
-            "is_required": self.is_required,
-            "is_no_export": self.is_no_export,
-            "is_multiline": self.is_multiline,
-            "is_password": self.is_password,
-            "is_comb": self.is_comb,
-            "max_length": self.max_length,
-            "text_fontsize": self.text_fontsize,
-            "text_color": self.text_color,
-            "fill_color": self.fill_color,
-            "border_color": self.border_color,
-            "border_width": self.border_width,
-            "is_modified": self.is_modified,
-        }
+from .form_fields import (
+    FIELD_FLAG_COMB,
+    FIELD_FLAG_MULTILINE,
+    FIELD_FLAG_PASSWORD,
+    FIELD_FLAG_RICH_TEXT,
+    AcroFormField,
+    RichTextRun,
+    coalesce_rich_text_runs,
+    color_tuple_to_hex,
+    format_default_style_css,
+    parse_css_color,
+    parse_default_style_css,
+    parse_rv_xhtml_to_runs,
+    runs_to_pango_markup,
+    serialize_runs_to_rv_xhtml,
+)
 
 
 # Precision Drawing Units & Scales
