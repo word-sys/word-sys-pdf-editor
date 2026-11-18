@@ -3432,6 +3432,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_duplicate_page.connect('activate', self.on_duplicate_page_action)
         self.add_action(action_duplicate_page)
 
+        action_copy_pages_to_tab = Gio.SimpleAction.new('copy_pages_to_tab', None)
+        action_copy_pages_to_tab.connect('activate', lambda a, p: self.show_copy_pages_to_tab_dialog())
+        self.add_action(action_copy_pages_to_tab)
+
     def _update_ui_state(self):
         """Update UI state."""
         has_doc = self.doc is not None
@@ -3541,6 +3545,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.lookup_action(paste_act).set_enabled(can_paste_page)
         if self.lookup_action("duplicate_page"):
             self.lookup_action("duplicate_page").set_enabled(in_edit and has_doc and has_pages)
+        if self.lookup_action("copy_pages_to_tab"):
+            self.lookup_action("copy_pages_to_tab").set_enabled(has_doc and has_pages)
 
         if hasattr(self, 'delete_page_button'):
             self.delete_page_button.set_sensitive(in_edit and has_doc and page_count > 1)
@@ -12273,13 +12279,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         btn_copy_to_doc = Gtk.Button(label=_("copy_page_to_doc"))
         btn_copy_to_doc.add_css_class("flat")
-        btn_copy_to_doc.set_sensitive(bool(other_sessions) or hasattr(self, "show_copy_pages_to_tab_dialog"))
+        btn_copy_to_doc.set_sensitive(True)
         def on_copy_to_doc(b):
             popover.popdown()
-            if hasattr(self, "show_copy_pages_to_tab_dialog") and len(other_sessions) != 1:
-                self.show_copy_pages_to_tab_dialog(initial_page_index=page_index)
-            elif other_sessions:
-                self.copy_page_to_target_session(page_index, other_sessions[0])
+            self.show_copy_pages_to_tab_dialog(initial_page_index=page_index)
         btn_copy_to_doc.connect("clicked", on_copy_to_doc)
         popover_box.append(btn_copy_to_doc)
         menu_buttons["copy_page_to_doc"] = btn_copy_to_doc
@@ -12742,6 +12745,143 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if getattr(self, "view_mode", False):
             return False
         return self.duplicate_page_at_index()
+
+    def copy_pages_from_session_to_target(
+        self,
+        page_indices: Any,
+        target_session: Optional[DocumentSession] = None,
+        create_new_tab: bool = False,
+        position: str = "end",
+        source_session: Optional[DocumentSession] = None,
+        switch_to_target: bool = False,
+    ) -> bool:
+        """Copy one or more pages from `source_session` (or active session) into `target_session` or a new tab."""
+        if getattr(self, "is_saving", False) is True:
+            return False
+
+        src_session = source_session if source_session is not None else getattr(self, "_active_session", None)
+        src_doc = getattr(src_session, "doc", None) if src_session is not None else getattr(self, "doc", None)
+        if src_doc is None:
+            return False
+
+        if isinstance(page_indices, int):
+            pages = [int(page_indices)]
+        elif isinstance(page_indices, (list, tuple)):
+            pages = [int(p) for p in page_indices]
+        else:
+            return False
+
+        pages = [p for p in pages if 0 <= p < len(src_doc)]
+        if not pages:
+            return False
+
+        if (src_session is not None and src_session is getattr(self, "_active_session", None)) or (
+            src_session is None and getattr(self, "doc", None) is src_doc
+        ):
+            if hasattr(self, "_stash_page_objects") and getattr(self, "current_page_index", None) is not None:
+                self._stash_page_objects(self.current_page_index)
+
+        if create_new_tab or target_session is None:
+            new_doc = fitz.open()
+            ok, _msg, inserted = pdf_handler.copy_pages_between_docs(src_doc, pages, new_doc, 0)
+            if not ok or not inserted:
+                new_doc.close()
+                return False
+
+            new_sess = self.create_session(doc=new_doc, filepath=None)
+            new_sess.view_mode = False
+            new_sess.is_modified = True
+            new_sess.current_page_index = 0
+
+            effective_src = src_session if src_session is not None else self
+            for offset, src_p in enumerate(pages):
+                pdf_handler.clone_page_editor_objects(
+                    effective_src,
+                    src_page_idx=src_p,
+                    dst_page_idx=offset,
+                    dst_session=new_sess,
+                    shift_downstream=False,
+                )
+
+            self.add_session(new_sess, switch_to=bool(switch_to_target or True))
+            if getattr(self, "_active_session", None) is new_sess:
+                if hasattr(self, "_load_page"):
+                    self._load_page(0, reload_objects=False)
+                if hasattr(self, "_load_thumbnails"):
+                    self._load_thumbnails(target_page=0)
+                if hasattr(self, "_update_ui_state"):
+                    self._update_ui_state()
+            if hasattr(self, "status_label") and self.status_label is not None:
+                self.status_label.set_text(_("status_pages_copied_new_tab", len(pages)))
+            return True
+
+        dst_session = target_session
+        dst_doc = getattr(dst_session, "doc", None)
+        if dst_doc is None:
+            return False
+
+        pos_norm = str(position or "end").strip().lower()
+        curr_dst_page = int(getattr(dst_session, "current_page_index", 0) or 0)
+        curr_dst_page = max(0, min(curr_dst_page, max(0, len(dst_doc) - 1)))
+        if pos_norm in ("beginning", "start"):
+            dst_insert_idx = 0
+        elif pos_norm in ("before_current", "before"):
+            dst_insert_idx = curr_dst_page
+        elif pos_norm in ("after_current", "after"):
+            dst_insert_idx = min(len(dst_doc), curr_dst_page + 1)
+        else:
+            dst_insert_idx = len(dst_doc)
+
+        cmd = InsertCopiedPagesCommand(
+            self,
+            dst_insert_idx=dst_insert_idx,
+            src_doc=src_doc,
+            src_page_indices=pages,
+            src_session=src_session,
+            dst_session=dst_session,
+        )
+        ok = bool(cmd.execute())
+        if ok:
+            target_undo = (
+                getattr(dst_session, "undo_manager", None)
+                if getattr(dst_session, "undo_manager", None) is not None
+                else getattr(self, "undo_manager", None)
+            )
+            if target_undo is not None:
+                target_undo.add_command(cmd)
+            if switch_to_target and dst_session is not getattr(self, "_active_session", None):
+                self.set_active_session(dst_session)
+            if hasattr(self, "status_label") and self.status_label is not None:
+                target_title = getattr(dst_session, "display_title", None) or _("untitled_document")
+                self.status_label.set_text(_("status_pages_copied_to_tab", len(pages), target_title))
+        return ok
+
+    def show_copy_pages_to_tab_dialog(
+        self,
+        initial_page_index: Optional[int] = None,
+        on_confirm=None,
+    ):
+        """Open the 'Copy Pages to Tab...' modal dialog."""
+        if not self.doc:
+            return None
+        from .ui_components import CopyPagesToTabDialog
+
+        prev_dlg = getattr(self, "_copy_pages_dialog", None)
+        if prev_dlg is not None:
+            try:
+                prev_dlg.destroy()
+            except Exception:
+                pass
+            self._copy_pages_dialog = None
+
+        dlg = CopyPagesToTabDialog(
+            self,
+            initial_page_index=initial_page_index,
+            on_confirm=on_confirm,
+        )
+        self._copy_pages_dialog = dlg
+        dlg.present()
+        return dlg
 
     def on_canvas_page_thumbnail_drop(self, target, value, x, y) -> bool:
         """Handle dropping a dragged page thumbnail directly onto the main PDF canvas (`self.pdf_view`)."""

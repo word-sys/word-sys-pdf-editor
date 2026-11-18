@@ -696,4 +696,284 @@ class SymbolsPopover(Gtk.Popover):
             self.editor_window.insert_symbol_or_emoji(symbol, is_emoji=is_emoji)
 
 
+class CopyPagesToTabDialog(Adw.Window):
+    """Modal Libadwaita dialog for copying a single page or multi-page range to an open tab or a new tab."""
+
+    POSITION_KEYS = ("beginning", "before_current", "after_current", "end")
+    SCOPE_KEYS = ("single", "range", "all")
+
+    def __init__(self, parent_window, initial_page_index=None, on_confirm=None):
+        super().__init__()
+        self.parent_window = parent_window
+        self.on_confirm = on_confirm
+        self._is_updating = False
+
+        doc = getattr(parent_window, "doc", None)
+        self.total_pages = max(1, len(doc) if doc is not None else 1)
+        raw_page = (
+            initial_page_index
+            if initial_page_index is not None
+            else (getattr(parent_window, "current_page_index", 0) or 0)
+        )
+        self.initial_page_index = max(0, min(int(raw_page), self.total_pages - 1))
+
+        if parent_window is not None:
+            self.set_transient_for(parent_window)
+        self.set_modal(True)
+        self.set_title(_("copy_pages_dialog_title"))
+        self.set_default_size(480, 470)
+        self.set_resizable(False)
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.set_content(main_box)
+
+        header = Adw.HeaderBar()
+        self.cancel_btn = Gtk.Button(label=_("btn_cancel"))
+        self.cancel_btn.connect("clicked", lambda b: self.destroy())
+        header.pack_start(self.cancel_btn)
+
+        self.copy_btn = Gtk.Button(label=_("copy_pages_btn_copy"))
+        self.copy_btn.add_css_class("suggested-action")
+        self.copy_btn.connect("clicked", self._on_copy_clicked)
+        header.pack_end(self.copy_btn)
+        main_box.append(header)
+
+        scrolled = Gtk.ScrolledWindow(vexpand=True)
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        main_box.append(scrolled)
+
+        clamp = Adw.Clamp(maximum_size=440)
+        clamp.set_margin_top(16)
+        clamp.set_margin_bottom(16)
+        clamp.set_margin_start(16)
+        clamp.set_margin_end(16)
+        scrolled.set_child(clamp)
+
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        clamp.set_child(content_box)
+
+        # Group 1: Source Page Range
+        group_source = Adw.PreferencesGroup()
+        group_source.set_title(_("copy_pages_group_source"))
+        group_source.set_description(_("copy_pages_group_source_desc"))
+        content_box.append(group_source)
+
+        scope_labels = [
+            _("copy_pages_scope_single", self.initial_page_index + 1),
+            _("copy_pages_scope_range"),
+            _("copy_pages_scope_all", self.total_pages),
+        ]
+        self.scope_model = Gtk.StringList.new(scope_labels)
+        self.scope_row = Adw.ComboRow()
+        self.scope_row.set_title(_("copy_pages_scope_title"))
+        self.scope_row.set_model(self.scope_model)
+        self.scope_row.set_selected(0)
+        self.scope_row.connect("notify::selected", self._on_scope_changed)
+        group_source.add(self.scope_row)
+
+        self.range_row = Adw.ActionRow()
+        self.range_row.set_title(_("copy_pages_range_entry_title", self.total_pages))
+        self.range_entry = Gtk.Entry(
+            valign=Gtk.Align.CENTER,
+            width_chars=16,
+            placeholder_text="1-3, 5",
+        )
+        self.range_entry.set_text(str(self.initial_page_index + 1))
+        self.range_entry.connect("changed", self._on_range_entry_changed)
+        self.range_entry.connect("activate", lambda e: self._on_copy_clicked())
+        self.range_row.add_suffix(self.range_entry)
+        self.range_row.set_activatable_widget(self.range_entry)
+        group_source.add(self.range_row)
+
+        self.validation_label = Gtk.Label(xalign=0.0)
+        self.validation_label.add_css_class("caption")
+        self.validation_label.set_margin_start(4)
+        content_box.append(self.validation_label)
+
+        # Group 2: Target Tab & Insertion Position
+        group_target = Adw.PreferencesGroup()
+        group_target.set_title(_("copy_pages_group_target"))
+        content_box.append(group_target)
+
+        self.target_specs = []
+        other_sessions = (
+            parent_window.get_other_open_document_sessions()
+            if parent_window is not None and hasattr(parent_window, "get_other_open_document_sessions")
+            else []
+        )
+        for sess in other_sessions:
+            title = getattr(sess, "display_title", None) or _("untitled_document")
+            self.target_specs.append({"kind": "session", "session": sess, "label": title})
+
+        self.target_specs.append(
+            {"kind": "new_tab", "session": None, "label": _("copy_pages_target_new_tab")}
+        )
+
+        active_sess = getattr(parent_window, "_active_session", None) if parent_window is not None else None
+        if active_sess is not None and getattr(active_sess, "doc", None) is not None:
+            curr_title = getattr(active_sess, "display_title", None) or _("untitled_document")
+            self.target_specs.append(
+                {
+                    "kind": "session",
+                    "session": active_sess,
+                    "label": _("copy_pages_target_current_fmt", curr_title),
+                }
+            )
+
+        target_labels = [spec["label"] for spec in self.target_specs]
+        self.target_model = Gtk.StringList.new(target_labels)
+        self.target_row = Adw.ComboRow()
+        self.target_row.set_title(_("copy_pages_target_tab_title"))
+        self.target_row.set_model(self.target_model)
+        self.target_row.set_selected(0)
+        self.target_row.connect("notify::selected", self._on_target_changed)
+        group_target.add(self.target_row)
+
+        pos_labels = [
+            _("copy_pages_pos_beginning"),
+            _("copy_pages_pos_before_current"),
+            _("copy_pages_pos_after_current"),
+            _("copy_pages_pos_end"),
+        ]
+        self.position_model = Gtk.StringList.new(pos_labels)
+        self.position_row = Adw.ComboRow()
+        self.position_row.set_title(_("copy_pages_position_title"))
+        self.position_row.set_model(self.position_model)
+        self.position_row.set_selected(3)
+        group_target.add(self.position_row)
+
+        self.switch_tab_row = Adw.ActionRow()
+        self.switch_tab_row.set_title(_("copy_pages_switch_tab_title"))
+        self.switch_tab_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.switch_tab_row.add_suffix(self.switch_tab_switch)
+        self.switch_tab_row.set_activatable_widget(self.switch_tab_switch)
+        group_target.add(self.switch_tab_row)
+
+        self._sync_target_dependent_controls()
+        self._validate_current_range()
+
+    def _on_scope_changed(self, row, pspec):
+        if self._is_updating:
+            return
+        idx = int(self.scope_row.get_selected())
+        self._is_updating = True
+        try:
+            if idx == 0:
+                self.range_entry.set_text(str(self.initial_page_index + 1))
+            elif idx == 2:
+                all_str = f"1-{self.total_pages}" if self.total_pages > 1 else "1"
+                self.range_entry.set_text(all_str)
+        finally:
+            self._is_updating = False
+        self._validate_current_range()
+
+    def _on_range_entry_changed(self, entry):
+        if not self._is_updating:
+            txt = (self.range_entry.get_text() or "").strip()
+            single_str = str(self.initial_page_index + 1)
+            all_str = f"1-{self.total_pages}" if self.total_pages > 1 else "1"
+            self._is_updating = True
+            try:
+                if txt == single_str:
+                    self.scope_row.set_selected(0)
+                elif txt == all_str and self.total_pages > 1:
+                    self.scope_row.set_selected(2)
+                else:
+                    self.scope_row.set_selected(1)
+            finally:
+                self._is_updating = False
+        self._validate_current_range()
+
+    def _on_target_changed(self, row, pspec):
+        self._sync_target_dependent_controls()
+
+    def _sync_target_dependent_controls(self):
+        spec = self.get_selected_target_spec()
+        is_new_tab = (spec.get("kind") == "new_tab")
+        self.position_row.set_sensitive(not is_new_tab)
+        if is_new_tab:
+            self.switch_tab_switch.set_active(True)
+            self.switch_tab_row.set_sensitive(False)
+        else:
+            active_sess = getattr(self.parent_window, "_active_session", None) if self.parent_window else None
+            is_same_tab = (spec.get("session") is not None and spec.get("session") is active_sess)
+            self.switch_tab_row.set_sensitive(not is_same_tab)
+            if is_same_tab:
+                self.switch_tab_switch.set_active(False)
+
+    def get_selected_page_indices(self):
+        from . import pdf_handler
+        return pdf_handler.parse_page_range_string(self.range_entry.get_text(), self.total_pages)
+
+    def get_selected_target_spec(self) -> dict:
+        idx = int(self.target_row.get_selected())
+        if 0 <= idx < len(self.target_specs):
+            return self.target_specs[idx]
+        return {"kind": "new_tab", "session": None, "label": _("copy_pages_target_new_tab")}
+
+    def get_selected_position_key(self) -> str:
+        idx = int(self.position_row.get_selected())
+        if 0 <= idx < len(self.POSITION_KEYS):
+            return self.POSITION_KEYS[idx]
+        return "end"
+
+    def select_target_new_tab(self) -> None:
+        for i, spec in enumerate(self.target_specs):
+            if spec.get("kind") == "new_tab":
+                self.target_row.set_selected(i)
+                return
+
+    def select_target_session(self, session) -> None:
+        for i, spec in enumerate(self.target_specs):
+            if spec.get("session") is session:
+                self.target_row.set_selected(i)
+                return
+
+    def select_position(self, position_key: str) -> None:
+        key = str(position_key or "").strip().lower()
+        if key in self.POSITION_KEYS:
+            self.position_row.set_selected(self.POSITION_KEYS.index(key))
+
+    def _validate_current_range(self) -> bool:
+        is_valid, indices, err_msg = self.get_selected_page_indices()
+        if is_valid:
+            self.validation_label.set_text(_("copy_pages_valid_count", len(indices)))
+            self.validation_label.remove_css_class("error")
+            self.validation_label.add_css_class("dim-label")
+            self.copy_btn.set_sensitive(True)
+        else:
+            self.validation_label.set_text(err_msg)
+            self.validation_label.remove_css_class("dim-label")
+            self.validation_label.add_css_class("error")
+            self.copy_btn.set_sensitive(False)
+        return is_valid
+
+    def _on_copy_clicked(self, button=None) -> bool:
+        is_valid, indices, _err = self.get_selected_page_indices()
+        if not is_valid or not indices:
+            return False
+
+        spec = self.get_selected_target_spec()
+        create_new_tab = (spec.get("kind") == "new_tab")
+        target_session = spec.get("session")
+        pos_key = self.get_selected_position_key()
+        switch_to = bool(self.switch_tab_switch.get_active())
+
+        ok = False
+        if self.parent_window is not None and hasattr(self.parent_window, "copy_pages_from_session_to_target"):
+            ok = bool(
+                self.parent_window.copy_pages_from_session_to_target(
+                    page_indices=indices,
+                    target_session=target_session,
+                    create_new_tab=create_new_tab,
+                    position=pos_key,
+                    switch_to_target=switch_to,
+                )
+            )
+        if callable(self.on_confirm):
+            self.on_confirm(indices, spec, pos_key, ok)
+        self.destroy()
+        return ok
+
+
 from .new_document_dialog import show_new_document_dialog, NewDocumentDialog

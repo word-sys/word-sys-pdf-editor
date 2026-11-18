@@ -3421,6 +3421,179 @@ class TestPageClipboardAndContextMenuActions:
                 win.destroy()
 
 
+class TestMultiPageRangeCopyAndBatchTabTransferDialog:
+    """Verify multi-page range parsing, batch tab transfer dialog, insertion positions, and New Document Tab creation."""
+
+    def test_parse_page_range_string_validation_and_ordering(self):
+        from word_sys_pdf_editor import pdf_handler
+
+        ok, indices, _ = pdf_handler.parse_page_range_string("2", 5)
+        assert ok is True
+        assert indices == [1]
+
+        ok, indices, _ = pdf_handler.parse_page_range_string("1-3, 5", 5)
+        assert ok is True
+        assert indices == [0, 1, 2, 4]
+
+        ok, indices, _ = pdf_handler.parse_page_range_string("4-2; 1", 5)
+        assert ok is True
+        assert indices == [3, 2, 1, 0]
+
+        ok, indices, _ = pdf_handler.parse_page_range_string("1-3, 2-4", 5)
+        assert ok is True
+        assert indices == [0, 1, 2, 3]
+
+        ok, indices, _ = pdf_handler.parse_page_range_string("all", 4)
+        assert ok is True
+        assert indices == [0, 1, 2, 3]
+
+        for invalid in ("", "   ", "0", "6", "1-6", "abc", "2-", "-3", "1-2-3"):
+            ok, indices, err = pdf_handler.parse_page_range_string(invalid, 5)
+            assert ok is False
+            assert indices == []
+            assert len(err) > 0
+
+    def test_copy_pages_to_tab_dialog_range_positions_and_undo(self):
+        from unittest.mock import patch
+        from gi.repository import Adw
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc_a = fitz.open()
+        for i in range(1, 5):
+            p = doc_a.new_page(width=500, height=700)
+            p.insert_text((50, 100), f"SrcPage {i}")
+
+        doc_b = fitz.open()
+        for i in range(1, 3):
+            p = doc_b.new_page(width=600, height=800)
+            p.insert_text((50, 100), f"DstPage {i}")
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_batch_tab_copy")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess_a = win.create_session(doc=doc_a, filepath="/tmp/batch_src.pdf")
+                sess_b = win.create_session(doc=doc_b, filepath="/tmp/batch_dst.pdf")
+                win.add_session(sess_a, switch_to=True)
+                win.add_session(sess_b, switch_to=False)
+                sess_b.current_page_index = 1  # DstPage 2 (0-based index 1)
+
+                dlg = win.show_copy_pages_to_tab_dialog(initial_page_index=0)
+                assert dlg is not None
+                assert dlg.range_entry.get_text() == "1"
+
+                # Invalid range disables copy button
+                dlg.range_entry.set_text("1-99")
+                assert dlg.copy_btn.get_sensitive() is False
+
+                # Valid multi-page range "1-2, 4"
+                dlg.range_entry.set_text("1-2, 4")
+                assert dlg.copy_btn.get_sensitive() is True
+                dlg.select_target_session(sess_b)
+                dlg.select_position("before_current")
+                dlg.switch_tab_switch.set_active(False)
+
+                ok = dlg._on_copy_clicked()
+                assert ok is True
+                assert len(sess_b.doc) == 5
+                texts = [sess_b.doc[i].get_text() for i in range(len(sess_b.doc))]
+                assert "DstPage 1" in texts[0]
+                assert "SrcPage 1" in texts[1]
+                assert "SrcPage 2" in texts[2]
+                assert "SrcPage 4" in texts[3]
+                assert "DstPage 2" in texts[4]
+
+                # Single undo removes all 3 batch-copied pages
+                sess_b.undo_manager.undo()
+                assert len(sess_b.doc) == 2
+                assert "DstPage 1" in sess_b.doc[0].get_text()
+                assert "DstPage 2" in sess_b.doc[1].get_text()
+
+                # Redo restores all 3 batch-copied pages
+                sess_b.undo_manager.redo()
+                assert len(sess_b.doc) == 5
+                sess_b.undo_manager.undo()
+                assert len(sess_b.doc) == 2
+
+                # Test "beginning" and "after_current"
+                assert win.copy_pages_from_session_to_target(
+                    page_indices=[2],
+                    target_session=sess_b,
+                    position="beginning",
+                ) is True
+                assert "SrcPage 3" in sess_b.doc[0].get_text()
+                sess_b.undo_manager.undo()
+
+                sess_b.current_page_index = 0
+                assert win.copy_pages_from_session_to_target(
+                    page_indices=[3],
+                    target_session=sess_b,
+                    position="after_current",
+                ) is True
+                assert "SrcPage 4" in sess_b.doc[1].get_text()
+            finally:
+                win.close_document()
+                win.destroy()
+
+    def test_copy_pages_to_new_document_tab_preserves_editor_objects(self):
+        from unittest.mock import patch
+        from gi.repository import Adw
+        from word_sys_pdf_editor.models import EditableText
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc_a = fitz.open()
+        for i in range(1, 4):
+            p = doc_a.new_page(width=500, height=700)
+            p.insert_text((50, 100), f"OriginPage {i}")
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_copy_new_tab")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess_a = win.create_session(doc=doc_a, filepath="/tmp/origin.pdf")
+                win.add_session(sess_a, switch_to=True)
+
+                # Attach an uncommitted EditableText on Page 2 (0-based index 1)
+                t_obj = EditableText(x=80, y=150, text="Page 2 Annotation", page_number=1, is_new=True)
+                sess_a.page_objects_cache[1] = {
+                    "texts": [t_obj],
+                    "images": [],
+                    "shapes": [],
+                    "strokes": [],
+                    "form_fields": [],
+                }
+
+                dlg = win.show_copy_pages_to_tab_dialog(initial_page_index=1)
+                dlg.range_entry.set_text("2-3")
+                dlg.select_target_new_tab()
+                ok = dlg._on_copy_clicked()
+                assert ok is True
+
+                # A new tab session was created and switched to
+                open_doc_sessions = [s for s in win.sessions if s.doc is not None]
+                assert len(open_doc_sessions) == 2
+                new_sess = win._active_session
+                assert new_sess is not sess_a
+                assert len(new_sess.doc) == 2
+                assert "OriginPage 2" in new_sess.doc[0].get_text()
+                assert "OriginPage 3" in new_sess.doc[1].get_text()
+                assert len(new_sess.page_objects_cache[0]["texts"]) == 1
+                assert new_sess.page_objects_cache[0]["texts"][0].text == "Page 2 Annotation"
+                assert new_sess.page_objects_cache[0]["texts"][0].page_number == 0
+            finally:
+                win.close_document()
+                win.destroy()
+
+
+
 
 
 

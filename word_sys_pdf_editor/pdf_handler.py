@@ -4926,6 +4926,62 @@ def merge_pdf_pages(target_doc, source_pdf_path, insert_position=None):
         return False, _("err_merging_pdf", e), 0
 
 
+def parse_page_range_string(
+    range_str: str,
+    total_pages: int,
+) -> Tuple[bool, List[int], str]:
+    """Parse a 1-based page range string (e.g. ``"1-3, 5"``, ``"2"``, ``"all"``) into 0-based page indices.
+
+    Returns ``(is_valid, zero_based_indices, error_message)``.
+    """
+    if total_pages <= 0:
+        return False, [], _("copy_pages_err_invalid_range", 0)
+    raw = str(range_str or "").strip()
+    if not raw:
+        return False, [], _("copy_pages_err_invalid_range", total_pages)
+    if raw.lower() in ("all", "*"):
+        return True, list(range(total_pages)), ""
+
+    result: List[int] = []
+    seen = set()
+    tokens = [t.strip() for t in raw.replace(";", ",").split(",")]
+    for token in tokens:
+        if not token:
+            continue
+        if "-" in token:
+            parts = token.split("-")
+            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+                return False, [], _("copy_pages_err_invalid_range", total_pages)
+            try:
+                start_p = int(parts[0].strip())
+                end_p = int(parts[1].strip())
+            except ValueError:
+                return False, [], _("copy_pages_err_invalid_range", total_pages)
+            if not (1 <= start_p <= total_pages and 1 <= end_p <= total_pages):
+                return False, [], _("copy_pages_err_invalid_range", total_pages)
+            step = 1 if start_p <= end_p else -1
+            for p in range(start_p, end_p + step, step):
+                idx = p - 1
+                if idx not in seen:
+                    seen.add(idx)
+                    result.append(idx)
+        else:
+            try:
+                p = int(token)
+            except ValueError:
+                return False, [], _("copy_pages_err_invalid_range", total_pages)
+            if not (1 <= p <= total_pages):
+                return False, [], _("copy_pages_err_invalid_range", total_pages)
+            idx = p - 1
+            if idx not in seen:
+                seen.add(idx)
+                result.append(idx)
+
+    if not result:
+        return False, [], _("copy_pages_err_invalid_range", total_pages)
+    return True, result, ""
+
+
 def copy_pages_between_docs(
     src_doc: Any,
     src_page_indices: Union[int, List[int], Tuple[int, ...]],
