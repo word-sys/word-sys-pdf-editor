@@ -3915,12 +3915,156 @@ def _escape_pdf_literal_bytes(text: str) -> str:
     return safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
+def _rich_run_to_base14_font(font_family: str, bold: bool, italic: bool) -> Tuple[str, str]:
+    """Map `(font_family, bold, italic)` to `(pdf_resource_name, pymupdf_fontname)` across all 12 Base-14 variants."""
+    fam_low = str(font_family or "Helvetica").strip().lower()
+    if "times" in fam_low or "serif" in fam_low or "georgia" in fam_low or "caladea" in fam_low:
+        if bold and italic:
+            return ("TiBI", "tibi")
+        if bold:
+            return ("TiBo", "tibo")
+        if italic:
+            return ("TiIt", "tiit")
+        return ("TiRo", "tiro")
+    if "cour" in fam_low or "mono" in fam_low or "consolas" in fam_low or "fixed" in fam_low:
+        if bold and italic:
+            return ("CoBI", "cobi")
+        if bold:
+            return ("CoBo", "cobo")
+        if italic:
+            return ("CoOb", "coit")
+        return ("Cour", "cour")
+    if bold and italic:
+        return ("HeBI", "hebi")
+    if bold:
+        return ("HeBo", "hebo")
+    if italic:
+        return ("HeOb", "heit")
+    return ("Helv", "helv")
+
+
+def _measure_base14_text_width(text: str, fitz_fontname: str, font_size: float) -> float:
+    """Measure exact horizontal advance width in PDF points for a Base-14 font."""
+    if not text:
+        return 0.0
+    try:
+        return float(fitz.get_text_length(text, fontname=fitz_fontname, fontsize=float(font_size)))
+    except Exception:
+        return float(len(text)) * float(font_size) * 0.55
+
+
+def _layout_rich_text_runs_into_lines(
+    runs: List[RichTextRun],
+    max_width: float,
+    base_size: float,
+    base_color: Tuple[float, float, float],
+    is_multiline: bool,
+) -> List[Dict[str, Any]]:
+    """Lay out `RichTextRun` spans into wrapped lines with per-segment Base-14 font metrics and widths."""
+    # Split into explicit paragraphs on '\n'
+    paragraphs: List[List[RichTextRun]] = [[]]
+    for r in runs or []:
+        parts = str(r.text or "").split("\n")
+        for idx, part in enumerate(parts):
+            if idx > 0:
+                if is_multiline:
+                    paragraphs.append([])
+                else:
+                    # Single-line fields collapse explicit newlines into spaces
+                    sp_run = copy.deepcopy(r)
+                    sp_run.text = " "
+                    paragraphs[-1].append(sp_run)
+            if part:
+                sub = copy.deepcopy(r)
+                sub.text = part
+                paragraphs[-1].append(sub)
+
+    laid_out_lines: List[Dict[str, Any]] = []
+
+    def _finalize_line(segs: List[Dict[str, Any]], trim_trailing_ws: bool = False) -> Dict[str, Any]:
+        if trim_trailing_ws:
+            while segs and segs[-1]["text"].isspace():
+                segs.pop()
+            if segs and segs[-1]["text"].rstrip() != segs[-1]["text"]:
+                trimmed = segs[-1]["text"].rstrip()
+                segs[-1]["text"] = trimmed
+                segs[-1]["width"] = _measure_base14_text_width(trimmed, segs[-1]["fitz_font"], segs[-1]["size"])
+        total_w = sum(s["width"] for s in segs)
+        max_sz = max((s["size"] for s in segs), default=base_size)
+        return {"segments": segs, "width": total_w, "max_size": max_sz}
+
+    for para in paragraphs:
+        if not para:
+            laid_out_lines.append({"segments": [], "width": 0.0, "max_size": base_size})
+            continue
+
+        cur_segs: List[Dict[str, Any]] = []
+        cur_w = 0.0
+
+        for r in para:
+            font_res, fitz_font = _rich_run_to_base14_font(r.font_family, r.bold, r.italic)
+            r_size = float(r.font_size) if r.font_size and r.font_size > 0 else base_size
+            r_col = normalize_color(r.color if r.color is not None else base_color)
+
+            tokens = re.findall(r"\S+|\s+", r.text) if is_multiline else [r.text]
+            for tok in tokens:
+                if not tok:
+                    continue
+                tok_w = _measure_base14_text_width(tok, fitz_font, r_size)
+                if is_multiline and max_width > 4.0 and not tok.isspace() and cur_segs and (cur_w + tok_w > max_width):
+                    laid_out_lines.append(_finalize_line(cur_segs, trim_trailing_ws=True))
+                    cur_segs = []
+                    cur_w = 0.0
+
+                # Skip leading whitespace on wrapped continuation lines
+                if is_multiline and not cur_segs and tok.isspace() and laid_out_lines:
+                    continue
+
+                seg_entry = {
+                    "text": tok,
+                    "font_res": font_res,
+                    "fitz_font": fitz_font,
+                    "size": r_size,
+                    "color": r_col,
+                    "bold": bool(r.bold),
+                    "italic": bool(r.italic),
+                    "underline": bool(r.underline),
+                    "strikethrough": bool(r.strikethrough),
+                    "width": tok_w,
+                }
+                # Coalesce adjacent segments with identical style on the same line
+                if cur_segs and (
+                    cur_segs[-1]["font_res"] == font_res
+                    and abs(cur_segs[-1]["size"] - r_size) < 0.05
+                    and cur_segs[-1]["color"] == r_col
+                    and cur_segs[-1]["underline"] == bool(r.underline)
+                    and cur_segs[-1]["strikethrough"] == bool(r.strikethrough)
+                ):
+                    cur_segs[-1]["text"] += tok
+                    cur_segs[-1]["width"] = _measure_base14_text_width(
+                        cur_segs[-1]["text"], fitz_font, r_size
+                    )
+                else:
+                    cur_segs.append(seg_entry)
+                cur_w = sum(s["width"] for s in cur_segs)
+
+        laid_out_lines.append(_finalize_line(cur_segs, trim_trailing_ws=False))
+
+    return laid_out_lines
+
+
 def _synthesize_rich_text_appearance_stream(
     doc,
     field: AcroFormField,
     widget_xref: Optional[int] = None,
 ) -> Optional[int]:
-    """Synthesize a PDF Form XObject `/AP /N` stream for a Rich Text AcroForm field."""
+    """Synthesize a PDF Form XObject `/AP /N` stream for a Rich Text AcroForm field.
+
+    Performs single-line or multiline word-wrapping, left/center/right alignment,
+    12 Base-14 font resource selection, per-run RGB colors (`rg`), and vector
+    underline/strikethrough rectangles (`re f`) so Adobe Acrobat and all third-party
+    PDF viewers render the exact formatting without needing `NeedAppearances`.
+    """
     target_xref = int(widget_xref or getattr(field, "xref", 0) or 0)
     if not doc or getattr(doc, "is_closed", False) or target_xref <= 0:
         return None
@@ -3941,10 +4085,22 @@ def _synthesize_rich_text_appearance_stream(
             ]
 
         base_size = float(field.text_fontsize) if field.text_fontsize and field.text_fontsize > 0 else 12.0
-        base_color = field.text_color if field.text_color is not None else (0.0, 0.0, 0.0)
+        base_color = normalize_color(field.text_color if field.text_color is not None else (0.0, 0.0, 0.0))
+        pad_x = 3.0
+        pad_y = 2.0
+        avail_w = max(2.0, w - 2.0 * pad_x)
+        align = int(getattr(field, "text_align", 0) or 0)
+
+        laid_out_lines = _layout_rich_text_runs_into_lines(
+            runs=runs,
+            max_width=avail_w,
+            base_size=base_size,
+            base_color=base_color,
+            is_multiline=bool(getattr(field, "is_multiline", False)),
+        )
 
         ops: List[str] = []
-        # Optional background fill & border
+        # Background fill & border
         if field.fill_color is not None:
             fr, fg, fb = normalize_color(field.fill_color)
             ops.append(f"q {fr:.4f} {fg:.4f} {fb:.4f} rg 0 0 {w:.2f} {h:.2f} re f Q")
@@ -3959,54 +4115,63 @@ def _synthesize_rich_text_appearance_stream(
 
         ops.append("/Tx BMC")
         ops.append(f"q 1 1 {max(0.5, w - 2.0):.2f} {max(0.5, h - 2.0):.2f} re W n")
-        ops.append("BT")
 
-        cur_y = (h - base_size - 2.0) if field.is_multiline else max(2.0, (h - base_size) / 2.0 + base_size * 0.15)
-        cur_x = 3.0
-        ops.append(f"1 0 0 1 {cur_x:.2f} {cur_y:.2f} Tm")
+        decor_ops: List[str] = []
+        text_ops: List[str] = []
 
-        for r in runs:
-            fam_low = (r.font_family or "Helvetica").lower()
-            if "times" in fam_low or "serif" in fam_low:
-                if r.bold and r.italic:
-                    f_res = "TiBI"
-                elif r.bold:
-                    f_res = "TiBo"
-                elif r.italic:
-                    f_res = "TiIt"
-                else:
-                    f_res = "TiRo"
-            elif "cour" in fam_low or "mono" in fam_low:
-                if r.bold and r.italic:
-                    f_res = "CoBI"
-                elif r.bold:
-                    f_res = "CoBo"
-                elif r.italic:
-                    f_res = "CoOb"
-                else:
-                    f_res = "Cour"
+        if laid_out_lines:
+            first_size = laid_out_lines[0]["max_size"] if laid_out_lines[0]["max_size"] > 0 else base_size
+            if field.is_multiline:
+                cur_y = h - pad_y - first_size * 0.92
             else:
-                if r.bold and r.italic:
-                    f_res = "HeBI"
-                elif r.bold:
-                    f_res = "HeBo"
-                elif r.italic:
-                    f_res = "HeOb"
+                cur_y = max(pad_y, (h - first_size) / 2.0 + first_size * 0.18)
+
+            text_ops.append("BT")
+            for line_idx, line in enumerate(laid_out_lines):
+                line_size = line["max_size"] if line["max_size"] > 0 else base_size
+                if line_idx > 0:
+                    cur_y -= max(line_size, base_size) * 1.25
+
+                line_w = float(line["width"])
+                if align == 1:
+                    seg_x = pad_x + max(0.0, (avail_w - line_w) / 2.0)
+                elif align == 2:
+                    seg_x = pad_x + max(0.0, avail_w - line_w)
                 else:
-                    f_res = "Helv"
+                    seg_x = pad_x
 
-            r_size = float(r.font_size) if r.font_size and r.font_size > 0 else base_size
-            cr, cg, cb = normalize_color(r.color if r.color is not None else base_color)
-            ops.append(f"/{f_res} {r_size:.2f} Tf {cr:.4f} {cg:.4f} {cb:.4f} rg")
-            lines = r.text.split("\n")
-            for idx, seg in enumerate(lines):
-                if idx > 0:
-                    cur_y -= r_size * 1.25
-                    ops.append(f"1 0 0 1 {cur_x:.2f} {cur_y:.2f} Tm")
-                if seg:
-                    ops.append(f"({_escape_pdf_literal_bytes(seg)}) Tj")
+                for seg in line["segments"]:
+                    txt = seg["text"]
+                    if not txt:
+                        continue
+                    r, g, b = seg["color"]
+                    f_res = seg["font_res"]
+                    sz = seg["size"]
+                    seg_w = float(seg["width"])
 
-        ops.append("ET")
+                    text_ops.append(
+                        f"1 0 0 1 {seg_x:.2f} {cur_y:.2f} Tm "
+                        f"/{f_res} {sz:.2f} Tf {r:.4f} {g:.4f} {b:.4f} rg "
+                        f"({_escape_pdf_literal_bytes(txt)}) Tj"
+                    )
+
+                    if seg["underline"] and seg_w > 0.0:
+                        ul_h = max(0.5, sz * 0.065)
+                        ul_y = cur_y - sz * 0.14
+                        decor_ops.append(
+                            f"{r:.4f} {g:.4f} {b:.4f} rg {seg_x:.2f} {ul_y:.2f} {seg_w:.2f} {ul_h:.2f} re f"
+                        )
+                    if seg["strikethrough"] and seg_w > 0.0:
+                        st_h = max(0.5, sz * 0.065)
+                        st_y = cur_y + sz * 0.28
+                        decor_ops.append(
+                            f"{r:.4f} {g:.4f} {b:.4f} rg {seg_x:.2f} {st_y:.2f} {seg_w:.2f} {st_h:.2f} re f"
+                        )
+                    seg_x += seg_w
+            text_ops.append("ET")
+
+        ops.extend(text_ops)
+        ops.extend(decor_ops)
         ops.append("Q")
         ops.append("EMC")
 
@@ -4037,6 +4202,22 @@ def _synthesize_rich_text_appearance_stream(
         doc.update_object(ap_xref, form_dict)
         doc.update_stream(ap_xref, stream_bytes)
         doc.xref_set_key(target_xref, "AP", f"<< /N {ap_xref} 0 R >>")
+
+        # Ensure /AcroForm does not force NeedAppearances true so our /AP /N is rendered directly
+        try:
+            cat_xref = doc.pdf_catalog()
+            if cat_xref > 0:
+                af_type, af_val = doc.xref_get_key(cat_xref, "AcroForm")
+                if af_type == "xref":
+                    m_af = re.match(r"\s*(\d+)\s+\d+\s+R", str(af_val or ""))
+                    if m_af:
+                        af_xref = int(m_af.group(1))
+                        na_type, _ = doc.xref_get_key(af_xref, "NeedAppearances")
+                        if na_type != "null":
+                            doc.xref_set_key(af_xref, "NeedAppearances", "false")
+        except Exception:
+            pass
+
         return ap_xref
     except Exception as e:
         print(f"Warning: Failed to synthesize rich text appearance stream for xref {target_xref}: {e}")
@@ -4269,6 +4450,91 @@ def import_form_data(doc, data: Dict[str, Any]) -> int:
     except Exception as e:
         print(f"Error importing form data: {e}")
     return count
+
+def draw_rich_text_form_field_to_cairo(cr, field: AcroFormField) -> bool:
+    """Render a Rich Text `AcroFormField`'s styled `rich_text_runs` onto a Cairo context using Pango markup."""
+    if cr is None or field is None:
+        return False
+    if getattr(field, "field_type", "") != "text":
+        return False
+    if not (getattr(field, "rich_text_enabled", False) or field.has_rich_formatting()):
+        return False
+    if not (getattr(field, "rich_text_runs", None) or getattr(field, "value", "")):
+        return False
+
+    rect = getattr(field, "rect", None)
+    if not rect or len(rect) != 4:
+        return False
+    x1, y1, x2, y2 = [float(v) for v in rect]
+    w = x2 - x1
+    h = y2 - y1
+    if w <= 2.0 or h <= 2.0:
+        return False
+
+    try:
+        cr.save()
+        pad_x = 3.0
+        pad_y = 2.0
+        inner_x = x1 + 1.0
+        inner_y = y1 + 1.0
+        inner_w = max(1.0, w - 2.0)
+        inner_h = max(1.0, h - 2.0)
+
+        # Mask any stale underlying widget appearance with the field's fill color
+        fill_col = normalize_color(field.fill_color) if field.fill_color is not None else (1.0, 1.0, 1.0)
+        cr.rectangle(inner_x, inner_y, inner_w, inner_h)
+        cr.set_source_rgb(fill_col[0], fill_col[1], fill_col[2])
+        cr.fill_preserve()
+        cr.clip()
+
+        base_size = float(field.text_fontsize) if field.text_fontsize and field.text_fontsize > 0 else 12.0
+        base_color = normalize_color(field.text_color) if field.text_color is not None else (0.0, 0.0, 0.0)
+        base_family = getattr(field, "font_family", None) or "Helvetica"
+
+        layout = PangoCairo.create_layout(cr)
+        font_desc = Pango.FontDescription()
+        font_desc.set_family(base_family)
+        font_desc.set_absolute_size(int(round(base_size * Pango.SCALE)))
+        layout.set_font_description(font_desc)
+
+        align = int(getattr(field, "text_align", 0) or 0)
+        if align == 1:
+            layout.set_alignment(Pango.Alignment.CENTER)
+        elif align == 2:
+            layout.set_alignment(Pango.Alignment.RIGHT)
+        else:
+            layout.set_alignment(Pango.Alignment.LEFT)
+
+        avail_w = max(2.0, w - 2.0 * pad_x)
+        if getattr(field, "is_multiline", False):
+            layout.set_width(int(round(avail_w * Pango.SCALE)))
+            layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+        elif align in (1, 2):
+            layout.set_width(int(round(avail_w * Pango.SCALE)))
+
+        markup = field.to_pango_markup()
+        layout.set_markup(markup, -1)
+
+        _ink, logical = layout.get_extents()
+        text_h = float(logical.height) / float(Pango.SCALE)
+        if getattr(field, "is_multiline", False):
+            draw_y = y1 + pad_y
+        else:
+            draw_y = y1 + max(pad_y, (h - text_h) / 2.0)
+
+        cr.set_source_rgb(base_color[0], base_color[1], base_color[2])
+        cr.move_to(x1 + pad_x, draw_y)
+        PangoCairo.show_layout(cr, layout)
+        cr.restore()
+        return True
+    except Exception as e:
+        try:
+            cr.restore()
+        except Exception:
+            pass
+        print(f"Warning: Failed to render rich text form field on Cairo: {e}")
+        return False
+
 
 def draw_acroform_overlay(cr, fields, zoom_level=1.0, active_field=None, is_design_mode=False):
     """Render interactive AcroForm field overlays with visual cues onto Cairo context."""
@@ -6546,6 +6812,204 @@ def apply_sticky_notes_to_pdf(doc, session) -> bool:
     return sync_sticky_notes(doc, sticky_dict)
 
 
+def _bake_single_form_field_vector(page, field: AcroFormField) -> bool:
+    """Permanently bake a single `AcroFormField` (including Rich Text styled runs) as crisp vector content on `page`."""
+    if page is None or field is None:
+        return False
+    rect = getattr(field, "rect", None)
+    if not rect or len(rect) != 4:
+        return False
+    x0, y0, x1, y1 = [float(v) for v in rect]
+    w = max(1.0, x1 - x0)
+    h = max(1.0, y1 - y0)
+    fitz_rect = fitz.Rect(x0, y0, x1, y1)
+
+    # Background fill & border
+    if field.fill_color is not None or (field.border_color is not None and (field.border_width or 0.0) > 0):
+        shape = page.new_shape()
+        shape.draw_rect(fitz_rect)
+        fill_c = normalize_color(field.fill_color) if field.fill_color is not None else None
+        border_c = normalize_color(field.border_color) if field.border_color is not None else None
+        bw = float(field.border_width or 1.0) if border_c is not None else 0.0
+        shape.finish(color=border_c, fill=fill_c, width=bw)
+        shape.commit()
+
+    ftype = getattr(field, "field_type", "text")
+    if ftype == "text":
+        runs = list(field.rich_text_runs or [])
+        base_size = float(field.text_fontsize) if field.text_fontsize and field.text_fontsize > 0 else 12.0
+        base_color = normalize_color(field.text_color) if field.text_color is not None else (0.0, 0.0, 0.0)
+        if not runs and field.value:
+            runs = [
+                RichTextRun(
+                    text=str(field.value),
+                    font_family=field.font_family or "Helvetica",
+                    font_size=base_size,
+                    color=base_color,
+                )
+            ]
+        if not runs:
+            return True
+
+        pad_x = 3.0
+        pad_y = 2.0
+        avail_w = max(2.0, w - 2.0 * pad_x)
+        align = int(getattr(field, "text_align", 0) or 0)
+
+        laid_out_lines = _layout_rich_text_runs_into_lines(
+            runs=runs,
+            max_width=avail_w,
+            base_size=base_size,
+            base_color=base_color,
+            is_multiline=bool(getattr(field, "is_multiline", False)),
+        )
+        if not laid_out_lines:
+            return True
+
+        first_size = laid_out_lines[0]["max_size"] if laid_out_lines[0]["max_size"] > 0 else base_size
+        # PyMuPDF page.insert_text uses top-down Y coordinates (baseline below top y0)
+        if getattr(field, "is_multiline", False):
+            cur_y = y0 + pad_y + first_size * 0.92
+        else:
+            cur_y = y0 + max(pad_y + first_size * 0.8, (h + first_size * 0.65) / 2.0)
+
+        decor_shape = page.new_shape()
+        has_decor = False
+
+        for line_idx, line in enumerate(laid_out_lines):
+            line_size = line["max_size"] if line["max_size"] > 0 else base_size
+            if line_idx > 0:
+                cur_y += max(line_size, base_size) * 1.25
+            if cur_y > y1 + line_size * 0.2:
+                break
+
+            line_w = float(line["width"])
+            if align == 1:
+                seg_x = x0 + pad_x + max(0.0, (avail_w - line_w) / 2.0)
+            elif align == 2:
+                seg_x = x0 + pad_x + max(0.0, avail_w - line_w)
+            else:
+                seg_x = x0 + pad_x
+
+            for seg in line["segments"]:
+                txt = seg["text"]
+                if not txt:
+                    continue
+                seg_w = float(seg["width"])
+                r, g, b = seg["color"]
+                sz = float(seg["size"])
+                fitz_font = seg["fitz_font"]
+
+                page.insert_text(
+                    fitz.Point(seg_x, cur_y),
+                    txt,
+                    fontsize=sz,
+                    fontname=fitz_font,
+                    color=(r, g, b),
+                )
+
+                if seg["underline"] and seg_w > 0.0:
+                    ul_h = max(0.5, sz * 0.065)
+                    ul_y = cur_y + sz * 0.12
+                    decor_shape.draw_rect(fitz.Rect(seg_x, ul_y, seg_x + seg_w, ul_y + ul_h))
+                    decor_shape.finish(color=None, fill=(r, g, b))
+                    has_decor = True
+                if seg["strikethrough"] and seg_w > 0.0:
+                    st_h = max(0.5, sz * 0.065)
+                    st_y = cur_y - sz * 0.30
+                    decor_shape.draw_rect(fitz.Rect(seg_x, st_y, seg_x + seg_w, st_y + st_h))
+                    decor_shape.finish(color=None, fill=(r, g, b))
+                    has_decor = True
+
+                seg_x += seg_w
+
+        if has_decor:
+            decor_shape.commit()
+        return True
+
+    if ftype in ("checkbox", "radio"):
+        if field.is_checked:
+            shape = page.new_shape()
+            p1 = fitz.Point(x0 + w * 0.2, y0 + h * 0.55)
+            p2 = fitz.Point(x0 + w * 0.42, y0 + h * 0.78)
+            p3 = fitz.Point(x0 + w * 0.82, y0 + h * 0.24)
+            shape.draw_polyline([p1, p2, p3])
+            shape.finish(color=(0.0, 0.0, 0.0), width=max(1.2, min(w, h) * 0.12))
+            shape.commit()
+        return True
+
+    if ftype in ("combobox", "listbox") and field.value:
+        base_size = float(field.text_fontsize) if field.text_fontsize and field.text_fontsize > 0 else 11.0
+        base_color = normalize_color(field.text_color) if field.text_color is not None else (0.0, 0.0, 0.0)
+        page.insert_text(
+            fitz.Point(x0 + 3.0, y0 + max(base_size, (h + base_size * 0.65) / 2.0)),
+            str(field.value),
+            fontsize=base_size,
+            fontname="helv",
+            color=base_color,
+        )
+        return True
+
+    return True
+
+
+def flatten_form_fields(
+    doc,
+    page_indices: Optional[List[int]] = None,
+    form_fields_by_page: Optional[Dict[int, List[AcroFormField]]] = None,
+) -> Tuple[bool, Optional[str], int]:
+    """Permanently flatten interactive AcroForm fields (including Rich Text runs) into vector page content.
+
+    Returns ``(success, error_message, flattened_count)``.
+    """
+    if not doc or getattr(doc, "is_closed", False):
+        return False, "No document loaded", 0
+    if page_indices is None:
+        target_pages = list(range(doc.page_count))
+    else:
+        target_pages = [int(p) for p in page_indices if 0 <= int(p) < doc.page_count]
+
+    flattened_count = 0
+    try:
+        for p_idx in target_pages:
+            page = doc.load_page(p_idx)
+            # First persist any in-memory form edits for this page if provided
+            if form_fields_by_page and p_idx in form_fields_by_page and form_fields_by_page[p_idx]:
+                apply_form_field_edits(doc, p_idx, form_fields_by_page[p_idx])
+
+            extracted, _ = extract_acroform_fields(doc, page_index=p_idx)
+            by_xref = {f.xref: f for f in extracted if f.xref}
+            by_name = {f.field_name: f for f in extracted if f.field_name}
+            in_mem = list(form_fields_by_page.get(p_idx, [])) if form_fields_by_page else []
+            mem_by_xref = {f.xref: f for f in in_mem if getattr(f, "xref", 0)}
+            mem_by_name = {f.field_name: f for f in in_mem if getattr(f, "field_name", "")}
+
+            widgets = list(page.widgets())
+            if not widgets:
+                continue
+
+            for w in widgets:
+                wxref = int(getattr(w, "xref", 0) or 0)
+                wname = str(getattr(w, "field_name", "") or "")
+                field_obj = (
+                    mem_by_xref.get(wxref)
+                    or mem_by_name.get(wname)
+                    or by_xref.get(wxref)
+                    or by_name.get(wname)
+                )
+                if field_obj is not None:
+                    _bake_single_form_field_vector(page, field_obj)
+                page.delete_widget(w)
+                flattened_count += 1
+
+            invalidate_page_cache(doc, p_idx)
+        return True, None, flattened_count
+    except Exception as e:
+        print(f"Error flattening form fields: {e}")
+        traceback.print_exc()
+        return False, str(e), flattened_count
+
+
 def flatten_page_annotations(doc, page_num: int, include_forms: bool = False, session_objects: Optional[List[Any]] = None) -> tuple[bool, Optional[str]]:
     """Burn all annotations, highlights, marks, drawings, text, and optionally form fields on page_num
     directly into a high-resolution raster background stream (true OLED burn-in).
@@ -6563,10 +7027,13 @@ def flatten_page_annotations(doc, page_num: int, include_forms: bool = False, se
         rect = tp.rect
 
         # 2. Apply any in-memory session objects onto the temp page so they are included in the burn-in
+        rich_session_fields: List[AcroFormField] = []
         if session_objects:
             for obj in session_objects:
                 try:
-                    if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
+                    if isinstance(obj, AcroFormField):
+                        rich_session_fields.append(obj)
+                    elif getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
                         _apply_single_object_to_page(temp_doc, tp, obj)
                 except Exception as ex:
                     print(f"Warning applying object before burn-in: {ex}")
@@ -6604,20 +7071,41 @@ def flatten_page_annotations(doc, page_num: int, include_forms: bool = False, se
             else:
                 break
 
-        # 4. If form fields should NOT be burned in, preserve them as interactive widgets
+        # 4. Handle form fields: either preserve (including Rich Text metadata) or synthesize /AP /N for burn-in
         saved_widgets = []
         if not include_forms:
+            extracted_temp, _ = extract_acroform_fields(temp_doc, page_index=0)
+            ext_by_xref = {f.xref: f for f in extracted_temp if f.xref}
             for w in list(tp.widgets()):
                 try:
+                    f_meta = ext_by_xref.get(int(getattr(w, "xref", 0) or 0))
                     saved_widgets.append({
                         'rect': fitz.Rect(w.rect),
                         'field_name': w.field_name,
                         'field_type': w.field_type,
                         'field_value': w.field_value,
+                        'field_flags': int(getattr(w, 'field_flags', 0) or 0),
+                        'rich_text_enabled': bool(f_meta.rich_text_enabled) if f_meta else False,
+                        'default_style': f_meta.default_style if f_meta else "",
+                        'rv_xhtml': f_meta.rv_xhtml if f_meta else "",
+                        'rich_text_runs': copy.deepcopy(f_meta.rich_text_runs) if f_meta else [],
+                        'text_align': f_meta.text_align if f_meta else 0,
                     })
                     tp.delete_widget(w)
                 except Exception as ex:
                     print(f"Warning preserving widget: {ex}")
+        else:
+            # Ensure all Rich Text fields on temp page have up-to-date synthesized /AP /N before raster burn-in
+            if rich_session_fields:
+                for rf in rich_session_fields:
+                    rf_copy = copy.deepcopy(rf)
+                    rf_copy.page_number = 0
+                    rf_copy.xref = 0
+                    apply_form_field_edits(temp_doc, 0, [rf_copy])
+            temp_fields, _ = extract_acroform_fields(temp_doc, page_index=0)
+            for tf in temp_fields:
+                if tf.field_type == "text" and (tf.rich_text_enabled or tf.has_rich_formatting()):
+                    _synthesize_rich_text_appearance_stream(temp_doc, tf, widget_xref=tf.xref)
 
         # 5. Render high-resolution (300 DPI) lossless raster image (true OLED burn-in)
         zoom = 300.0 / 72.0
@@ -6646,7 +7134,7 @@ def flatten_page_annotations(doc, page_num: int, include_forms: bool = False, se
             except Exception as e:
                 print(f"Warning restoring sticky note after burn-in: {e}")
 
-        # 8. Restore preserved form widgets if include_forms was False
+        # 8. Restore preserved form widgets (including Rich Text metadata) if include_forms was False
         if not include_forms and saved_widgets:
             for sw in saved_widgets:
                 try:
@@ -6655,7 +7143,17 @@ def flatten_page_annotations(doc, page_num: int, include_forms: bool = False, se
                     nw.field_name = sw['field_name']
                     nw.field_type = sw['field_type']
                     nw.field_value = sw['field_value']
+                    nw.field_flags = sw.get('field_flags', 0)
                     bp.add_widget(nw)
+                    if sw.get('rich_text_enabled') or sw.get('rv_xhtml'):
+                        restored_f = get_acroform_field(burn_doc, 0, sw['field_name'])
+                        if restored_f is not None:
+                            restored_f.rich_text_enabled = True
+                            restored_f.default_style = sw.get('default_style', '')
+                            restored_f.rv_xhtml = sw.get('rv_xhtml', '')
+                            restored_f.rich_text_runs = sw.get('rich_text_runs') or []
+                            restored_f.text_align = sw.get('text_align', 0)
+                            apply_form_field_edits(burn_doc, 0, [restored_f])
                 except Exception as e:
                     print(f"Warning restoring widget: {e}")
 

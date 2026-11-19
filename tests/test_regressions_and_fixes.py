@@ -3943,6 +3943,237 @@ class TestRichTextAcroFormExtractionAndPersistence:
             doc.close()
 
 
+class TestRichTextAppearanceStreamCairoAndFlattening:
+    """Verify Rich Text /AP /N synthesizer (word-wrap, alignment, 12 Base-14 fonts, decorations), Cairo Pango rendering, and flattening."""
+
+    def test_synthesize_rich_text_appearance_stream_multiline_wrap_alignment_and_decorations(self):
+        import re
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import RichTextRun
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+        try:
+            pdf_handler.add_form_widget(
+                doc,
+                0,
+                "text",
+                (40, 40, 170, 150),  # 130 pt wide to force multiline word wrapping
+                "wrapped_rich",
+                default_value="",
+                is_multiline=True,
+                text_fontsize=12.0,
+            )
+            fields, _ = pdf_handler.extract_form_fields(doc, 0)
+            f = fields[0]
+            f.text_align = 1  # Center alignment
+            f.set_rich_text_runs(
+                [
+                    RichTextRun(text="Important ", bold=True, font_family="Helvetica", font_size=12.0, color=(0.8, 0.1, 0.2)),
+                    RichTextRun(text="wrapped phrase ", bold=True, italic=True, underline=True, font_family="Helvetica", font_size=12.0, color=(0.0, 0.0, 0.0)),
+                    RichTextRun(text="in Times ", italic=True, strikethrough=True, font_family="Times", font_size=12.0, color=(0.0, 0.3, 0.7)),
+                    RichTextRun(text="and Courier", bold=True, font_family="Courier", font_size=11.0, color=(0.1, 0.5, 0.1)),
+                ]
+            )
+            assert pdf_handler.apply_form_field_edits(doc, 0, [f]) == 1
+
+            _ap_type, ap_val = doc.xref_get_key(f.xref, "AP")
+            m_ap = re.search(r"/N\s+(\d+)\s+0\s+R", ap_val)
+            assert m_ap is not None
+            ap_xref = int(m_ap.group(1))
+            ap_obj = doc.xref_object(ap_xref)
+            for font_res in ("/Helv", "/HeBo", "/HeOb", "/HeBI", "/TiRo", "/TiBo", "/TiIt", "/TiBI", "/Cour", "/CoBo", "/CoOb", "/CoBI"):
+                assert font_res in ap_obj
+
+            stream = doc.xref_stream(ap_xref).decode("latin-1", errors="replace")
+            assert "/Tx BMC" in stream
+            assert "/HeBo" in stream
+            assert "/HeBI" in stream
+            assert "/TiIt" in stream
+            assert "/CoBo" in stream
+            assert "0.8000 0.1000 0.2000 rg" in stream
+
+            # Verify word wrap produced multiple distinct baseline Y coordinates
+            tm_matches = re.findall(r"1 0 0 1 ([0-9.\-]+) ([0-9.\-]+) Tm", stream)
+            distinct_ys = {round(float(y), 1) for _x, y in tm_matches}
+            assert len(distinct_ys) >= 2
+            # Centered lines have X > left padding (3.0)
+            assert any(float(x) > 3.5 for x, _y in tm_matches)
+
+            # Verify vector underline and strikethrough rectangles emitted after ET
+            et_pos = stream.rfind("ET")
+            assert et_pos != -1
+            post_et = stream[et_pos:]
+            assert post_et.count("re f") >= 2
+
+            # Verify MuPDF renders actual colored pixels from the synthesized /AP /N stream
+            pix = doc[0].get_pixmap(dpi=144, clip=fitz.Rect(40, 40, 170, 150), annots=True)
+            samples = pix.samples
+            # Detect reddish pixels (R > 150, G < 100, B < 100) from the red bold run
+            has_red_pixel = False
+            step = pix.n
+            for idx in range(0, len(samples) - step + 1, step):
+                if samples[idx] > 150 and samples[idx + 1] < 100 and samples[idx + 2] < 100:
+                    has_red_pixel = True
+                    break
+            assert has_red_pixel is True
+        finally:
+            doc.close()
+
+    def test_cairo_canvas_renderer_draws_rich_text_form_field_runs(self):
+        from unittest.mock import MagicMock
+        import cairo
+        from word_sys_pdf_editor.form_fields import AcroFormField, RichTextRun
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        field = AcroFormField(
+            field_id="cairo_rich_1",
+            xref=42,
+            page_number=0,
+            rect=(10.0, 10.0, 260.0, 80.0),
+            field_name="rich_cairo",
+            is_multiline=True,
+            text_fontsize=14.0,
+            text_color=(0.0, 0.0, 0.0),
+            fill_color=(1.0, 1.0, 1.0),
+        )
+        field.set_rich_text_runs(
+            [
+                RichTextRun(text="Crimson Bold ", bold=True, color=(0.85, 0.05, 0.05), font_size=14.0),
+                RichTextRun(text="Blue Italic", italic=True, underline=True, color=(0.05, 0.15, 0.85), font_size=14.0),
+            ]
+        )
+
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 300, 100)
+        cr = cairo.Context(surface)
+        cr.set_source_rgb(1.0, 1.0, 1.0)
+        cr.paint()
+
+        mock_win = MagicMock()
+        mock_win.view_mode = True
+        mock_win.current_page_index = 0
+        mock_win.zoom_level = 1.0
+        mock_win.selected_form_field = None
+        mock_win._active_editing_form_field = None
+
+        PdfEditorWindow._draw_form_fields(mock_win, cr, [field], page_index=0, is_design_mode=False)
+        surface.flush()
+        data = bytes(surface.get_data())
+
+        # Cairo ARGB32 on little-endian stores bytes as (B, G, R, A)
+        has_red = False
+        has_blue = False
+        for i in range(0, len(data), 4):
+            b, g, r, _a = data[i], data[i + 1], data[i + 2], data[i + 3]
+            if r > 140 and g < 90 and b < 90:
+                has_red = True
+            if b > 140 and r < 90 and g < 110:
+                has_blue = True
+            if has_red and has_blue:
+                break
+        assert has_red is True
+        assert has_blue is True
+
+    def test_flatten_form_fields_bakes_rich_text_runs_and_removes_widgets(self):
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import RichTextRun
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+        try:
+            pdf_handler.add_form_widget(
+                doc,
+                0,
+                "text",
+                (50, 60, 350, 130),
+                "flatten_rich",
+                default_value="",
+                is_multiline=True,
+                text_fontsize=12.0,
+            )
+            fields, _ = pdf_handler.extract_form_fields(doc, 0)
+            f = fields[0]
+            f.set_rich_text_runs(
+                [
+                    RichTextRun(text="Important ", bold=True, font_family="Helvetica", font_size=12.0, color=(0.0, 0.0, 0.0)),
+                    RichTextRun(text="Summary ", italic=True, font_family="Times", font_size=12.0, color=(0.0, 0.0, 0.0)),
+                    RichTextRun(text="Action", underline=True, font_family="Helvetica", font_size=12.0, color=(0.8, 0.0, 0.0)),
+                ]
+            )
+            assert pdf_handler.apply_form_field_edits(doc, 0, [f]) == 1
+
+            ok, err, count = pdf_handler.flatten_form_fields(doc, page_indices=[0])
+            assert ok is True and err is None and count == 1
+
+            # Interactive widget is permanently gone
+            assert list(doc[0].widgets()) == []
+
+            # Styled text runs are baked permanently as vector PDF text
+            text_dict = doc[0].get_text("dict")
+            spans = [
+                span
+                for block in text_dict.get("blocks", [])
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+            ]
+            combined_text = "".join(s.get("text", "") for s in spans)
+            assert "Important" in combined_text
+            assert "Summary" in combined_text
+            assert "Action" in combined_text
+            assert any("Bold" in s.get("font", "") and "Important" in s.get("text", "") for s in spans)
+            assert any("Italic" in s.get("font", "") and "Summary" in s.get("text", "") for s in spans)
+            # Vector drawings include field box + underline rectangle
+            drawings = doc[0].get_drawings()
+            assert len(drawings) >= 2
+        finally:
+            doc.close()
+
+    def test_flatten_page_annotations_preserves_or_burns_rich_text_forms(self):
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import FIELD_FLAG_RICH_TEXT, RichTextRun
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+        try:
+            pdf_handler.add_form_widget(
+                doc,
+                0,
+                "text",
+                (50, 60, 300, 110),
+                "rich_keep",
+                default_value="",
+                is_multiline=False,
+                text_fontsize=12.0,
+            )
+            fields, _ = pdf_handler.extract_form_fields(doc, 0)
+            f = fields[0]
+            f.set_rich_text_runs(
+                [
+                    RichTextRun(text="Keep ", bold=True, color=(0.0, 0.0, 0.0)),
+                    RichTextRun(text="Formatted", italic=True, color=(0.75, 0.0, 0.0)),
+                ]
+            )
+            pdf_handler.apply_form_field_edits(doc, 0, [f])
+
+            # 1) include_forms=False preserves Rich Text widget and its /RV + /Ff bit 26
+            ok, err = pdf_handler.flatten_page_annotations(doc, 0, include_forms=False)
+            assert ok is True and err is None
+            kept_fields, _ = pdf_handler.extract_form_fields(doc, 0)
+            assert len(kept_fields) == 1
+            assert kept_fields[0].rich_text_enabled is True
+            assert bool(kept_fields[0].field_flags & FIELD_FLAG_RICH_TEXT) is True
+            assert any(r.bold and "Keep" in r.text for r in kept_fields[0].rich_text_runs)
+            assert any(r.italic and "Formatted" in r.text for r in kept_fields[0].rich_text_runs)
+
+            # 2) include_forms=True permanently burns the Rich Text field into the page and removes widgets
+            ok2, err2 = pdf_handler.flatten_page_annotations(doc, 0, include_forms=True)
+            assert ok2 is True and err2 is None
+            assert list(doc[0].widgets()) == []
+        finally:
+            doc.close()
+
+
+
 
 
 

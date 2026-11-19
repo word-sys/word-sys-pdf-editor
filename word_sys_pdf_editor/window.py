@@ -6741,16 +6741,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.stroke()
             cr.restore()
 
-        # Render AcroForm field overlays
+        # Render AcroForm field overlays and Rich Text form field runs
         current_fields = [f for f in fields if getattr(f, 'page_number', page_index) == page_index]
         if current_fields:
             is_design = (not self.view_mode and getattr(self, 'tool_mode', '') == "form_builder" and page_index == self.current_page_index)
-            pdf_handler.draw_acroform_overlay(
+            self._draw_form_fields(
                 cr,
                 current_fields,
-                self.zoom_level,
-                active_field=(self.selected_form_field if (self.view_mode and page_index == self.current_page_index) else None),
-                is_design_mode=is_design
+                page_index=page_index,
+                is_design_mode=is_design,
             )
 
         selected_obj = (self.selected_text or self.selected_image or self.selected_shape or 
@@ -7859,6 +7858,40 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 return fallback_hit
             return None
         return _test_candidates(getattr(self, 'editable_strokes', []))
+
+    def _draw_form_fields(self, cr, fields, page_index=None, is_design_mode=False):
+        """Render Rich Text AcroForm field runs via Pango markup and interactive AcroForm overlays onto Cairo."""
+        if not fields:
+            return
+        active_editing = getattr(self, '_active_editing_form_field', None)
+        for field in fields:
+            if active_editing is not None and (
+                field is active_editing
+                or (
+                    getattr(field, 'xref', 0)
+                    and getattr(field, 'xref', 0) == getattr(active_editing, 'xref', -1)
+                )
+            ):
+                continue
+            if getattr(field, 'field_type', '') == 'text' and (
+                getattr(field, 'rich_text_enabled', False)
+                or (hasattr(field, 'has_rich_formatting') and field.has_rich_formatting())
+            ):
+                pdf_handler.draw_rich_text_form_field_to_cairo(cr, field)
+
+        eff_page = self.current_page_index if page_index is None else page_index
+        active_field = (
+            getattr(self, 'selected_form_field', None)
+            if (getattr(self, 'view_mode', False) and eff_page == getattr(self, 'current_page_index', 0))
+            else None
+        )
+        pdf_handler.draw_acroform_overlay(
+            cr,
+            fields,
+            getattr(self, 'zoom_level', 1.0),
+            active_field=active_field,
+            is_design_mode=is_design_mode,
+        )
 
     def _find_form_field_at_pos(self, page_x, page_y):
         """Find interactive form field at page position."""
