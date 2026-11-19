@@ -54,6 +54,14 @@ from .models import (
     AcroFormField, decompose_font_name, extract_font_properties, get_base14_font_variant,
     MeasurementObject, StickyNoteObject
 )
+from .form_fields import (
+    FIELD_FLAG_RICH_TEXT,
+    RichTextRun,
+    format_default_style_css,
+    parse_default_style_css,
+    parse_rv_xhtml_to_runs,
+    serialize_runs_to_rv_xhtml,
+)
 from .utils import find_specific_font_variant, get_default_unicode_font_path, normalize_color
 from .i18n import _
 
@@ -3621,8 +3629,139 @@ def has_acroforms(doc) -> bool:
         pass
     return False
 
+def _encode_pdf_string(text: str) -> str:
+    """Encode a Python string into a valid PDF literal or UTF-16BE hex string."""
+    s = str(text or "")
+    if hasattr(fitz, "get_pdf_str"):
+        try:
+            return fitz.get_pdf_str(s)
+        except Exception:
+            pass
+    escaped = s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    return f"({escaped})"
+
+
+def _get_widget_xref_key_inherited(doc, xref: int, key: str) -> Tuple[str, str, int]:
+    """Read a PDF dictionary key from `xref`, walking `/Parent` links up to 8 levels if absent."""
+    if not doc or not xref or xref <= 0:
+        return ("null", "null", int(xref or 0))
+    curr = int(xref)
+    visited: Set[int] = set()
+    for _ in range(8):
+        if curr <= 0 or curr in visited:
+            break
+        visited.add(curr)
+        try:
+            ktype, kval = doc.xref_get_key(curr, key)
+        except Exception:
+            break
+        if ktype and ktype != "null":
+            return (ktype, kval, curr)
+        try:
+            ptype, pval = doc.xref_get_key(curr, "Parent")
+        except Exception:
+            break
+        if ptype == "xref":
+            m = re.match(r"\s*(\d+)\s+\d+\s+R", str(pval or ""))
+            if m:
+                curr = int(m.group(1))
+                continue
+        break
+    return ("null", "null", int(xref))
+
+
+def _decode_pdf_bytes_text(raw_bytes: bytes) -> str:
+    """Decode PDF string or stream bytes (UTF-16BE/LE with BOM, UTF-8, or PDFDocEncoding/latin-1)."""
+    if not raw_bytes:
+        return ""
+    if raw_bytes.startswith(b"\xfe\xff"):
+        return raw_bytes[2:].decode("utf-16-be", errors="replace")
+    if raw_bytes.startswith(b"\xff\xfe"):
+        return raw_bytes[2:].decode("utf-16-le", errors="replace")
+    if raw_bytes.startswith(b"\xef\xbb\xbf"):
+        return raw_bytes[3:].decode("utf-8", errors="replace")
+    try:
+        return raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw_bytes.decode("latin-1", errors="replace")
+
+
+def _read_pdf_text_or_stream_key(doc, xref: int, key: str) -> str:
+    """Extract a PDF text string or indirect text stream key (such as `/RV` or `/DS`) from `xref` or its `/Parent`."""
+    ktype, kval, _owner = _get_widget_xref_key_inherited(doc, xref, key)
+    if ktype == "null" or kval is None:
+        return ""
+    if ktype in ("string", "utf8", "ascii"):
+        return str(kval)
+    if ktype == "hex":
+        try:
+            cleaned = re.sub(r"[^0-9a-fA-F]", "", str(kval))
+            if len(cleaned) % 2 == 1:
+                cleaned += "0"
+            return _decode_pdf_bytes_text(bytes.fromhex(cleaned))
+        except Exception:
+            return str(kval)
+    if ktype == "xref":
+        m = re.match(r"\s*(\d+)\s+\d+\s+R", str(kval or ""))
+        if m:
+            ref_xref = int(m.group(1))
+            try:
+                if doc.xref_is_stream(ref_xref):
+                    return _decode_pdf_bytes_text(doc.xref_stream(ref_xref))
+            except Exception:
+                pass
+            try:
+                raw_obj = doc.xref_object(ref_xref)
+                if isinstance(raw_obj, str):
+                    s_clean = raw_obj.strip()
+                    if s_clean.startswith("(") and s_clean.endswith(")"):
+                        return s_clean[1:-1]
+                    if s_clean.startswith("<") and s_clean.endswith(">") and not s_clean.startswith("<<"):
+                        hex_s = re.sub(r"[^0-9a-fA-F]", "", s_clean[1:-1])
+                        if len(hex_s) % 2 == 1:
+                            hex_s += "0"
+                        return _decode_pdf_bytes_text(bytes.fromhex(hex_s))
+            except Exception:
+                pass
+    return ""
+
+
+def _resolve_field_dict_xref(doc, widget_xref: int) -> int:
+    """Return the `/Parent` field dictionary xref if `widget_xref` is a split child widget, else `widget_xref`."""
+    if not doc or not widget_xref or widget_xref <= 0:
+        return int(widget_xref or 0)
+    try:
+        ptype, pval = doc.xref_get_key(widget_xref, "Parent")
+        if ptype == "xref":
+            m = re.match(r"\s*(\d+)\s+\d+\s+R", str(pval or ""))
+            if m:
+                parent_xref = int(m.group(1))
+                # Confirm parent is an AcroForm field node (/T, /FT, or /Kids)
+                for probe in ("T", "FT", "Kids"):
+                    kt, _ = doc.xref_get_key(parent_xref, probe)
+                    if kt and kt != "null":
+                        return parent_xref
+    except Exception:
+        pass
+    return int(widget_xref)
+
+
+def _map_widget_font_code_to_family(font_code: Optional[str]) -> str:
+    """Map PDF AcroForm widget font code (e.g. `Helv`, `TiRo`, `Cour`) to a clean family name."""
+    if not font_code:
+        return "Helvetica"
+    low = str(font_code).strip().lstrip("/").lower()
+    if low.startswith(("helv", "hebo", "heob", "hebi", "arial", "sans")):
+        return "Helvetica"
+    if low.startswith(("tiro", "tibo", "tiit", "tibi", "times", "serif")):
+        return "Times"
+    if low.startswith(("cour", "cobo", "coob", "cobi", "mono")):
+        return "Courier"
+    return str(font_code).strip().lstrip("/") or "Helvetica"
+
+
 def extract_acroform_fields(doc, page_index=None):
-    """Detect and extract interactive AcroForm fields from a PDF page or entire document."""
+    """Detect and extract interactive AcroForm fields (including Rich Text `/RV`, `/DS`, and `/Ff` bit 26)."""
     if doc is None or getattr(doc, "is_closed", False):
         return [], "No document loaded."
 
@@ -3644,6 +3783,15 @@ def extract_acroform_fields(doc, page_index=None):
                     ftype_id = getattr(w, "field_type", getattr(fitz, "PDF_WIDGET_TYPE_UNKNOWN", 0))
                     flags = int(getattr(w, "field_flags", 0) or 0)
                     ftype = _normalize_widget_type(w)
+                    xref = int(getattr(w, "xref", 0) or 0)
+
+                    if xref > 0:
+                        ff_type, ff_val, _ = _get_widget_xref_key_inherited(doc, xref, "Ff")
+                        if ff_type == "int":
+                            try:
+                                flags |= int(ff_val)
+                            except (TypeError, ValueError):
+                                pass
 
                     val = w.field_value
                     choices = list(w.choice_values) if getattr(w, "choice_values", None) else []
@@ -3660,6 +3808,7 @@ def extract_acroform_fields(doc, page_index=None):
                     is_multi = bool(flags & getattr(fitz, "PDF_TX_FIELD_IS_MULTILINE", 4096))
                     is_pwd = bool(flags & getattr(fitz, "PDF_TX_FIELD_IS_PASSWORD", 8192))
                     is_comb = bool(flags & getattr(fitz, "PDF_TX_FIELD_IS_COMB", 16777216))
+                    has_rich_flag = bool(flags & FIELD_FLAG_RICH_TEXT)
 
                     fontsize = float(getattr(w, "text_fontsize", 0.0) or 0.0)
                     t_col = _normalize_widget_color(getattr(w, "text_color", None))
@@ -3667,7 +3816,49 @@ def extract_acroform_fields(doc, page_index=None):
                     b_col = _normalize_widget_color(getattr(w, "border_color", None))
                     b_width = float(getattr(w, "border_width", 1.0) or 1.0)
                     max_len = int(getattr(w, "text_maxlen", 0) or 0)
-                    xref = int(getattr(w, "xref", 0) or 0)
+
+                    rv_xhtml = ""
+                    default_style = ""
+                    text_align = 0
+                    font_family = _map_widget_font_code_to_family(getattr(w, "text_font", None))
+                    if xref > 0:
+                        rv_xhtml = _read_pdf_text_or_stream_key(doc, xref, "RV")
+                        default_style = _read_pdf_text_or_stream_key(doc, xref, "DS")
+                        q_type, q_val, _ = _get_widget_xref_key_inherited(doc, xref, "Q")
+                        if q_type == "int":
+                            try:
+                                q_int = int(q_val)
+                                if q_int in (0, 1, 2):
+                                    text_align = q_int
+                            except (TypeError, ValueError):
+                                pass
+
+                    if default_style:
+                        ds_info = parse_default_style_css(default_style)
+                        if ds_info.get("font_family"):
+                            font_family = ds_info["font_family"]
+                        if fontsize <= 0 and ds_info.get("font_size"):
+                            fontsize = float(ds_info["font_size"])
+                        if t_col is None and ds_info.get("color") is not None:
+                            t_col = ds_info["color"]
+                        if text_align == 0 and ds_info.get("align", 0) in (1, 2):
+                            text_align = int(ds_info["align"])
+
+                    rich_text_enabled = (ftype == "text") and (has_rich_flag or bool(rv_xhtml.strip()))
+                    rich_text_runs: List[RichTextRun] = []
+                    if rv_xhtml.strip():
+                        rich_text_runs = parse_rv_xhtml_to_runs(rv_xhtml, default_style)
+                        if (val is None or str(val) == "") and rich_text_runs:
+                            val = "".join(r.text for r in rich_text_runs)
+                    elif rich_text_enabled and val:
+                        rich_text_runs = [
+                            RichTextRun(
+                                text=str(val),
+                                font_family=font_family,
+                                font_size=fontsize if fontsize > 0 else 12.0,
+                                color=t_col if t_col is not None else (0.0, 0.0, 0.0),
+                            )
+                        ]
 
                     field_id = f"acro_{p_idx}_{xref}_{field_name}" if xref else str(uuid.uuid4())
 
@@ -3698,6 +3889,12 @@ def extract_acroform_fields(doc, page_index=None):
                         border_color=b_col,
                         border_width=b_width,
                         is_modified=False,
+                        text_align=text_align,
+                        font_family=font_family,
+                        rich_text_enabled=rich_text_enabled,
+                        rich_text_runs=rich_text_runs,
+                        default_style=default_style,
+                        rv_xhtml=rv_xhtml,
                     )
                     fields.append(field_obj)
                 except Exception as w_err:
@@ -3708,10 +3905,289 @@ def extract_acroform_fields(doc, page_index=None):
     except Exception as e:
         return [], f"Failed to extract AcroForm fields: {e}"
 
+
+extract_form_fields = extract_acroform_fields
+
+
+def _escape_pdf_literal_bytes(text: str) -> str:
+    """Escape a string for a PDF content stream literal `(...)` using WinAnsi / Latin-1 encoding."""
+    safe = str(text or "").encode("cp1252", errors="replace").decode("latin-1")
+    return safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _synthesize_rich_text_appearance_stream(
+    doc,
+    field: AcroFormField,
+    widget_xref: Optional[int] = None,
+) -> Optional[int]:
+    """Synthesize a PDF Form XObject `/AP /N` stream for a Rich Text AcroForm field."""
+    target_xref = int(widget_xref or getattr(field, "xref", 0) or 0)
+    if not doc or getattr(doc, "is_closed", False) or target_xref <= 0:
+        return None
+    try:
+        x0, y0, x1, y1 = field.rect
+        w = max(1.0, float(x1 - x0))
+        h = max(1.0, float(y1 - y0))
+
+        runs = list(field.rich_text_runs or [])
+        if not runs and field.value:
+            runs = [
+                RichTextRun(
+                    text=str(field.value),
+                    font_family=field.font_family or "Helvetica",
+                    font_size=field.text_fontsize if field.text_fontsize and field.text_fontsize > 0 else 12.0,
+                    color=field.text_color if field.text_color is not None else (0.0, 0.0, 0.0),
+                )
+            ]
+
+        base_size = float(field.text_fontsize) if field.text_fontsize and field.text_fontsize > 0 else 12.0
+        base_color = field.text_color if field.text_color is not None else (0.0, 0.0, 0.0)
+
+        ops: List[str] = []
+        # Optional background fill & border
+        if field.fill_color is not None:
+            fr, fg, fb = normalize_color(field.fill_color)
+            ops.append(f"q {fr:.4f} {fg:.4f} {fb:.4f} rg 0 0 {w:.2f} {h:.2f} re f Q")
+        if field.border_color is not None and (field.border_width or 0.0) > 0:
+            br, bg, bb = normalize_color(field.border_color)
+            bw = float(field.border_width)
+            half = bw / 2.0
+            ops.append(
+                f"q {br:.4f} {bg:.4f} {bb:.4f} RG {bw:.2f} w "
+                f"{half:.2f} {half:.2f} {max(0.5, w - bw):.2f} {max(0.5, h - bw):.2f} re S Q"
+            )
+
+        ops.append("/Tx BMC")
+        ops.append(f"q 1 1 {max(0.5, w - 2.0):.2f} {max(0.5, h - 2.0):.2f} re W n")
+        ops.append("BT")
+
+        cur_y = (h - base_size - 2.0) if field.is_multiline else max(2.0, (h - base_size) / 2.0 + base_size * 0.15)
+        cur_x = 3.0
+        ops.append(f"1 0 0 1 {cur_x:.2f} {cur_y:.2f} Tm")
+
+        for r in runs:
+            fam_low = (r.font_family or "Helvetica").lower()
+            if "times" in fam_low or "serif" in fam_low:
+                if r.bold and r.italic:
+                    f_res = "TiBI"
+                elif r.bold:
+                    f_res = "TiBo"
+                elif r.italic:
+                    f_res = "TiIt"
+                else:
+                    f_res = "TiRo"
+            elif "cour" in fam_low or "mono" in fam_low:
+                if r.bold and r.italic:
+                    f_res = "CoBI"
+                elif r.bold:
+                    f_res = "CoBo"
+                elif r.italic:
+                    f_res = "CoOb"
+                else:
+                    f_res = "Cour"
+            else:
+                if r.bold and r.italic:
+                    f_res = "HeBI"
+                elif r.bold:
+                    f_res = "HeBo"
+                elif r.italic:
+                    f_res = "HeOb"
+                else:
+                    f_res = "Helv"
+
+            r_size = float(r.font_size) if r.font_size and r.font_size > 0 else base_size
+            cr, cg, cb = normalize_color(r.color if r.color is not None else base_color)
+            ops.append(f"/{f_res} {r_size:.2f} Tf {cr:.4f} {cg:.4f} {cb:.4f} rg")
+            lines = r.text.split("\n")
+            for idx, seg in enumerate(lines):
+                if idx > 0:
+                    cur_y -= r_size * 1.25
+                    ops.append(f"1 0 0 1 {cur_x:.2f} {cur_y:.2f} Tm")
+                if seg:
+                    ops.append(f"({_escape_pdf_literal_bytes(seg)}) Tj")
+
+        ops.append("ET")
+        ops.append("Q")
+        ops.append("EMC")
+
+        stream_bytes = ("\n".join(ops) + "\n").encode("latin-1", errors="replace")
+
+        ap_xref = doc.get_new_xref()
+        font_res = (
+            "<< "
+            "/Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> "
+            "/HeBo << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >> "
+            "/HeOb << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding /WinAnsiEncoding >> "
+            "/HeBI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique /Encoding /WinAnsiEncoding >> "
+            "/TiRo << /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >> "
+            "/TiBo << /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >> "
+            "/TiIt << /Type /Font /Subtype /Type1 /BaseFont /Times-Italic /Encoding /WinAnsiEncoding >> "
+            "/TiBI << /Type /Font /Subtype /Type1 /BaseFont /Times-BoldItalic /Encoding /WinAnsiEncoding >> "
+            "/Cour << /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >> "
+            "/CoBo << /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >> "
+            "/CoOb << /Type /Font /Subtype /Type1 /BaseFont /Courier-Oblique /Encoding /WinAnsiEncoding >> "
+            "/CoBI << /Type /Font /Subtype /Type1 /BaseFont /Courier-BoldOblique /Encoding /WinAnsiEncoding >> "
+            ">>"
+        )
+        form_dict = (
+            f"<< /Type /XObject /Subtype /Form /FormType 1 "
+            f"/BBox [0 0 {w:.2f} {h:.2f}] "
+            f"/Resources << /Font {font_res} >> >>"
+        )
+        doc.update_object(ap_xref, form_dict)
+        doc.update_stream(ap_xref, stream_bytes)
+        doc.xref_set_key(target_xref, "AP", f"<< /N {ap_xref} 0 R >>")
+        return ap_xref
+    except Exception as e:
+        print(f"Warning: Failed to synthesize rich text appearance stream for xref {target_xref}: {e}")
+        return None
+
+
+def apply_form_field_edits(
+    doc,
+    fields_or_page: Any,
+    fields: Optional[Any] = None,
+) -> int:
+    """Persist edited `AcroFormField` objects (including Rich Text `/Ff` bit 26, `/DS`, `/RV`, `/V`, and `/AP /N`) to `doc`.
+
+    Supports both `apply_form_field_edits(doc, fields)` and `apply_form_field_edits(doc, page_index, fields)`.
+    Returns the number of form fields updated.
+    """
+    if not doc or getattr(doc, "is_closed", False):
+        return 0
+
+    default_page_index: Optional[int] = None
+    if isinstance(fields_or_page, int) and fields is not None:
+        default_page_index = int(fields_or_page)
+        raw_fields = fields
+    else:
+        raw_fields = fields_or_page
+
+    if isinstance(raw_fields, AcroFormField):
+        field_list = [raw_fields]
+    elif isinstance(raw_fields, (list, tuple)):
+        field_list = [f for f in raw_fields if isinstance(f, AcroFormField)]
+    else:
+        return 0
+
+    if not field_list:
+        return 0
+
+    updated_count = 0
+    touched_pages: Set[int] = set()
+
+    for field in field_list:
+        p_idx = default_page_index if default_page_index is not None else int(getattr(field, "page_number", 0) or 0)
+        if not (0 <= p_idx < len(doc)):
+            continue
+        try:
+            page = doc.load_page(p_idx)
+            target_xref = getattr(field, "xref", None)
+            target_name = getattr(field, "field_name", None)
+
+            matched_widget = None
+            for w in page.widgets():
+                if target_xref and getattr(w, "xref", None) == target_xref:
+                    matched_widget = w
+                    break
+                if target_name and getattr(w, "field_name", None) == target_name:
+                    matched_widget = w
+                    break
+
+            if matched_widget is None:
+                continue
+
+            wxref = int(getattr(matched_widget, "xref", 0) or 0)
+            field_xref = _resolve_field_dict_xref(doc, wxref)
+
+            is_rich = (
+                getattr(field, "field_type", "text") == "text"
+                and (bool(getattr(field, "rich_text_enabled", False)) or field.has_rich_formatting())
+            )
+
+            if is_rich:
+                field.rich_text_enabled = True
+                field.field_flags = int(getattr(field, "field_flags", 0) or 0) | FIELD_FLAG_RICH_TEXT
+                eff_size = field.text_fontsize if field.text_fontsize and field.text_fontsize > 0 else 12.0
+                eff_color = field.text_color if field.text_color is not None else (0.0, 0.0, 0.0)
+                if not field.rich_text_runs and field.value:
+                    field.rich_text_runs = [
+                        RichTextRun(
+                            text=str(field.value),
+                            font_family=field.font_family or "Helvetica",
+                            font_size=eff_size,
+                            color=eff_color,
+                        )
+                    ]
+                plain_v, rv_xhtml, ds_style = serialize_runs_to_rv_xhtml(
+                    field.rich_text_runs,
+                    default_font=field.font_family or "Helvetica",
+                    default_size=eff_size,
+                    default_color=eff_color,
+                    align=field.text_align,
+                )
+                field.value = plain_v
+                field.rv_xhtml = rv_xhtml
+                field.default_style = ds_style
+
+                matched_widget.field_value = plain_v
+                matched_widget.field_flags = (
+                    int(getattr(matched_widget, "field_flags", 0) or 0)
+                    | int(field.field_flags)
+                    | FIELD_FLAG_RICH_TEXT
+                )
+                if not getattr(matched_widget, "border_color", None):
+                    matched_widget.border_color = (0.35, 0.35, 0.35)
+                    matched_widget.border_width = 1.0
+                    matched_widget.border_style = "S"
+                    if not getattr(matched_widget, "fill_color", None):
+                        matched_widget.fill_color = (1.0, 1.0, 1.0)
+                matched_widget.update()
+
+                combined_ff = (
+                    int(getattr(matched_widget, "field_flags", 0) or 0)
+                    | int(field.field_flags)
+                    | FIELD_FLAG_RICH_TEXT
+                )
+                for target_x in ({wxref, field_xref} - {0}):
+                    doc.xref_set_key(target_x, "Ff", str(combined_ff))
+                    doc.xref_set_key(target_x, "V", _encode_pdf_string(plain_v))
+                    doc.xref_set_key(target_x, "DS", _encode_pdf_string(ds_style))
+                    doc.xref_set_key(target_x, "RV", _encode_pdf_string(rv_xhtml))
+                    if field.text_align in (0, 1, 2):
+                        doc.xref_set_key(target_x, "Q", str(int(field.text_align)))
+
+                _synthesize_rich_text_appearance_stream(doc, field, widget_xref=wxref)
+            else:
+                matched_widget.field_value = field.value
+                if not getattr(matched_widget, "border_color", None):
+                    matched_widget.border_color = (0.35, 0.35, 0.35)
+                    matched_widget.border_width = 1.0
+                    matched_widget.border_style = "S"
+                    if not getattr(matched_widget, "fill_color", None):
+                        matched_widget.fill_color = (1.0, 1.0, 1.0)
+                matched_widget.update()
+
+            updated_count += 1
+            touched_pages.add(p_idx)
+        except Exception as e:
+            print(f"Error applying form field edit for {getattr(field, 'field_name', '?')}: {e}")
+
+    for p_idx in touched_pages:
+        invalidate_page_cache(doc, p_idx)
+    return updated_count
+
+
 def update_acroform_field_value(doc, page_index: int, field_identifier: Any, new_value: Any) -> bool:
     """Update value of an AcroForm field in the document and refresh cache."""
     if not doc or getattr(doc, "is_closed", False) or not (0 <= page_index < len(doc)):
         return False
+    if isinstance(field_identifier, AcroFormField) and (
+        field_identifier.rich_text_enabled or field_identifier.has_rich_formatting()
+    ):
+        if field_identifier.get_plain_text() != str(new_value or ""):
+            field_identifier.set_value(new_value)
+        return apply_form_field_edits(doc, page_index, field_identifier) > 0
     try:
         page = doc.load_page(page_index)
         target_xref = getattr(field_identifier, "xref", None) if hasattr(field_identifier, "xref") else (field_identifier if isinstance(field_identifier, int) else None)
@@ -3866,6 +4342,11 @@ def ensure_form_widgets_have_appearance(doc) -> int:
             for w in list(page.widgets()):
                 if getattr(w, 'field_type', None) == getattr(fitz, 'PDF_WIDGET_TYPE_SIGNATURE', 6):
                     continue
+                wxref = int(getattr(w, "xref", 0) or 0)
+                saved_rv = _read_pdf_text_or_stream_key(doc, wxref, "RV") if wxref > 0 else ""
+                saved_ds = _read_pdf_text_or_stream_key(doc, wxref, "DS") if wxref > 0 else ""
+                was_rich = bool(int(getattr(w, "field_flags", 0) or 0) & FIELD_FLAG_RICH_TEXT) or bool(saved_rv.strip())
+
                 needs_update = False
                 if not getattr(w, 'border_color', None):
                     w.border_color = (0.35, 0.35, 0.35)
@@ -3878,6 +4359,16 @@ def ensure_form_widgets_have_appearance(doc) -> int:
                 if needs_update:
                     try:
                         w.update()
+                        if was_rich and wxref > 0:
+                            ff_val = int(getattr(w, "field_flags", 0) or 0) | FIELD_FLAG_RICH_TEXT
+                            doc.xref_set_key(wxref, "Ff", str(ff_val))
+                            if saved_ds:
+                                doc.xref_set_key(wxref, "DS", _encode_pdf_string(saved_ds))
+                            if saved_rv:
+                                doc.xref_set_key(wxref, "RV", _encode_pdf_string(saved_rv))
+                            f_obj = get_acroform_field(doc, p_idx, wxref)
+                            if f_obj is not None:
+                                _synthesize_rich_text_appearance_stream(doc, f_obj, widget_xref=wxref)
                         page_changed = True
                         updated_count += 1
                     except Exception:
@@ -4053,6 +4544,9 @@ def add_form_widget(
         is_required = kwargs.get("is_required", False)
         is_read_only = kwargs.get("is_read_only", False)
         text_fontsize = kwargs.get("text_fontsize", 0.0)
+        rich_text_enabled = bool(kwargs.get("rich_text_enabled", False))
+        default_style = str(kwargs.get("default_style", "") or "")
+        rv_xhtml = str(kwargs.get("rv_xhtml", "") or "")
 
         w = fitz.Widget()
         x0, y0, x1, y1 = rect
@@ -4067,6 +4561,8 @@ def add_form_widget(
             w.field_type = fitz.PDF_WIDGET_TYPE_TEXT
             if is_multiline:
                 w.field_flags |= fitz.PDF_TX_FIELD_IS_MULTILINE
+            if rich_text_enabled or rv_xhtml.strip():
+                w.field_flags |= FIELD_FLAG_RICH_TEXT
             if default_value is not None:
                 w.field_value = str(default_value)
         elif ftype in ("checkbox", "check", "cb"):
@@ -4103,6 +4599,30 @@ def add_form_widget(
             target_w.update()
         except Exception:
             pass
+
+        if doc is not None and ftype in ("text", "tx") and (rich_text_enabled or rv_xhtml.strip()):
+            wxref = int(getattr(target_w, "xref", 0) or 0)
+            if wxref <= 0:
+                for pw in page.widgets():
+                    if getattr(pw, "field_name", None) == w.field_name:
+                        wxref = int(getattr(pw, "xref", 0) or 0)
+                        break
+            if wxref > 0:
+                eff_size = float(text_fontsize) if text_fontsize and float(text_fontsize) > 0 else 12.0
+                eff_ds = default_style or format_default_style_css(
+                    default_font="Helvetica",
+                    default_size=eff_size,
+                    default_color=(0.0, 0.0, 0.0),
+                    align=0,
+                )
+                doc.xref_set_key(wxref, "Ff", str(int(w.field_flags) | FIELD_FLAG_RICH_TEXT))
+                doc.xref_set_key(wxref, "DS", _encode_pdf_string(eff_ds))
+                if rv_xhtml.strip():
+                    doc.xref_set_key(wxref, "RV", _encode_pdf_string(rv_xhtml))
+                    f_obj = get_acroform_field(doc, p_idx, wxref)
+                    if f_obj is not None:
+                        _synthesize_rich_text_appearance_stream(doc, f_obj, widget_xref=wxref)
+
         if doc is not None:
             invalidate_page_cache(doc, p_idx)
         return added or w

@@ -3753,6 +3753,197 @@ class TestAcroFormRichTextModelAndXhtmlParserSerializer:
         assert f'size="{14 * 1024}"' in markup
 
 
+class TestRichTextAcroFormExtractionAndPersistence:
+    """Verify PDF /Ff bit 26, /RV, /DS extraction and round-trip persistence in pdf_handler."""
+
+    def test_extract_form_fields_reads_rich_text_flags_rv_and_ds(self):
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import FIELD_FLAG_RICH_TEXT
+
+        doc = fitz.open()
+        page = doc.new_page(width=595, height=842)
+        try:
+            # Widget 1: Direct PDF string /RV and /DS
+            pdf_handler.add_form_widget(
+                doc,
+                0,
+                "text",
+                (50, 50, 300, 100),
+                "rich_direct",
+                default_value="Plain Bold Italic",
+                is_multiline=True,
+            )
+            # Widget 2: Indirect stream object /RV
+            pdf_handler.add_form_widget(
+                doc,
+                0,
+                "text",
+                (50, 140, 300, 190),
+                "rich_stream",
+                default_value="Stream Rich",
+                is_multiline=False,
+            )
+
+            widgets = {w.field_name: w for w in page.widgets()}
+            w1 = widgets["rich_direct"]
+            w2 = widgets["rich_stream"]
+
+            ds1 = "font: Helvetica,sans-serif 12.0pt; text-align:center; color:#000000"
+            rv1 = (
+                '<body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/" '
+                'xfa:APIVersion="Acroform:2.7.0.0" xfa:spec="2.1">'
+                '<p dir="ltr">Plain <b>Bold</b> <span style="font-style:italic;color:#cc0000">Italic</span></p>'
+                "</body>"
+            )
+            doc.xref_set_key(w1.xref, "Ff", str(w1.field_flags | FIELD_FLAG_RICH_TEXT))
+            doc.xref_set_key(w1.xref, "DS", fitz.get_pdf_str(ds1))
+            doc.xref_set_key(w1.xref, "RV", fitz.get_pdf_str(rv1))
+
+            rv2_stream_xref = doc.get_new_xref()
+            doc.update_object(rv2_stream_xref, "<< >>")
+            rv2_bytes = (
+                '<body xmlns="http://www.w3.org/1999/xhtml">'
+                '<p><b>Stream</b> <i>Rich</i></p></body>'
+            ).encode("utf-8")
+            doc.update_stream(rv2_stream_xref, rv2_bytes)
+            doc.xref_set_key(w2.xref, "Ff", str(w2.field_flags | FIELD_FLAG_RICH_TEXT))
+            doc.xref_set_key(w2.xref, "RV", f"{rv2_stream_xref} 0 R")
+
+            saved = doc.tobytes()
+            reopened = fitz.open(stream=saved, filetype="pdf")
+            try:
+                fields, err = pdf_handler.extract_form_fields(reopened, 0)
+                assert err is None
+                by_name = {f.field_name: f for f in fields}
+
+                f1 = by_name["rich_direct"]
+                assert f1.rich_text_enabled is True
+                assert bool(f1.field_flags & FIELD_FLAG_RICH_TEXT) is True
+                assert "Helvetica" in f1.default_style
+                assert f1.text_align == 1
+                assert len(f1.rich_text_runs) == 4
+                assert f1.rich_text_runs[1].bold is True and f1.rich_text_runs[1].text == "Bold"
+                assert f1.rich_text_runs[3].italic is True and f1.rich_text_runs[3].text == "Italic"
+                assert abs(f1.rich_text_runs[3].color[0] - (0xCC / 255.0)) < 0.01
+
+                f2 = by_name["rich_stream"]
+                assert f2.rich_text_enabled is True
+                assert any(r.bold and r.text == "Stream" for r in f2.rich_text_runs)
+                assert any(r.italic and r.text == "Rich" for r in f2.rich_text_runs)
+            finally:
+                reopened.close()
+        finally:
+            doc.close()
+
+    def test_apply_form_field_edits_persists_rich_text_and_ap_stream_across_save_reopen(self):
+        import re
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import FIELD_FLAG_RICH_TEXT, RichTextRun
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+        try:
+            pdf_handler.add_form_widget(
+                doc,
+                0,
+                "text",
+                (60, 80, 360, 150),
+                "applicant_notes",
+                default_value="",
+                is_multiline=True,
+                text_fontsize=12.0,
+            )
+            fields, err = pdf_handler.extract_form_fields(doc, 0)
+            assert err is None and len(fields) == 1
+            f = fields[0]
+            assert f.rich_text_enabled is False
+
+            # Apply rich formatting runs
+            f.set_rich_text_runs(
+                [
+                    RichTextRun(text="Normal ", font_family="Helvetica", font_size=12.0, color=(0.0, 0.0, 0.0)),
+                    RichTextRun(text="Important", bold=True, font_family="Helvetica", font_size=12.0, color=(0.8, 0.0, 0.0)),
+                    RichTextRun(text="\nNote in italics", italic=True, underline=True, font_family="Times", font_size=11.0, color=(0.0, 0.2, 0.6)),
+                ]
+            )
+            updated = pdf_handler.apply_form_field_edits(doc, 0, [f])
+            assert updated == 1
+
+            # Verify raw PDF keys directly on xref
+            ff_type, ff_val = doc.xref_get_key(f.xref, "Ff")
+            assert ff_type == "int"
+            assert bool(int(ff_val) & FIELD_FLAG_RICH_TEXT) is True
+            ds_type, ds_val = doc.xref_get_key(f.xref, "DS")
+            assert ds_type == "string" and "Helvetica" in ds_val
+            rv_type, rv_val = doc.xref_get_key(f.xref, "RV")
+            assert rv_type == "string" and "Acroform:2.7.0.0" in rv_val
+            ap_type, ap_val = doc.xref_get_key(f.xref, "AP")
+            assert ap_type == "dict" and "/N" in ap_val
+
+            # Verify synthesized /AP /N stream contains /Tx BMC and bold/italic Base-14 resources
+            m_ap = re.search(r"/N\s+(\d+)\s+0\s+R", ap_val)
+            assert m_ap is not None
+            ap_stream = doc.xref_stream(int(m_ap.group(1))).decode("latin-1", errors="replace")
+            assert "/Tx BMC" in ap_stream
+            assert "/HeBo" in ap_stream
+            assert "/TiIt" in ap_stream
+
+            # Save to bytes and reopen to confirm full persistence
+            pdf_bytes = doc.tobytes()
+            reopened = fitz.open(stream=pdf_bytes, filetype="pdf")
+            try:
+                re_fields, re_err = pdf_handler.extract_form_fields(reopened, 0)
+                assert re_err is None and len(re_fields) == 1
+                rf = re_fields[0]
+                assert rf.rich_text_enabled is True
+                assert bool(rf.field_flags & FIELD_FLAG_RICH_TEXT) is True
+                assert rf.value == "Normal Important\nNote in italics"
+                assert any(r.bold and r.text == "Important" for r in rf.rich_text_runs)
+                assert any(r.italic and r.underline and "Note in italics" in r.text for r in rf.rich_text_runs)
+            finally:
+                reopened.close()
+        finally:
+            doc.close()
+
+    def test_ensure_form_widgets_have_appearance_preserves_rich_text_and_add_form_widget_rich_flag(self):
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import FIELD_FLAG_RICH_TEXT
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+        try:
+            rv = (
+                '<body xmlns="http://www.w3.org/1999/xhtml">'
+                '<p><b>Bold Title</b> and <i>Italic Sub</i></p></body>'
+            )
+            pdf_handler.add_form_widget(
+                doc,
+                0,
+                "text",
+                (40, 40, 280, 90),
+                "rich_created",
+                default_value="Bold Title and Italic Sub",
+                rich_text_enabled=True,
+                rv_xhtml=rv,
+            )
+
+            # Force missing border/fill so ensure_form_widgets_have_appearance runs w.update()
+            w = next(doc[0].widgets())
+            doc.xref_set_key(w.xref, "MK", "null")
+            pdf_handler.ensure_form_widgets_have_appearance(doc)
+
+            fields, err = pdf_handler.extract_form_fields(doc, 0)
+            assert err is None and len(fields) == 1
+            f = fields[0]
+            assert f.rich_text_enabled is True
+            assert bool(f.field_flags & FIELD_FLAG_RICH_TEXT) is True
+            assert any(r.bold and "Bold Title" in r.text for r in f.rich_text_runs)
+            assert any(r.italic and "Italic Sub" in r.text for r in f.rich_text_runs)
+        finally:
+            doc.close()
+
+
+
 
 
 
