@@ -4353,6 +4353,10 @@ def apply_form_field_edits(
                     rv_t, _ = doc.xref_get_key(target_x, "RV")
                     if rv_t != "null":
                         doc.xref_set_key(target_x, "RV", "null")
+                    if not getattr(field, "default_style", ""):
+                        ds_t, _ = doc.xref_get_key(target_x, "DS")
+                        if ds_t != "null":
+                            doc.xref_set_key(target_x, "DS", "null")
                     ff_t, ff_v = doc.xref_get_key(target_x, "Ff")
                     if ff_t == "int":
                         try:

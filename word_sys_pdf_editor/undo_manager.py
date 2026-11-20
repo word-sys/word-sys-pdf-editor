@@ -1278,6 +1278,14 @@ class EditFormFieldCommand(Command):
         if self._is_session_active():
             if hasattr(self.window, '_refresh_form_field_widget_value'):
                 self.window._refresh_form_field_widget_value(self.target_field)
+            sel_ff = getattr(self.window, 'selected_form_field', None)
+            if sel_ff is not None and (
+                sel_ff is self.target_field
+                or (getattr(sel_ff, 'xref', None) and getattr(sel_ff, 'xref', None) == getattr(self.target_field, 'xref', None))
+                or (getattr(sel_ff, 'field_name', None) and getattr(sel_ff, 'field_name', None) == getattr(self.target_field, 'field_name', None))
+            ):
+                if hasattr(self.window, '_update_form_builder_controls_for_selected'):
+                    self.window._update_form_builder_controls_for_selected()
             if hasattr(self.window, 'pdf_view') and self.window.pdf_view:
                 self.window.pdf_view.queue_draw()
             if hasattr(self.window, '_update_ui_state'):
@@ -1293,7 +1301,8 @@ class AddFormFieldCommand(Command):
     """Command representing insertion of a new AcroForm interactive field."""
     def __init__(self, window, page_number: int, field_type: str, rect: tuple,
                  field_name: str, default_value: Any = None, choice_values: Optional[list] = None,
-                 is_multiline: bool = False):
+                 is_multiline: bool = False, rich_text_enabled: bool = False,
+                 default_style: str = "", rv_xhtml: str = ""):
         super().__init__(window)
         self.page_number = page_number
         self.field_type = field_type
@@ -1302,6 +1311,9 @@ class AddFormFieldCommand(Command):
         self.default_value = default_value
         self.choice_values = choice_values
         self.is_multiline = is_multiline
+        self.rich_text_enabled = bool(rich_text_enabled)
+        self.default_style = str(default_style or "")
+        self.rv_xhtml = str(rv_xhtml or "")
         self.created_xref = None
 
     def execute(self):
@@ -1316,7 +1328,10 @@ class AddFormFieldCommand(Command):
             self.field_name,
             self.default_value,
             choice_values=self.choice_values,
-            is_multiline=self.is_multiline
+            is_multiline=self.is_multiline,
+            rich_text_enabled=self.rich_text_enabled,
+            default_style=self.default_style,
+            rv_xhtml=self.rv_xhtml,
         )
         if w:
             self.created_xref = getattr(w, "xref", None)
@@ -1373,6 +1388,9 @@ class DeleteFormFieldCommand(Command):
         self.field_value = target_field.value
         self.choice_values = target_field.choice_values
         self.is_multiline = getattr(target_field, 'is_multiline', False)
+        self.rich_text_enabled = bool(getattr(target_field, 'rich_text_enabled', False))
+        self.default_style = str(getattr(target_field, 'default_style', '') or '')
+        self.rv_xhtml = str(getattr(target_field, 'rv_xhtml', '') or '')
         self.xref = getattr(target_field, 'xref', None)
 
     def execute(self):
@@ -1403,7 +1421,10 @@ class DeleteFormFieldCommand(Command):
             self.field_name,
             self.field_value,
             choice_values=self.choice_values,
-            is_multiline=self.is_multiline
+            is_multiline=self.is_multiline,
+            rich_text_enabled=self.rich_text_enabled,
+            default_style=self.default_style,
+            rv_xhtml=self.rv_xhtml,
         )
         if w:
             self.xref = getattr(w, "xref", self.xref)
@@ -1521,9 +1542,9 @@ class EditFormFieldChoicesCommand(Command):
                 ed = self.window._form_field_overlay_widgets.get(getattr(self.target_field, 'field_id', None))
                 if ed and isinstance(ed.get("widget"), Gtk.DropDown):
                     dd = ed["widget"]
-                    dd.set_model(Gtk.StringList.new(choices))
                     ed["display_items"] = list(choices)
                     ed["export_items"] = list(choices)
+                    dd.set_model(Gtk.StringList.new(choices))
                     if dd.get_selected() >= len(choices):
                         dd.set_selected(0)
             if hasattr(self.window, '_update_form_builder_controls_for_selected'):

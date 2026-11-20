@@ -4365,6 +4365,242 @@ class TestInteractiveRichTextFormOverlayAndUndoRedo:
                 win.destroy()
 
 
+class TestFormBuilderRichTextToggle:
+    """Verify Form Builder Rich Text toggle creation, property inspector sync, multiline preservation, and Undo/Redo."""
+
+    def test_form_builder_create_rich_text_field_persists_and_undo_redo(self):
+        from unittest.mock import patch
+        from gi.repository import Adw, Gtk
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import FIELD_FLAG_RICH_TEXT
+        from word_sys_pdf_editor.undo_manager import DeleteFormFieldCommand
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_fb_rich_create")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess = win.create_session(doc=doc, filepath="/tmp/fb_rich_create.pdf")
+                win.add_session(sess, switch_to=True)
+                win.view_mode = False
+                win.tool_mode = "form_builder"
+                win.selected_form_field = None
+
+                assert isinstance(win.form_builder_rich_text_toggle, Gtk.ToggleButton)
+                win.form_builder_rich_text_toggle.set_active(True)
+                win._create_new_form_field((50.0, 60.0, 260.0, 96.0))
+
+                field = win.selected_form_field
+                assert field is not None
+                assert field.rich_text_enabled is True
+                assert bool(field.field_flags & FIELD_FLAG_RICH_TEXT) is True
+                assert field.default_style != ""
+
+                # Verify persisted in PDF bytes across reload
+                raw = doc.tobytes()
+                reopened = fitz.open(stream=raw, filetype="pdf")
+                try:
+                    reloaded_fields, err = pdf_handler.extract_acroform_fields(reopened, page_index=0)
+                    assert err is None
+                    assert len(reloaded_fields) == 1
+                    assert reloaded_fields[0].rich_text_enabled is True
+                    assert bool(reloaded_fields[0].field_flags & FIELD_FLAG_RICH_TEXT) is True
+                    assert reloaded_fields[0].default_style != ""
+                finally:
+                    reopened.close()
+
+                # Undo creation removes field; Redo restores it as Rich Text
+                assert win.undo_manager.can_undo() is True
+                win.undo_manager.undo()
+                assert len(win.form_fields) == 0
+
+                win.undo_manager.redo()
+                assert len(win.form_fields) == 1
+                assert win.form_fields[0].rich_text_enabled is True
+                assert bool(win.form_fields[0].field_flags & FIELD_FLAG_RICH_TEXT) is True
+
+                # Delete + Undo preserves Rich Text metadata
+                del_cmd = DeleteFormFieldCommand(win, win.form_fields[0])
+                del_cmd.execute()
+                assert len(win.form_fields) == 0
+                del_cmd.undo()
+                assert len(win.form_fields) == 1
+                assert win.form_fields[0].rich_text_enabled is True
+                assert bool(win.form_fields[0].field_flags & FIELD_FLAG_RICH_TEXT) is True
+            finally:
+                win.close_document()
+                win.destroy()
+
+    def test_form_builder_toggle_rich_text_on_selected_field_undo_redo(self):
+        from unittest.mock import patch
+        from gi.repository import Adw
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import FIELD_FLAG_RICH_TEXT, RichTextRun
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+        pdf_handler.add_form_widget(
+            doc, 0, "text", (50, 50, 260, 88), "notes_field", default_value="Hello World"
+        )
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_fb_rich_toggle")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess = win.create_session(doc=doc, filepath="/tmp/fb_rich_toggle.pdf")
+                win.add_session(sess, switch_to=True)
+                win.view_mode = False
+                win.tool_mode = "form_builder"
+                win._load_acroform_fields_for_page(0)
+
+                field = win.form_fields[0]
+                assert field.rich_text_enabled is False
+                win.selected_form_field = field
+                win._update_form_builder_controls_for_selected()
+                assert win.form_builder_rich_text_toggle.get_active() is False
+
+                # Toggle ON via Form Builder property inspector
+                win.form_builder_rich_text_toggle.set_active(True)
+                assert field.rich_text_enabled is True
+                assert bool(field.field_flags & FIELD_FLAG_RICH_TEXT) is True
+                ff_t, ff_v = doc.xref_get_key(field.xref, "Ff")
+                assert ff_t == "int" and bool(int(ff_v) & FIELD_FLAG_RICH_TEXT)
+                ds_t, _ = doc.xref_get_key(field.xref, "DS")
+                rv_t, _ = doc.xref_get_key(field.xref, "RV")
+                assert ds_t == "string" and rv_t == "string"
+
+                # Add bold formatting run and persist, then toggle Rich Text OFF
+                field.rich_text_runs = [
+                    RichTextRun(text="Hello ", bold=False),
+                    RichTextRun(text="World", bold=True, italic=True),
+                ]
+                pdf_handler.apply_form_field_edits(doc, 0, [field])
+
+                win.form_builder_rich_text_toggle.set_active(False)
+                assert field.rich_text_enabled is False
+                assert field.rich_text_runs == []
+                assert field.value == "Hello World"
+                assert bool(field.field_flags & FIELD_FLAG_RICH_TEXT) is False
+                rv_off_t, _ = doc.xref_get_key(field.xref, "RV")
+                ds_off_t, _ = doc.xref_get_key(field.xref, "DS")
+                assert rv_off_t == "null"
+                assert ds_off_t == "null"
+
+                # Undo restores Rich Text state + bold run AND flips toggle back to active
+                win.undo_manager.undo()
+                assert field.rich_text_enabled is True
+                assert any(r.text == "World" and r.bold and r.italic for r in field.rich_text_runs)
+                assert win.form_builder_rich_text_toggle.get_active() is True
+                rv_undo_t, _ = doc.xref_get_key(field.xref, "RV")
+                assert rv_undo_t == "string"
+
+                # Redo disables Rich Text again AND flips toggle back to inactive
+                win.undo_manager.redo()
+                assert field.rich_text_enabled is False
+                assert field.rich_text_runs == []
+                assert win.form_builder_rich_text_toggle.get_active() is False
+            finally:
+                win.close_document()
+                win.destroy()
+
+    def test_form_builder_rich_text_toggle_visibility_and_multiline_preservation(self):
+        from unittest.mock import patch
+        from gi.repository import Adw
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import AcroFormField, FIELD_FLAG_RICH_TEXT
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+        pdf_handler.add_form_widget(
+            doc, 0, "text", (50, 50, 260, 90), "rich_txt", default_value="Sample", rich_text_enabled=True
+        )
+        pdf_handler.add_form_widget(doc, 0, "checkbox", (50, 120, 75, 145), "cb_field", default_value=False)
+        pdf_handler.add_form_widget(
+            doc, 0, "combobox", (50, 170, 200, 198), "dd_field", default_value="A", choice_values=["A", "B"]
+        )
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_fb_rich_vis")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess = win.create_session(doc=doc, filepath="/tmp/fb_rich_vis.pdf")
+                win.add_session(sess, switch_to=True)
+                win.view_mode = False
+                win.tool_mode = "form_builder"
+                win._load_acroform_fields_for_page(0)
+
+                by_name = {f.field_name: f for f in win.form_fields}
+
+                # Selecting Rich Text field shows toggle active and sensitive
+                win.selected_form_field = by_name["rich_txt"]
+                win._update_form_builder_controls_for_selected()
+                assert win.form_builder_rich_text_toggle.get_visible() is True
+                assert win.form_builder_rich_text_toggle.get_sensitive() is True
+                assert win.form_builder_rich_text_toggle.get_active() is True
+
+                # Toggling Multiline on a Rich Text field preserves Rich Text flag & /DS
+                win.form_builder_multiline_check.set_active(True)
+                assert win.selected_form_field.is_multiline is True
+                assert win.selected_form_field.rich_text_enabled is True
+                assert bool(win.selected_form_field.field_flags & FIELD_FLAG_RICH_TEXT) is True
+                assert bool(win.selected_form_field.field_flags & fitz.PDF_TX_FIELD_IS_MULTILINE) is True
+
+                # Selecting checkbox hides Rich Text toggle
+                win.selected_form_field = by_name["cb_field"]
+                win._update_form_builder_controls_for_selected()
+                assert win.form_builder_rich_text_toggle.get_visible() is False
+
+                # Selecting combobox hides Rich Text toggle
+                win.selected_form_field = by_name["dd_field"]
+                win._update_form_builder_controls_for_selected()
+                assert win.form_builder_rich_text_toggle.get_visible() is False
+
+                # Selecting password text field disables Rich Text toggle
+                pwd_field = AcroFormField(
+                    field_id="pwd_vis",
+                    xref=0,
+                    page_number=0,
+                    rect=(50, 220, 200, 250),
+                    field_name="pwd_vis",
+                    field_type="text",
+                    is_password=True,
+                )
+                win.selected_form_field = pwd_field
+                win._update_form_builder_controls_for_selected()
+                assert win.form_builder_rich_text_toggle.get_visible() is True
+                assert win.form_builder_rich_text_toggle.get_sensitive() is False
+                assert win.form_builder_rich_text_toggle.get_active() is False
+
+                # Switching field type dropdown with no selection toggles visibility properly
+                win.selected_form_field = None
+                win.form_builder_type_dropdown.set_selected(1)  # checkbox
+                assert win.form_builder_rich_text_toggle.get_visible() is False
+                win.form_builder_type_dropdown.set_selected(0)  # text
+                assert win.form_builder_rich_text_toggle.get_visible() is True
+                assert win.form_builder_rich_text_toggle.get_sensitive() is True
+            finally:
+                win.close_document()
+                win.destroy()
+
+
+
 
 
 

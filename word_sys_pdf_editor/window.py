@@ -756,6 +756,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.temp_form_field_rect = None
         self.form_builder_field_type = "text"
         self.form_builder_tool_button = None
+        self.form_builder_rich_text_toggle = None
         self.form_builder_delete_button = None
         self.form_builder_add_label_check = None
         self.form_builder_label_entry = None
@@ -2811,6 +2812,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.form_builder_multiline_check.connect("toggled", self._on_form_builder_multiline_toggled)
         self.form_builder_toolbar_box.append(self.form_builder_multiline_check)
 
+        self.form_builder_rich_text_toggle = Gtk.ToggleButton(label=_("form_field_rich_text"))
+        self.form_builder_rich_text_toggle.set_tooltip_text(_("form_field_rich_text_tip"))
+        self.form_builder_rich_text_toggle.connect("toggled", self._on_form_builder_rich_text_toggled)
+        self.form_builder_toolbar_box.append(self.form_builder_rich_text_toggle)
+
         self.form_builder_add_label_check = Gtk.CheckButton(label=_("form_field_add_label"))
         self.form_builder_add_label_check.set_tooltip_text(_("form_field_add_label_tip"))
         self.form_builder_toolbar_box.append(self.form_builder_add_label_check)
@@ -3601,6 +3607,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.form_builder_type_dropdown.set_sensitive(has_doc)
             self.form_builder_name_entry.set_sensitive(has_doc)
             self.form_builder_multiline_check.set_sensitive(has_doc)
+            if hasattr(self, 'form_builder_rich_text_toggle') and self.form_builder_rich_text_toggle:
+                sel_ff = getattr(self, 'selected_form_field', None)
+                is_pwd_sel = bool(getattr(sel_ff, 'is_password', False)) if sel_ff is not None else False
+                self.form_builder_rich_text_toggle.set_sensitive(has_doc and not is_pwd_sel)
             if hasattr(self, 'form_builder_add_label_check') and self.form_builder_add_label_check:
                 self.form_builder_add_label_check.set_sensitive(has_doc)
             if hasattr(self, 'form_builder_label_entry') and self.form_builder_label_entry:
@@ -8160,6 +8170,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.form_builder_field_type = mapping[idx]
         if hasattr(self, 'form_builder_multiline_check') and self.form_builder_multiline_check:
             self.form_builder_multiline_check.set_visible(self.form_builder_field_type == "text")
+        rich_toggle = getattr(self, 'form_builder_rich_text_toggle', None)
+        if rich_toggle is not None:
+            rich_toggle.set_visible(self.form_builder_field_type == "text")
+            if self.form_builder_field_type == "text" and getattr(self, 'selected_form_field', None) is None:
+                rich_toggle.set_sensitive(True)
         if hasattr(self, 'form_builder_options_box') and self.form_builder_options_box:
             self.form_builder_options_box.set_visible(self.form_builder_field_type == "combobox")
 
@@ -8202,12 +8217,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.form_builder_name_entry.set_text("")
 
         is_multiline = False
+        rich_text_enabled = False
         default_val = None
         choices = None
 
         if field_type == "text":
             if hasattr(self, 'form_builder_multiline_check') and self.form_builder_multiline_check:
                 is_multiline = self.form_builder_multiline_check.get_active()
+            rich_toggle = getattr(self, 'form_builder_rich_text_toggle', None)
+            if rich_toggle is not None:
+                rich_text_enabled = bool(rich_toggle.get_active())
             default_val = ""
         elif field_type == "checkbox":
             default_val = False
@@ -8229,7 +8248,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             field_name,
             default_value=default_val,
             choice_values=choices,
-            is_multiline=is_multiline
+            is_multiline=is_multiline,
+            rich_text_enabled=rich_text_enabled,
         )
         command.execute()
         self.undo_manager.add_command(command)
@@ -8270,7 +8290,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             lbl_cmd.execute()
             self.undo_manager.add_command(lbl_cmd)
 
-        new_field = pdf_handler.get_acroform_field(self.doc, self.current_page_index, field_name)
+        new_field = None
+        for f in getattr(self, 'form_fields', []) or []:
+            if (command.created_xref and getattr(f, 'xref', None) == command.created_xref) or getattr(f, 'field_name', None) == field_name:
+                new_field = f
+                break
+        if new_field is None:
+            new_field = pdf_handler.get_acroform_field(self.doc, self.current_page_index, field_name)
         if new_field:
             self.selected_form_field = new_field
             self._update_form_builder_controls_for_selected()
@@ -8280,6 +8306,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Synchronize toolbar controls with selected form field or reset to defaults."""
         self._updating_form_builder_ui = True
         try:
+            rich_toggle = getattr(self, 'form_builder_rich_text_toggle', None)
             if getattr(self, 'selected_form_field', None):
                 ftype = getattr(self.selected_form_field, 'field_type', 'text').lower()
                 if ftype in ("text", "tx"):
@@ -8289,6 +8316,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     if hasattr(self, 'form_builder_multiline_check') and self.form_builder_multiline_check:
                         self.form_builder_multiline_check.set_visible(True)
                         self.form_builder_multiline_check.set_active(getattr(self.selected_form_field, 'is_multiline', False))
+                    if rich_toggle is not None:
+                        is_pwd = bool(getattr(self.selected_form_field, 'is_password', False))
+                        rich_toggle.set_visible(True)
+                        rich_toggle.set_sensitive(not is_pwd)
+                        rich_toggle.set_active(
+                            bool(getattr(self.selected_form_field, 'rich_text_enabled', False)) and not is_pwd
+                        )
                     if hasattr(self, 'form_builder_options_box') and self.form_builder_options_box:
                         self.form_builder_options_box.set_visible(False)
                 elif ftype in ("checkbox", "check", "cb"):
@@ -8297,6 +8331,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.form_builder_field_type = "checkbox"
                     if hasattr(self, 'form_builder_multiline_check') and self.form_builder_multiline_check:
                         self.form_builder_multiline_check.set_visible(False)
+                    if rich_toggle is not None:
+                        rich_toggle.set_visible(False)
                     if hasattr(self, 'form_builder_options_box') and self.form_builder_options_box:
                         self.form_builder_options_box.set_visible(False)
                 elif ftype in ("combobox", "choice", "dropdown", "ch", "listbox"):
@@ -8305,6 +8341,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.form_builder_field_type = "combobox"
                     if hasattr(self, 'form_builder_multiline_check') and self.form_builder_multiline_check:
                         self.form_builder_multiline_check.set_visible(False)
+                    if rich_toggle is not None:
+                        rich_toggle.set_visible(False)
                     if hasattr(self, 'form_builder_options_box') and self.form_builder_options_box:
                         self.form_builder_options_box.set_visible(True)
                     if hasattr(self, 'form_builder_options_entry') and self.form_builder_options_entry:
@@ -8321,13 +8359,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if hasattr(self, 'form_builder_delete_button') and self.form_builder_delete_button:
                     self.form_builder_delete_button.set_sensitive(True)
             else:
-                next_name = self._get_next_form_field_name(getattr(self, 'form_builder_field_type', 'text'))
+                cur_type = getattr(self, 'form_builder_field_type', 'text')
+                next_name = self._get_next_form_field_name(cur_type)
                 if hasattr(self, 'form_builder_name_entry') and self.form_builder_name_entry:
                     self.form_builder_name_entry.set_text(next_name)
                 if hasattr(self, 'form_builder_delete_button') and self.form_builder_delete_button:
                     self.form_builder_delete_button.set_sensitive(False)
+                if hasattr(self, 'form_builder_multiline_check') and self.form_builder_multiline_check:
+                    self.form_builder_multiline_check.set_visible(cur_type == 'text')
+                if rich_toggle is not None:
+                    rich_toggle.set_visible(cur_type == 'text')
+                    rich_toggle.set_sensitive(True)
                 if hasattr(self, 'form_builder_options_box') and self.form_builder_options_box:
-                    self.form_builder_options_box.set_visible(getattr(self, 'form_builder_field_type', 'text') == 'combobox')
+                    self.form_builder_options_box.set_visible(cur_type == 'combobox')
         finally:
             self._updating_form_builder_ui = False
 
@@ -8486,12 +8530,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
         self.selected_form_field.field_name = new_name
         try:
-            page = self.doc.load_page(getattr(self.selected_form_field, 'page_number', self.current_page_index))
+            page_num = getattr(self.selected_form_field, 'page_number', self.current_page_index)
+            page = self.doc.load_page(page_num)
             for w in page.widgets():
                 if getattr(w, 'xref', None) == getattr(self.selected_form_field, 'xref', None) or getattr(w, 'field_name', None) == old_name:
                     w.field_name = new_name
                     w.update()
                     break
+            if getattr(self.selected_form_field, 'rich_text_enabled', False) or (
+                hasattr(self.selected_form_field, 'has_rich_formatting') and self.selected_form_field.has_rich_formatting()
+            ):
+                pdf_handler.apply_form_field_edits(self.doc, page_num, [self.selected_form_field])
             self.document_modified = True
             self._update_tab_dirty_state()
         except Exception as e:
@@ -8509,21 +8558,137 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if getattr(self.selected_form_field, 'is_multiline', False) == is_multi:
             return
         self.selected_form_field.is_multiline = is_multi
+        cur_flags = int(getattr(self.selected_form_field, 'field_flags', 0) or 0)
+        if is_multi:
+            cur_flags |= fitz.PDF_TX_FIELD_IS_MULTILINE
+        else:
+            cur_flags &= ~fitz.PDF_TX_FIELD_IS_MULTILINE
+        self.selected_form_field.field_flags = cur_flags
         try:
-            page = self.doc.load_page(getattr(self.selected_form_field, 'page_number', self.current_page_index))
+            page_num = getattr(self.selected_form_field, 'page_number', self.current_page_index)
+            target_xref = getattr(self.selected_form_field, 'xref', None)
+            target_name = getattr(self.selected_form_field, 'field_name', None)
+            page = self.doc.load_page(page_num)
             for w in page.widgets():
-                if getattr(w, 'xref', None) == getattr(self.selected_form_field, 'xref', None) or getattr(w, 'field_name', None) == self.selected_form_field.field_name:
+                if getattr(w, 'xref', None) == target_xref or getattr(w, 'field_name', None) == target_name:
                     if is_multi:
                         w.field_flags |= fitz.PDF_TX_FIELD_IS_MULTILINE
                     else:
                         w.field_flags &= ~fitz.PDF_TX_FIELD_IS_MULTILINE
                     w.update()
                     break
+            if getattr(self.selected_form_field, 'rich_text_enabled', False) or (
+                hasattr(self.selected_form_field, 'has_rich_formatting') and self.selected_form_field.has_rich_formatting()
+            ):
+                pdf_handler.apply_form_field_edits(self.doc, page_num, [self.selected_form_field])
             self.document_modified = True
             self._update_tab_dirty_state()
             self._load_acroform_fields_for_page(self.current_page_index)
+            for f in getattr(self, 'form_fields', []) or []:
+                if (target_xref and getattr(f, 'xref', None) == target_xref) or (
+                    target_name and getattr(f, 'field_name', None) == target_name
+                ):
+                    self.selected_form_field = f
+                    break
+            self._update_form_builder_controls_for_selected()
         except Exception as e:
             print(f"Error updating multiline flag: {e}")
+
+    def _on_form_builder_rich_text_toggled(self, toggle):
+        """Handle user toggling Rich Text Formatting (B/I/U) for selected text form field."""
+        if getattr(self, '_updating_form_builder_ui', False):
+            return
+        field = getattr(self, 'selected_form_field', None)
+        if not field or not getattr(self, 'doc', None):
+            return
+        ftype = getattr(field, 'field_type', 'text').lower()
+        if ftype not in ('text', 'tx'):
+            return
+        if getattr(field, 'is_password', False):
+            self._updating_form_builder_ui = True
+            try:
+                toggle.set_active(False)
+            finally:
+                self._updating_form_builder_ui = False
+            return
+
+        enable_rich = bool(toggle.get_active())
+        if bool(getattr(field, 'rich_text_enabled', False)) == enable_rich:
+            return
+
+        from .form_fields import (
+            FIELD_FLAG_RICH_TEXT,
+            RichTextRun,
+            serialize_runs_to_rv_xhtml,
+            snapshot_field_rich_state,
+        )
+
+        old_rich_state = snapshot_field_rich_state(field)
+        old_val = old_rich_state.get("value", "")
+
+        plain_text = str(field.value or "")
+        if not plain_text and getattr(field, 'rich_text_runs', None):
+            plain_text = "".join(r.text for r in field.rich_text_runs)
+
+        cur_flags = int(getattr(field, 'field_flags', 0) or 0)
+        if enable_rich:
+            eff_size = field.text_fontsize if getattr(field, 'text_fontsize', 0) and field.text_fontsize > 0 else 12.0
+            eff_color = field.text_color if getattr(field, 'text_color', None) is not None else (0.0, 0.0, 0.0)
+            eff_font = getattr(field, 'font_family', None) or "Helvetica"
+            eff_align = int(getattr(field, 'text_align', 0) or 0)
+            runs = list(field.rich_text_runs) if getattr(field, 'rich_text_runs', None) else (
+                [
+                    RichTextRun(
+                        text=plain_text,
+                        font_family=eff_font,
+                        font_size=eff_size,
+                        color=eff_color,
+                    )
+                ]
+                if plain_text
+                else []
+            )
+            plain_v, rv_xhtml, ds_style = serialize_runs_to_rv_xhtml(
+                runs,
+                default_font=eff_font,
+                default_size=eff_size,
+                default_color=eff_color,
+                align=eff_align,
+            )
+            new_rich_state = {
+                "value": plain_v,
+                "rich_text_enabled": True,
+                "rich_text_runs": runs,
+                "rv_xhtml": rv_xhtml,
+                "default_style": ds_style,
+                "field_flags": cur_flags | FIELD_FLAG_RICH_TEXT,
+            }
+            new_val = plain_v
+        else:
+            new_rich_state = {
+                "value": plain_text,
+                "rich_text_enabled": False,
+                "rich_text_runs": [],
+                "rv_xhtml": "",
+                "default_style": "",
+                "field_flags": cur_flags & ~FIELD_FLAG_RICH_TEXT,
+            }
+            new_val = plain_text
+
+        cmd = EditFormFieldCommand(
+            self,
+            field,
+            old_val,
+            new_val,
+            old_rich_state=old_rich_state,
+            new_rich_state=new_rich_state,
+        )
+        cmd.execute()
+        if hasattr(self, 'undo_manager') and self.undo_manager:
+            self.undo_manager.add_command(cmd)
+        self.document_modified = True
+        if hasattr(self, '_update_tab_dirty_state'):
+            self._update_tab_dirty_state()
 
     def _on_form_builder_delete_clicked(self, button):
         """Handle clicking delete button in Form Builder toolbar."""
