@@ -38,6 +38,9 @@ SUITE_CATEGORIES: Dict[str, List[str]] = {
     "ocr": [
         "test_ocr_suite.py",
     ],
+    "synctex": [
+        "test_synctex_engine.py",
+    ],
     "continuous": [
         "test_continuous_scroll_suite.py",
         "test_core_and_navigation.py",
