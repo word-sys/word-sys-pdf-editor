@@ -1174,6 +1174,9 @@ _STRINGS = {
         "copy_pages_switch_tab_title": "Switch to Target Tab After Copying",
         "status_pages_copied_to_tab": "Copied {} page(s) to '{}'",
         "status_pages_copied_new_tab": "Copied {} page(s) to a new document tab",
+        "synctex_forward_jumped": "SyncTeX: Jumped to page {} ({}:{})",
+        "synctex_forward_not_found": "SyncTeX: No matching location found for {}:{}",
+        "synctex_not_available": "SyncTeX data (.synctex.gz) not found for this document",
     },
 
     "tr": {
@@ -2280,6 +2283,9 @@ _STRINGS = {
         "copy_pages_switch_tab_title": "Kopyaladıktan Sonra Hedef Sekmeye Geç",
         "status_pages_copied_to_tab": "{} sayfa '{}' belgesine kopyalandı",
         "status_pages_copied_new_tab": "{} sayfa yeni belge sekmesine kopyalandı",
+        "synctex_forward_jumped": "SyncTeX: Sayfa {} konumuna gidildi ({}:{})",
+        "synctex_forward_not_found": "SyncTeX: {}:{} için eşleşen konum bulunamadı",
+        "synctex_not_available": "Bu belge için SyncTeX verisi (.synctex.gz) bulunamadı",
     },
 }
 

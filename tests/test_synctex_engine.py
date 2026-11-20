@@ -363,3 +363,210 @@ class TestSyncTeXCliFallbackAndHelpers:
         assert argv_emacs == ["emacsclient", "-n", "+23:8", "/tmp/doc.tex"]
 
         assert format_editor_command("", "/tmp/doc.tex", 1, 0) == []
+
+
+class TestSyncTeXCliAndSingleInstanceForwardSearch:
+    """Verify CLI argument parsing, single-instance command-line IPC, tab focus, and canvas highlight pulse."""
+
+    def test_parse_cli_arguments_synctex_page_and_cwd_resolution(self, tmp_path):
+        from word_sys_pdf_editor.main import parse_cli_arguments
+
+        tex_file = tmp_path / "main.tex"
+        tex_file.write_text("\\documentclass{article}\n", encoding="utf-8")
+
+        parsed = parse_cli_arguments(
+            ["--synctex-forward", "42:5:main.tex", "paper.pdf"],
+            cwd=str(tmp_path),
+        )
+        assert parsed["synctex_forward"] == (42, 5, str(tex_file))
+        assert parsed["files"] == [str(tmp_path / "paper.pdf")]
+        assert parsed["page_index"] is None
+        assert parsed["show_help"] is False
+        assert parsed["show_version"] is False
+
+        parsed_eq = parse_cli_arguments(
+            ["--synctex-forward=14:chapters/intro.tex", f"file://{tmp_path}/doc.pdf", "--unknown-gtk-flag"],
+            cwd=str(tmp_path),
+        )
+        assert parsed_eq["synctex_forward"] == (14, 0, "chapters/intro.tex")
+        assert parsed_eq["files"] == [str(tmp_path / "doc.pdf")]
+
+        parsed_page = parse_cli_arguments(["-p", "3", "paper.pdf"], cwd=str(tmp_path))
+        assert parsed_page["page_index"] == 2
+        assert parsed_page["files"] == [str(tmp_path / "paper.pdf")]
+
+        parsed_page1 = parse_cli_arguments(["--page", "1", "paper.pdf"], cwd=str(tmp_path))
+        assert parsed_page1["page_index"] == 0
+
+        assert parse_cli_arguments(["--help"])["show_help"] is True
+        assert parse_cli_arguments(["--version"])["show_version"] is True
+
+    def test_application_handles_command_line_flag_and_dispatch(self, tmp_path):
+        from gi.repository import Gio
+        from word_sys_pdf_editor.main import PdfEditorApplication
+
+        app = PdfEditorApplication(
+            application_id="org.word_sys.test_synctex_cli_dispatch",
+        )
+        flags = app.get_flags()
+        assert bool(flags & Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        assert bool(flags & Gio.ApplicationFlags.HANDLES_OPEN)
+
+        # --version and --help return 0 without creating a window
+        cmd_ver = MagicMock()
+        cmd_ver.get_arguments.return_value = ["word-sys-pdf-editor", "--version"]
+        cmd_ver.get_cwd.return_value = str(tmp_path)
+        assert app.do_command_line(cmd_ver) == 0
+        assert cmd_ver.print_literal.called
+        assert app.window is None
+
+        cmd_help = MagicMock()
+        cmd_help.get_arguments.return_value = ["word-sys-pdf-editor", "--help"]
+        cmd_help.get_cwd.return_value = str(tmp_path)
+        assert app.do_command_line(cmd_help) == 0
+        assert cmd_help.print_literal.called
+        assert app.window is None
+
+        # Secondary-instance --synctex-forward reuses existing window and dispatches forward search
+        mock_win = MagicMock()
+        app.window = mock_win
+        parsed_fwd = {
+            "files": [str(tmp_path / "paper.pdf")],
+            "page_index": None,
+            "synctex_forward": (25, 3, str(tmp_path / "chapters" / "intro.tex")),
+            "show_help": False,
+            "show_version": False,
+        }
+        assert app._dispatch_cli_request(parsed_fwd, immediate=True) is True
+        mock_win.handle_synctex_forward_search.assert_called_once_with(
+            str(tmp_path / "paper.pdf"),
+            str(tmp_path / "chapters" / "intro.tex"),
+            25,
+            3,
+        )
+
+        # Secondary-instance -p 2 dispatches open_or_focus_document with 0-based page_index=1
+        mock_win.reset_mock()
+        parsed_pg = {
+            "files": [str(tmp_path / "paper.pdf")],
+            "page_index": 1,
+            "synctex_forward": None,
+            "show_help": False,
+            "show_version": False,
+        }
+        assert app._dispatch_cli_request(parsed_pg, immediate=True) is True
+        mock_win.open_or_focus_document.assert_called_once_with(str(tmp_path / "paper.pdf"), 1)
+
+    def test_glib_application_run_accepts_synctex_and_version_args(self):
+        from gi.repository import Gio
+        from word_sys_pdf_editor.main import PdfEditorApplication
+
+        app = PdfEditorApplication(
+            application_id="org.word_sys.test_glib_cli_nonunique",
+            flags=(
+                Gio.ApplicationFlags.NON_UNIQUE
+                | Gio.ApplicationFlags.HANDLES_OPEN
+                | Gio.ApplicationFlags.HANDLES_COMMAND_LINE
+            ),
+        )
+        # Verifies GApplication does not reject --version / --synctex-forward prior to do_command_line
+        exit_code = app.run(["word-sys-pdf-editor", "--version"])
+        assert exit_code == 0
+
+    def test_window_forward_search_focuses_tab_scrolls_renders_and_pulses(self, tmp_path):
+        import cairo
+        import fitz
+        from gi.repository import Adw
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        # Create two PDFs + a matching .synctex.gz for main.pdf
+        main_pdf_path = tmp_path / "main.pdf"
+        d_main = fitz.open()
+        d_main.new_page(width=595, height=842)
+        d_main.new_page(width=595, height=842)
+        d_main.save(str(main_pdf_path))
+        d_main.close()
+
+        other_pdf_path = tmp_path / "other.pdf"
+        d_other = fitz.open()
+        d_other.new_page(width=595, height=842)
+        d_other.save(str(other_pdf_path))
+        d_other.close()
+
+        gz_path = tmp_path / "main.synctex.gz"
+        with gzip.open(gz_path, "wb") as gz:
+            gz.write(_build_sample_synctex(str(tmp_path)).encode("utf-8"))
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_synctex_win_pulse")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                doc_main = fitz.open(str(main_pdf_path))
+                doc_other = fitz.open(str(other_pdf_path))
+
+                sess_main = win.create_session(doc=doc_main, filepath=str(main_pdf_path))
+                win.add_session(sess_main, switch_to=True)
+                sess_other = win.create_session(doc=doc_other, filepath=str(other_pdf_path))
+                win.add_session(sess_other, switch_to=True)
+                assert win._active_session is sess_other
+
+                # Forward search targeting main.pdf (currently background tab) line 25 in intro.tex (page 2)
+                ok = win.handle_synctex_forward_search(str(main_pdf_path), "chapters/intro.tex", 25, 0)
+                assert ok is True
+                assert win._active_session is sess_main
+                assert win.current_page_index == 1
+                assert len(win.synctex_highlight_boxes) == 1
+                assert win.synctex_highlight_boxes[0]["page_index"] == 1
+                assert win._synctex_pulse_alpha > 0.0
+
+                # Render SyncTeX highlight pulse onto a Cairo surface and confirm pixels were painted
+                surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 600, 850)
+                cr = cairo.Context(surf)
+                cr.set_source_rgb(1.0, 1.0, 1.0)
+                cr.paint()
+                win._draw_synctex_highlights(cr, page_index=1, page_offset_x=0.0, page_offset_y=0.0)
+                surf.flush()
+                # Check pixel inside highlighted band (x=100, y=94) is no longer pure white
+                raw_data = bytes(surf.get_data())
+                stride = surf.get_stride()
+                px_offset = 94 * stride + 100 * 4
+                b, g, r, a = raw_data[px_offset : px_offset + 4]
+                assert (r, g, b) != (255, 255, 255)
+
+                # Advance pulse timer past mid-fade and past completion
+                win._synctex_pulse_start_time = time.monotonic() - 1.5
+                assert win._on_synctex_pulse_tick() is True
+                assert 0.0 < win._synctex_pulse_alpha < 1.0
+
+                win._synctex_pulse_start_time = time.monotonic() - 5.0
+                assert win._on_synctex_pulse_tick() is False
+                assert win.synctex_highlight_boxes == []
+                assert win._synctex_pulse_alpha == 0.0
+
+                # open_or_focus_document with target_page=0 switches back to page 0 even from page 1
+                assert win.open_or_focus_document(str(main_pdf_path), target_page=0) is True
+                assert win.current_page_index == 0
+
+                # Deferred forward search executes automatically inside _finish_loading
+                fresh_sess = win.create_session(filepath=str(main_pdf_path))
+                canon_fp = os.path.realpath(str(main_pdf_path))
+                win._pending_synctex_forward[canon_fp] = ("main.tex", 14, 0)
+                doc_reopen = fitz.open(str(main_pdf_path))
+                win._finish_loading(doc_reopen, None, str(main_pdf_path), target_page=0, target_session=fresh_sess)
+                assert canon_fp not in win._pending_synctex_forward
+                assert len(win.synctex_highlight_boxes) == 1
+                assert win.synctex_highlight_boxes[0]["page_index"] == 0
+                assert win.synctex_highlight_boxes[0]["line"] == 14
+            finally:
+                win.clear_synctex_highlight_pulse()
+                for s in list(win.sessions):
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+                win.destroy()
+

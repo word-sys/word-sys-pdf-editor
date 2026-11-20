@@ -1756,6 +1756,10 @@ class DocumentSession:
     sig_inspection_token: int = 0
     _sig_inspection_on_complete: Optional[Any] = None
 
+    # SyncTeX state
+    synctex_doc: Any = None
+    synctex_file_path: Optional[str] = None
+
     def __post_init__(self):
         """Ensure Gio.ListStore for pages_model if not provided and apply view mode settings."""
         if self.pages_model is None:
@@ -1848,6 +1852,8 @@ class DocumentSession:
         self.selected_measurement = None
         self.sticky_notes.clear()
         self.selected_sticky_note = None
+        self.synctex_doc = None
+        self.synctex_file_path = None
         self.scroll_x = 0.0
         self.scroll_y = 0.0
 

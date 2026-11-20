@@ -813,6 +813,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.redaction_toolbar_box = None
         self.redaction_apply_button = None
         self.redact_default_fill = (0.0, 0.0, 0.0)
+        self.synctex_highlight_boxes = []
+        self._synctex_pulse_alpha = 0.0
+        self._synctex_pulse_phase = 0.0
+        self._synctex_pulse_start_time = 0.0
+        self._synctex_pulse_duration = 2.2
+        self._synctex_pulse_timer_id = None
+        self._pending_synctex_forward = {}
         self.redact_default_text_color = (1.0, 1.0, 1.0)
         self.redact_default_overlay = "[REDACTED]"
         self.bold_button = None
@@ -4187,6 +4194,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.annotations_sidebar.refresh()
             self._load_thumbnails(sess)
 
+            # Discover and load SyncTeX index for this document and apply any deferred forward search
+            self._load_synctex_for_session(sess)
+            pending_map = getattr(self, '_pending_synctex_forward', None)
+            if pending_map and filepath:
+                try:
+                    canon_fp = os.path.realpath(filepath)
+                except Exception:
+                    canon_fp = filepath
+                pending_req = pending_map.pop(canon_fp, None) or pending_map.pop(filepath, None)
+                if pending_req is not None:
+                    p_tex, p_line, p_col = pending_req
+                    self._apply_synctex_forward_on_session(sess, p_tex, p_line, p_col)
+
         self.open_button.set_sensitive(True)
         self.select_tool_button.set_sensitive(True)
         self.add_text_tool_button.set_sensitive(True)
@@ -5538,6 +5558,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self, '_invalidate_spatial_index'):
             self._invalidate_spatial_index()
         self._invalidate_continuous_layout()
+        if hasattr(self, 'clear_synctex_highlight_pulse'):
+            self.clear_synctex_highlight_pulse()
         if getattr(self, '_scroll_settle_timer_id', None) is not None:
             try:
                 GLib.source_remove(self._scroll_settle_timer_id)
@@ -7476,6 +7498,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     cr.set_line_width(1.0)
                     cr.stroke()
                 cr.restore()
+
+        # SyncTeX forward-search animated highlight pulse
+        if getattr(self, 'synctex_highlight_boxes', None):
+            self._draw_synctex_highlights(cr, page_index, page_offset_x, page_offset_y)
 
         if self.view_mode and self.view_sel_rect and getattr(self, 'drag_start_page_index', self.current_page_index) == page_index:
             sx1, sy1, sx2, sy2 = self.view_sel_rect
@@ -19998,3 +20024,298 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
 
         GLib.idle_add(do_scroll)
+
+    # ------------------------------------------------------------------
+    # SyncTeX Forward Search, Single-Instance Document Focus & Pulse
+    # ------------------------------------------------------------------
+
+    def _load_synctex_for_session(self, session, force_reload: bool = False):
+        """Discover and load/refresh `.synctex.gz` or `.synctex` data for `session`."""
+        if session is None or not getattr(session, 'pdf_path', None):
+            return None
+        from .synctex_engine import SyncTeXDocument, find_synctex_file
+
+        existing = getattr(session, 'synctex_doc', None)
+        if existing is not None and not force_reload:
+            try:
+                existing.reload_if_changed()
+                if existing.is_loaded:
+                    session.synctex_file_path = existing.synctex_path
+                    return existing
+            except Exception as e:
+                print(f"Warning refreshing SyncTeX index: {e}")
+
+        st_path = find_synctex_file(session.pdf_path)
+        if not st_path:
+            session.synctex_doc = None
+            session.synctex_file_path = None
+            return None
+
+        try:
+            st_doc = SyncTeXDocument.from_pdf(session.pdf_path)
+        except Exception as e:
+            print(f"Warning loading SyncTeX file {st_path}: {e}")
+            st_doc = None
+
+        session.synctex_doc = st_doc
+        session.synctex_file_path = st_doc.synctex_path if st_doc else None
+        return st_doc
+
+    def open_or_focus_document(self, filepath: str, target_page: Optional[int] = None) -> bool:
+        """Focus an already-open tab for `filepath`, or open it in a new tab, optionally jumping to `target_page` (0-based)."""
+        if not filepath:
+            return False
+        existing_session = self.get_session_by_path(filepath)
+        if existing_session is not None:
+            self.set_active_session(existing_session)
+            if target_page is not None and existing_session.doc is not None:
+                page_count = pdf_handler.get_page_count(existing_session.doc)
+                if page_count > 0:
+                    clamped = max(0, min(int(target_page), page_count - 1))
+                    if getattr(self, 'continuous_scroll', False):
+                        self.scroll_to_page(clamped, smooth=True)
+                    else:
+                        self._load_page(clamped)
+            try:
+                self.present()
+            except Exception:
+                pass
+            return True
+
+        start_page = max(0, int(target_page)) if target_page is not None else 0
+        self.load_document(filepath, target_page=start_page)
+        try:
+            self.present()
+        except Exception:
+            pass
+        return True
+
+    def handle_synctex_forward_search(
+        self,
+        pdf_path: Optional[str],
+        tex_path: str,
+        line: int,
+        column: int = 0,
+    ) -> bool:
+        """Handle a SyncTeX forward-search request (CLI or D-Bus single-instance IPC).
+
+        Focuses the open tab for `pdf_path` (or opens it in a new tab and defers the jump
+        until loading finishes), scrolls to the resolved `(page_index, x, y)` target, and
+        triggers an animated highlight pulse on the Cairo canvas.
+        """
+        if not tex_path:
+            return False
+
+        target_line = max(1, int(line))
+        target_col = max(0, int(column))
+
+        if pdf_path:
+            existing_session = self.get_session_by_path(pdf_path)
+            if existing_session is not None and existing_session.doc is not None:
+                self.set_active_session(existing_session)
+                try:
+                    self.present()
+                except Exception:
+                    pass
+                return self._apply_synctex_forward_on_session(
+                    existing_session, tex_path, target_line, target_col
+                )
+
+            # Not open yet: queue deferred forward search and open the PDF in a tab
+            if not hasattr(self, '_pending_synctex_forward') or self._pending_synctex_forward is None:
+                self._pending_synctex_forward = {}
+            try:
+                canon_fp = os.path.realpath(pdf_path)
+            except Exception:
+                canon_fp = pdf_path
+            self._pending_synctex_forward[canon_fp] = (tex_path, target_line, target_col)
+            self.load_document(pdf_path)
+            try:
+                self.present()
+            except Exception:
+                pass
+            return True
+
+        active = getattr(self, '_active_session', None)
+        if active is not None and active.doc is not None:
+            try:
+                self.present()
+            except Exception:
+                pass
+            return self._apply_synctex_forward_on_session(active, tex_path, target_line, target_col)
+        return False
+
+    def _apply_synctex_forward_on_session(
+        self,
+        session,
+        tex_path: str,
+        line: int,
+        column: int = 0,
+    ) -> bool:
+        """Resolve SyncTeX forward search on a loaded `session`, scroll to it, and pulse highlights."""
+        if session is None or session.doc is None:
+            return False
+
+        st_doc = self._load_synctex_for_session(session)
+        if st_doc is None or not st_doc.is_loaded:
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(_("synctex_not_available"))
+            return False
+
+        highlights = st_doc.forward_search(tex_path, line, column)
+        if not highlights:
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(
+                    _("synctex_forward_not_found").format(os.path.basename(tex_path), line)
+                )
+            return False
+
+        page_count = pdf_handler.get_page_count(session.doc)
+        valid_highlights = [
+            h for h in highlights if 0 <= h.page_index < page_count
+        ]
+        if not valid_highlights:
+            return False
+
+        first = valid_highlights[0]
+        self.scroll_to_object_rect(first.page_index, first.bbox)
+        self.trigger_synctex_highlight_pulse(valid_highlights)
+
+        if hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(
+                _("synctex_forward_jumped").format(
+                    first.page_index + 1,
+                    os.path.basename(first.tex_path or tex_path),
+                    first.line or line,
+                )
+            )
+        return True
+
+    def trigger_synctex_highlight_pulse(self, highlights, duration_sec: float = 2.2):
+        """Start a smooth animated highlight pulse for SyncTeX forward-search target boxes."""
+        self.clear_synctex_highlight_pulse()
+
+        boxes = []
+        for h in highlights or []:
+            if isinstance(h, dict):
+                bbox = h.get("bbox")
+                p_idx = h.get("page_index", 0)
+                if bbox and len(bbox) == 4:
+                    boxes.append({
+                        "page_index": int(p_idx),
+                        "bbox": tuple(float(v) for v in bbox),
+                        "tex_path": str(h.get("tex_path", "")),
+                        "line": int(h.get("line", 0)),
+                        "column": int(h.get("column", 0)),
+                    })
+            else:
+                bbox = getattr(h, "bbox", None)
+                if bbox and len(bbox) == 4:
+                    boxes.append({
+                        "page_index": int(getattr(h, "page_index", 0)),
+                        "bbox": tuple(float(v) for v in bbox),
+                        "tex_path": str(getattr(h, "tex_path", "")),
+                        "line": int(getattr(h, "line", 0)),
+                        "column": int(getattr(h, "column", 0)),
+                    })
+
+        if not boxes:
+            return
+
+        self.synctex_highlight_boxes = boxes
+        self._synctex_pulse_start_time = time.monotonic()
+        self._synctex_pulse_duration = max(0.2, float(duration_sec))
+        self._synctex_pulse_alpha = 1.0
+        self._synctex_pulse_phase = 0.0
+
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+
+        self._synctex_pulse_timer_id = GLib.timeout_add(33, self._on_synctex_pulse_tick)
+
+    def _on_synctex_pulse_tick(self) -> bool:
+        """Advance SyncTeX highlight pulse animation frame (~30 fps)."""
+        if not getattr(self, 'synctex_highlight_boxes', None):
+            self._synctex_pulse_timer_id = None
+            return False
+
+        elapsed = time.monotonic() - getattr(self, '_synctex_pulse_start_time', 0.0)
+        duration = max(0.2, getattr(self, '_synctex_pulse_duration', 2.2))
+        t = elapsed / duration
+
+        if t >= 1.0:
+            self.synctex_highlight_boxes = []
+            self._synctex_pulse_alpha = 0.0
+            self._synctex_pulse_phase = 0.0
+            self._synctex_pulse_timer_id = None
+            if hasattr(self, 'pdf_view') and self.pdf_view:
+                self.pdf_view.queue_draw()
+            return False
+
+        if t < 0.45:
+            # Gentle breathing pulse so the user's eye catches the target line immediately
+            wave = abs(math.cos(t * math.pi * 4.0))
+            self._synctex_pulse_alpha = 0.68 + 0.32 * wave
+            self._synctex_pulse_phase = wave
+        else:
+            # Smooth ease-out fade
+            fade = max(0.0, 1.0 - (t - 0.45) / 0.55)
+            self._synctex_pulse_alpha = fade ** 1.5
+            self._synctex_pulse_phase = 0.0
+
+        if hasattr(self, 'pdf_view') and self.pdf_view:
+            self.pdf_view.queue_draw()
+        return True
+
+    def clear_synctex_highlight_pulse(self):
+        """Cancel any active SyncTeX highlight pulse timer and clear highlight boxes."""
+        timer_id = getattr(self, '_synctex_pulse_timer_id', None)
+        if timer_id is not None:
+            try:
+                GLib.source_remove(timer_id)
+            except Exception:
+                pass
+            self._synctex_pulse_timer_id = None
+        self.synctex_highlight_boxes = []
+        self._synctex_pulse_alpha = 0.0
+        self._synctex_pulse_phase = 0.0
+
+    def _draw_synctex_highlights(self, cr, page_index: int, page_offset_x: float, page_offset_y: float):
+        """Render active SyncTeX forward-search pulse highlights on `page_index`."""
+        boxes = getattr(self, 'synctex_highlight_boxes', None)
+        alpha = float(getattr(self, '_synctex_pulse_alpha', 0.0))
+        if not boxes or alpha <= 0.01:
+            return
+
+        phase = float(getattr(self, '_synctex_pulse_phase', 0.0))
+        pad = 2.0 + 1.5 * phase
+        zoom = float(getattr(self, 'zoom_level', 1.0))
+
+        for item in boxes:
+            if item.get("page_index") != page_index:
+                continue
+            bbox = item.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            bx1, by1, bx2, by2 = bbox
+            v_x1, v_y1 = self._unrotated_to_visual_page_coords(bx1, by1, page_index=page_index)
+            v_x2, v_y2 = self._unrotated_to_visual_page_coords(bx2, by2, page_index=page_index)
+            min_vx = min(v_x1, v_x2)
+            max_vx = max(v_x1, v_x2)
+            min_vy = min(v_y1, v_y2)
+            max_vy = max(v_y1, v_y2)
+
+            dx = page_offset_x + min_vx * zoom - pad
+            dy = page_offset_y + min_vy * zoom - pad
+            dw = max(12.0, (max_vx - min_vx) * zoom) + 2.0 * pad
+            dh = max(10.0, (max_vy - min_vy) * zoom) + 2.0 * pad
+
+            cr.save()
+            # Translucent emerald/teal highlight fill + crisp pulsing border
+            cr.set_source_rgba(0.12, 0.72, 0.48, 0.30 * alpha)
+            cr.rectangle(dx, dy, dw, dh)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.06, 0.56, 0.36, 0.92 * alpha)
+            cr.set_line_width(2.0 + 1.0 * phase)
+            cr.stroke()
+            cr.restore()
