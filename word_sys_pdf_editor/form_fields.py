@@ -944,3 +944,303 @@ class AcroFormField:
             default_style=data.get("default_style", ""),
             rv_xhtml=data.get("rv_xhtml", ""),
         )
+
+
+def snapshot_field_rich_state(field: AcroFormField) -> Dict[str, Any]:
+    """Capture a deep snapshot of an `AcroFormField`'s value and Rich Text metadata for Undo/Redo."""
+    return {
+        "value": copy.deepcopy(getattr(field, "value", "")),
+        "rich_text_enabled": bool(getattr(field, "rich_text_enabled", False)),
+        "rich_text_runs": [copy.deepcopy(r) for r in (getattr(field, "rich_text_runs", None) or [])],
+        "rv_xhtml": str(getattr(field, "rv_xhtml", "") or ""),
+        "default_style": str(getattr(field, "default_style", "") or ""),
+        "field_flags": int(getattr(field, "field_flags", 0) or 0),
+    }
+
+
+def restore_field_rich_state(field: AcroFormField, state: Dict[str, Any]) -> None:
+    """Restore an `AcroFormField`'s value and Rich Text metadata from a snapshot dict."""
+    if field is None or not isinstance(state, dict):
+        return
+    field.value = copy.deepcopy(state.get("value", ""))
+    field.rich_text_enabled = bool(state.get("rich_text_enabled", False))
+    field.rich_text_runs = [
+        RichTextRun.from_dict(r) if isinstance(r, dict) else copy.deepcopy(r)
+        for r in (state.get("rich_text_runs") or [])
+    ]
+    field.rv_xhtml = str(state.get("rv_xhtml", "") or "")
+    field.default_style = str(state.get("default_style", "") or "")
+    field.field_flags = int(state.get("field_flags", 0) or 0)
+    field.is_modified = True
+
+
+def ensure_rich_text_buffer_tags(buf) -> None:
+    """Ensure standard `bold`, `italic`, `underline`, and `strikethrough` tags exist on a `Gtk.TextBuffer`."""
+    from gi.repository import Pango
+
+    table = buf.get_tag_table()
+    if table.lookup("bold") is None:
+        buf.create_tag("bold", weight=Pango.Weight.BOLD)
+    if table.lookup("italic") is None:
+        buf.create_tag("italic", style=Pango.Style.ITALIC)
+    if table.lookup("underline") is None:
+        buf.create_tag("underline", underline=Pango.Underline.SINGLE)
+    if table.lookup("strikethrough") is None:
+        buf.create_tag("strikethrough", strikethrough=True)
+
+
+def ensure_rich_text_size_tag(buf, size_pt: float):
+    """Return or create a `size:<pt>` tag on `buf`."""
+    eff = max(4.0, min(96.0, round(float(size_pt), 1)))
+    tag_name = f"size:{eff:.1f}"
+    table = buf.get_tag_table()
+    tag = table.lookup(tag_name)
+    if tag is None:
+        tag = buf.create_tag(tag_name, size_points=eff)
+    return tag
+
+
+def ensure_rich_text_color_tag(buf, color_hex: str):
+    """Return or create a `color:#rrggbb` tag on `buf`."""
+    parsed = parse_css_color(color_hex)
+    norm_hex = color_tuple_to_hex(parsed, default="#000000")
+    tag_name = f"color:{norm_hex}"
+    table = buf.get_tag_table()
+    tag = table.lookup(tag_name)
+    if tag is None:
+        tag = buf.create_tag(tag_name, foreground=norm_hex)
+    return tag
+
+
+def populate_text_buffer_from_field(buf, field: AcroFormField) -> None:
+    """Populate a `Gtk.TextBuffer` with a field's `rich_text_runs` (or plain `value`) and apply formatting tags."""
+    ensure_rich_text_buffer_tags(buf)
+    buf.set_text("")
+
+    runs = list(getattr(field, "rich_text_runs", None) or [])
+    if not runs:
+        val_str = str(field.value if field.value is not None else "")
+        if val_str:
+            buf.set_text(val_str)
+        return
+
+    base_size = float(field.text_fontsize) if field.text_fontsize and field.text_fontsize > 0 else 12.0
+    base_col = normalize_color(field.text_color) if field.text_color is not None else (0.0, 0.0, 0.0)
+
+    for run in runs:
+        txt = str(run.text or "")
+        if not txt:
+            continue
+        start_offset = buf.get_char_count()
+        end_iter = buf.get_end_iter()
+        buf.insert(end_iter, txt)
+        s_it = buf.get_iter_at_offset(start_offset)
+        e_it = buf.get_end_iter()
+
+        if run.bold:
+            buf.apply_tag_by_name("bold", s_it, e_it)
+        if run.italic:
+            buf.apply_tag_by_name("italic", s_it, e_it)
+        if run.underline:
+            buf.apply_tag_by_name("underline", s_it, e_it)
+        if run.strikethrough:
+            buf.apply_tag_by_name("strikethrough", s_it, e_it)
+        if run.font_size is not None and run.font_size > 0 and abs(run.font_size - base_size) >= 0.05:
+            size_tag = ensure_rich_text_size_tag(buf, run.font_size)
+            buf.apply_tag(size_tag, s_it, e_it)
+        if run.color is not None and not _colors_equal(run.color, base_col):
+            col_tag = ensure_rich_text_color_tag(buf, color_tuple_to_hex(run.color))
+            buf.apply_tag(col_tag, s_it, e_it)
+
+
+def _extract_style_from_tags(tags, base_family: str, base_size: float, base_col: Tuple[float, float, float]) -> Dict[str, Any]:
+    bold = False
+    italic = False
+    underline = False
+    strikethrough = False
+    size = base_size
+    color = base_col
+    for t in tags or []:
+        tname = t.get_property("name") or ""
+        if tname == "bold":
+            bold = True
+        elif tname == "italic":
+            italic = True
+        elif tname == "underline":
+            underline = True
+        elif tname == "strikethrough":
+            strikethrough = True
+        elif tname.startswith("size:"):
+            try:
+                size = float(tname.split(":", 1)[1])
+            except ValueError:
+                pass
+        elif tname.startswith("color:"):
+            c = parse_css_color(tname.split(":", 1)[1])
+            if c is not None:
+                color = c
+    return {
+        "bold": bold,
+        "italic": italic,
+        "underline": underline,
+        "strikethrough": strikethrough,
+        "font_family": base_family,
+        "font_size": size,
+        "color": color,
+    }
+
+
+def extract_runs_from_text_buffer(buf, field: AcroFormField) -> List[RichTextRun]:
+    """Extract coalesced `RichTextRun` objects from a tag-enabled `Gtk.TextBuffer`."""
+    base_family = getattr(field, "font_family", None) or "Helvetica"
+    base_size = float(field.text_fontsize) if field.text_fontsize and field.text_fontsize > 0 else 12.0
+    base_col = normalize_color(field.text_color) if field.text_color is not None else (0.0, 0.0, 0.0)
+
+    start_it = buf.get_start_iter()
+    end_it = buf.get_end_iter()
+    if start_it.equal(end_it):
+        return []
+
+    runs: List[RichTextRun] = []
+    cur = start_it.copy()
+    while not cur.equal(end_it):
+        nxt = cur.copy()
+        if not nxt.forward_to_tag_toggle(None):
+            nxt = end_it.copy()
+        if nxt.equal(cur):
+            nxt.forward_char()
+        seg_text = buf.get_text(cur, nxt, True)
+        if seg_text:
+            st = _extract_style_from_tags(cur.get_tags(), base_family, base_size, base_col)
+            runs.append(
+                RichTextRun(
+                    text=seg_text,
+                    bold=st["bold"],
+                    italic=st["italic"],
+                    underline=st["underline"],
+                    strikethrough=st["strikethrough"],
+                    font_family=st["font_family"],
+                    font_size=st["font_size"],
+                    color=st["color"],
+                )
+            )
+        cur = nxt
+
+    return coalesce_rich_text_runs(runs)
+
+
+def get_buffer_styles_at_cursor(buf, field: AcroFormField) -> Dict[str, Any]:
+    """Return active formatting styles at the current selection start or cursor position."""
+    base_family = getattr(field, "font_family", None) or "Helvetica"
+    base_size = float(field.text_fontsize) if field.text_fontsize and field.text_fontsize > 0 else 12.0
+    base_col = normalize_color(field.text_color) if field.text_color is not None else (0.0, 0.0, 0.0)
+
+    bounds = buf.get_selection_bounds()
+    if bounds and len(bounds) == 2:
+        probe_it = bounds[0]
+    else:
+        insert_mark = buf.get_insert()
+        probe_it = buf.get_iter_at_mark(insert_mark)
+        # If at end of buffer (or right after styled text), inspect preceding character
+        if probe_it.get_offset() > 0:
+            prev_it = probe_it.copy()
+            prev_it.backward_char()
+            if prev_it.get_tags():
+                probe_it = prev_it
+
+    return _extract_style_from_tags(probe_it.get_tags(), base_family, base_size, base_col)
+
+
+def _remove_prefixed_tags_in_range(buf, prefix: str, start_it, end_it) -> None:
+    table = buf.get_tag_table()
+    to_remove = []
+    table.foreach(lambda tag, _data: to_remove.append(tag) if (tag.get_property("name") or "").startswith(prefix) else None, None)
+    for tag in to_remove:
+        buf.remove_tag(tag, start_it, end_it)
+
+
+def toggle_buffer_style_tag(
+    buf,
+    tag_name: str,
+    active_styles: Optional[Dict[str, Any]] = None,
+    force_state: Optional[bool] = None,
+) -> bool:
+    """Toggle (`bold`, `italic`, `underline`, `strikethrough`) on selection or pending typing styles.
+
+    Returns the resulting boolean state of `tag_name`.
+    """
+    ensure_rich_text_buffer_tags(buf)
+    tag = buf.get_tag_table().lookup(tag_name)
+    if tag is None:
+        return False
+
+    bounds = buf.get_selection_bounds()
+    if bounds and len(bounds) == 2:
+        s_it, e_it = bounds
+        if force_state is None:
+            # Check if entire selection currently has the tag
+            probe = s_it.copy()
+            all_have = True
+            while probe.compare(e_it) < 0:
+                if not probe.has_tag(tag):
+                    all_have = False
+                    break
+                if not probe.forward_to_tag_toggle(tag):
+                    break
+            new_state = not all_have
+        else:
+            new_state = bool(force_state)
+
+        if new_state:
+            buf.apply_tag(tag, s_it, e_it)
+        else:
+            buf.remove_tag(tag, s_it, e_it)
+        if active_styles is not None:
+            active_styles[tag_name] = new_state
+        return new_state
+
+    # Caret only (no selection): update pending typing style
+    cur_state = bool(active_styles.get(tag_name, False)) if active_styles is not None else False
+    new_state = (not cur_state) if force_state is None else bool(force_state)
+    if active_styles is not None:
+        active_styles[tag_name] = new_state
+    return new_state
+
+
+def apply_buffer_size_tag(
+    buf,
+    size_pt: float,
+    active_styles: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Apply `size:<pt>` tag to current selection or pending typing styles."""
+    eff = max(4.0, min(96.0, round(float(size_pt), 1)))
+    tag = ensure_rich_text_size_tag(buf, eff)
+    bounds = buf.get_selection_bounds()
+    if bounds and len(bounds) == 2:
+        s_it, e_it = bounds
+        _remove_prefixed_tags_in_range(buf, "size:", s_it, e_it)
+        buf.apply_tag(tag, s_it, e_it)
+    if active_styles is not None:
+        active_styles["font_size"] = eff
+
+
+def apply_buffer_color_tag(
+    buf,
+    color_rgb_or_hex: Union[str, Sequence[float]],
+    active_styles: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Apply `color:#rrggbb` tag to current selection or pending typing styles. Returns normalized `#rrggbb`."""
+    if isinstance(color_rgb_or_hex, str):
+        parsed = parse_css_color(color_rgb_or_hex) or (0.0, 0.0, 0.0)
+    else:
+        parsed = normalize_color(tuple(color_rgb_or_hex[:3]))
+    norm_hex = color_tuple_to_hex(parsed, default="#000000")
+    tag = ensure_rich_text_color_tag(buf, norm_hex)
+    bounds = buf.get_selection_bounds()
+    if bounds and len(bounds) == 2:
+        s_it, e_it = bounds
+        _remove_prefixed_tags_in_range(buf, "color:", s_it, e_it)
+        buf.apply_tag(tag, s_it, e_it)
+    if active_styles is not None:
+        active_styles["color"] = parsed
+    return norm_hex

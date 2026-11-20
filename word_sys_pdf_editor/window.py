@@ -1045,6 +1045,25 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 font-size: 13px;
                 color: #111111;
             }
+            .acroform-singleline-tv {
+                min-height: 0px;
+                margin-bottom: 0px;
+                border: none;
+                padding: 2px 4px;
+            }
+            .rich-text-mini-toolbar {
+                background-color: @popover_bg_color;
+                border: 1px solid @borders;
+                border-radius: 8px;
+                padding: 3px 6px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+            }
+            .rich-text-mini-toolbar button,
+            .rich-text-mini-toolbar togglebutton {
+                min-width: 26px;
+                min-height: 24px;
+                padding: 2px 5px;
+            }
             .acroform-check {
                 background: transparent;
                 padding: 0;
@@ -7977,6 +7996,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _clear_form_field_overlays(self):
         """Remove all existing interactive form field overlay widgets."""
+        mini_tb = getattr(self, '_active_form_field_mini_toolbar', None)
+        if mini_tb and hasattr(self, 'pdf_overlay') and self.pdf_overlay:
+            try:
+                self.pdf_overlay.remove_overlay(mini_tb)
+            except Exception:
+                pass
+        self._active_form_field_mini_toolbar = None
+        self._rich_toolbar_interacting = False
+
         active_container = getattr(self, '_active_form_field_editor_container', None)
         if active_container and hasattr(self, 'pdf_overlay') and self.pdf_overlay:
             try:
@@ -8010,6 +8038,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             container.set_margin_start(wx)
             container.set_margin_top(wy)
             container.set_size_request(ww, wh)
+            mini_tb = getattr(self, '_active_form_field_mini_toolbar', None)
+            if mini_tb is not None:
+                tb_y = max(4, wy - 40) if wy >= 44 else (wy + wh + 4)
+                mini_tb.set_margin_start(max(4, wx))
+                mini_tb.set_margin_top(tb_y)
 
         if not hasattr(self, '_form_field_overlay_widgets') or not self._form_field_overlay_widgets:
             return
@@ -8079,11 +8112,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 if widget.get_text() != val_str:
                     widget.set_text(val_str)
             elif isinstance(widget, Gtk.TextView):
-                val_str = str(field.value if field.value is not None else "")
                 buf = widget.get_buffer()
-                start, end = buf.get_bounds()
-                if buf.get_text(start, end, True) != val_str:
-                    buf.set_text(val_str)
+                if getattr(field, 'rich_text_enabled', False) or getattr(field, 'rich_text_runs', None):
+                    from .form_fields import populate_text_buffer_from_field
+                    populate_text_buffer_from_field(buf, field)
+                else:
+                    val_str = str(field.value if field.value is not None else "")
+                    start, end = buf.get_bounds()
+                    if buf.get_text(start, end, True) != val_str:
+                        buf.set_text(val_str)
             elif isinstance(widget, Gtk.CheckButton):
                 active_bool = bool(field.is_checked)
                 if widget.get_active() != active_bool:
@@ -8575,34 +8612,32 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if getattr(field, 'is_read_only', False):
             return
 
+        from .form_fields import (
+            apply_buffer_color_tag,
+            apply_buffer_size_tag,
+            color_tuple_to_hex,
+            ensure_rich_text_buffer_tags,
+            ensure_rich_text_color_tag,
+            ensure_rich_text_size_tag,
+            get_buffer_styles_at_cursor,
+            populate_text_buffer_from_field,
+            snapshot_field_rich_state,
+            toggle_buffer_style_tag,
+        )
+
         self._close_active_form_field_editor()
         self._active_editing_form_field = field
         self._active_form_field_initial_val = field.value
+        self._active_form_field_initial_rich_state = snapshot_field_rich_state(field)
+        self._rich_toolbar_interacting = False
 
         wx, wy, ww, wh = self._compute_form_field_screen_geometry(field)
+        mini_toolbar = None
 
-        if getattr(field, 'is_multiline', False):
-            scroll = Gtk.ScrolledWindow()
-            scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-            scroll.add_css_class("acroform-frame")
-            scroll.set_halign(Gtk.Align.START)
-            scroll.set_valign(Gtk.Align.START)
-            scroll.set_margin_start(wx)
-            scroll.set_margin_top(wy)
-            scroll.set_size_request(ww, wh)
-
-            tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
-            tv.add_css_class("acroform-textview")
-            buf = tv.get_buffer()
-            buf.set_text(str(field.value if field.value is not None else ""))
-            scroll.set_child(tv)
-            container = scroll
-            widget = tv
-        else:
+        if getattr(field, 'is_password', False):
             entry = Gtk.Entry()
             entry.add_css_class("acroform-entry")
-            if getattr(field, 'is_password', False):
-                entry.set_visibility(False)
+            entry.set_visibility(False)
             if getattr(field, 'max_length', 0) > 0:
                 entry.set_max_length(field.max_length)
             entry.set_text(str(field.value if field.value is not None else ""))
@@ -8613,24 +8648,276 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             entry.set_size_request(ww, wh)
             container = entry
             widget = entry
+        else:
+            is_multi = bool(getattr(field, 'is_multiline', False))
+            scroll = Gtk.ScrolledWindow()
+            if is_multi:
+                scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+            else:
+                scroll.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.NEVER)
+            scroll.add_css_class("acroform-frame")
+            scroll.set_halign(Gtk.Align.START)
+            scroll.set_valign(Gtk.Align.START)
+            scroll.set_margin_start(wx)
+            scroll.set_margin_top(wy)
+            scroll.set_size_request(ww, wh)
+
+            tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR if is_multi else Gtk.WrapMode.NONE)
+            tv.add_css_class("acroform-textview")
+            if not is_multi:
+                tv.add_css_class("acroform-singleline-tv")
+                tv.set_accepts_tab(False)
+            buf = tv.get_buffer()
+            ensure_rich_text_buffer_tags(buf)
+            populate_text_buffer_from_field(buf, field)
+            scroll.set_child(tv)
+            container = scroll
+            widget = tv
+
+            base_size = float(field.text_fontsize) if field.text_fontsize and field.text_fontsize > 0 else 12.0
+            base_col = field.text_color if field.text_color is not None else (0.0, 0.0, 0.0)
+            active_styles = get_buffer_styles_at_cursor(buf, field)
+            syncing_toolbar = [False]
+
+            # Build compact floating Rich Text mini-toolbar anchored above the active field
+            mini_toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+            mini_toolbar.add_css_class("rich-text-mini-toolbar")
+            mini_toolbar.set_halign(Gtk.Align.START)
+            mini_toolbar.set_valign(Gtk.Align.START)
+            tb_y = max(4, wy - 40) if wy >= 44 else (wy + wh + 4)
+            mini_toolbar.set_margin_start(max(4, wx))
+            mini_toolbar.set_margin_top(tb_y)
+
+            btn_bold = Gtk.ToggleButton()
+            lbl_b = Gtk.Label()
+            lbl_b.set_markup("<b>B</b>")
+            btn_bold.set_child(lbl_b)
+            btn_bold.set_tooltip_text(f"{_('bold_tip')} (Ctrl+B)")
+            btn_bold.set_focus_on_click(False)
+
+            btn_italic = Gtk.ToggleButton()
+            lbl_i = Gtk.Label()
+            lbl_i.set_markup("<i>I</i>")
+            btn_italic.set_child(lbl_i)
+            btn_italic.set_tooltip_text(f"{_('italic_tip')} (Ctrl+I)")
+            btn_italic.set_focus_on_click(False)
+
+            btn_underline = Gtk.ToggleButton()
+            lbl_u = Gtk.Label()
+            lbl_u.set_markup("<u>U</u>")
+            btn_underline.set_child(lbl_u)
+            btn_underline.set_tooltip_text(f"{_('underline_tip')} (Ctrl+U)")
+            btn_underline.set_focus_on_click(False)
+
+            btn_strike = Gtk.ToggleButton()
+            lbl_s = Gtk.Label()
+            lbl_s.set_markup("<s>S</s>")
+            btn_strike.set_child(lbl_s)
+            btn_strike.set_tooltip_text(_("strikethrough_tip"))
+            btn_strike.set_focus_on_click(False)
+
+            size_adj = Gtk.Adjustment(value=base_size, lower=6.0, upper=72.0, step_increment=1.0, page_increment=2.0)
+            spin_size = Gtk.SpinButton(adjustment=size_adj, climb_rate=1.0, digits=0)
+            spin_size.set_width_chars(3)
+            spin_size.set_tooltip_text(_("font_size_tip"))
+
+            btn_color = Gtk.ColorButton()
+            rgba_init = Gdk.RGBA()
+            rgba_init.parse(color_tuple_to_hex(base_col, default="#000000"))
+            btn_color.set_rgba(rgba_init)
+            btn_color.set_tooltip_text(_("color_tip"))
+            btn_color.set_focus_on_click(False)
+
+            mini_toolbar.append(btn_bold)
+            mini_toolbar.append(btn_italic)
+            mini_toolbar.append(btn_underline)
+            mini_toolbar.append(btn_strike)
+            mini_toolbar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+            mini_toolbar.append(spin_size)
+            mini_toolbar.append(btn_color)
+
+            mini_toolbar._controls = {
+                "bold": btn_bold,
+                "italic": btn_italic,
+                "underline": btn_underline,
+                "strikethrough": btn_strike,
+                "font_size": spin_size,
+                "color": btn_color,
+            }
+
+            def _sync_toolbar_from_cursor(*_args):
+                if syncing_toolbar[0]:
+                    return
+                syncing_toolbar[0] = True
+                try:
+                    st = get_buffer_styles_at_cursor(buf, field)
+                    active_styles.update(st)
+                    btn_bold.set_active(bool(st.get("bold", False)))
+                    btn_italic.set_active(bool(st.get("italic", False)))
+                    btn_underline.set_active(bool(st.get("underline", False)))
+                    btn_strike.set_active(bool(st.get("strikethrough", False)))
+                    st_sz = float(st.get("font_size") or base_size)
+                    if abs(spin_size.get_value() - st_sz) >= 0.5:
+                        spin_size.set_value(st_sz)
+                    st_col = st.get("color") or base_col
+                    new_rgba = Gdk.RGBA()
+                    new_rgba.parse(color_tuple_to_hex(st_col, default="#000000"))
+                    btn_color.set_rgba(new_rgba)
+                finally:
+                    syncing_toolbar[0] = False
+
+            def _make_style_toggle_cb(tag_name):
+                def _on_toggled(btn):
+                    if syncing_toolbar[0]:
+                        return
+                    syncing_toolbar[0] = True
+                    try:
+                        res = toggle_buffer_style_tag(buf, tag_name, active_styles=active_styles, force_state=btn.get_active())
+                        btn.set_active(res)
+                    finally:
+                        syncing_toolbar[0] = False
+                return _on_toggled
+
+            btn_bold.connect("toggled", _make_style_toggle_cb("bold"))
+            btn_italic.connect("toggled", _make_style_toggle_cb("italic"))
+            btn_underline.connect("toggled", _make_style_toggle_cb("underline"))
+            btn_strike.connect("toggled", _make_style_toggle_cb("strikethrough"))
+
+            def _on_size_changed(sp):
+                if syncing_toolbar[0]:
+                    return
+                apply_buffer_size_tag(buf, sp.get_value(), active_styles=active_styles)
+
+            spin_size.connect("value-changed", _on_size_changed)
+
+            def _on_color_set(cb):
+                self._rich_toolbar_interacting = False
+                if syncing_toolbar[0]:
+                    return
+                rgba = cb.get_rgba()
+                apply_buffer_color_tag(buf, (rgba.red, rgba.green, rgba.blue), active_styles=active_styles)
+                try:
+                    tv.grab_focus()
+                except Exception:
+                    pass
+
+            btn_color.connect("color-set", _on_color_set)
+            color_click_ctrl = Gtk.GestureClick.new()
+            color_click_ctrl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+            color_click_ctrl.connect("pressed", lambda *a: setattr(self, '_rich_toolbar_interacting', True))
+            btn_color.add_controller(color_click_ctrl)
+
+            # Apply active typing styles to newly typed text & enforce single-line / max_length
+            applying_insert = [False]
+            def _on_insert_text_after(text_buf, location, text, length):
+                if applying_insert[0] or not text:
+                    return
+                applying_insert[0] = True
+                try:
+                    char_len = len(text)
+                    end_offset = location.get_offset()
+                    start_offset = max(0, end_offset - char_len)
+
+                    # Strip accidental newlines pasted into single-line fields
+                    if not is_multi and ("\n" in text or "\r" in text):
+                        cleaned = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+                        s_i = text_buf.get_iter_at_offset(start_offset)
+                        e_i = text_buf.get_iter_at_offset(end_offset)
+                        text_buf.delete(s_i, e_i)
+                        ins_i = text_buf.get_iter_at_offset(start_offset)
+                        text_buf.insert(ins_i, cleaned)
+                        char_len = len(cleaned)
+                        end_offset = start_offset + char_len
+
+                    # Enforce max_length if defined
+                    max_len = int(getattr(field, 'max_length', 0) or 0)
+                    if max_len > 0 and text_buf.get_char_count() > max_len:
+                        trim_s = text_buf.get_iter_at_offset(max_len)
+                        trim_e = text_buf.get_end_iter()
+                        text_buf.delete(trim_s, trim_e)
+                        end_offset = min(end_offset, max_len)
+
+                    if end_offset > start_offset:
+                        s_it = text_buf.get_iter_at_offset(start_offset)
+                        e_it = text_buf.get_iter_at_offset(end_offset)
+                        for tname in ("bold", "italic", "underline", "strikethrough"):
+                            if active_styles.get(tname):
+                                text_buf.apply_tag_by_name(tname, s_it, e_it)
+                        sz_val = active_styles.get("font_size")
+                        if sz_val is not None and abs(float(sz_val) - base_size) >= 0.05:
+                            text_buf.apply_tag(ensure_rich_text_size_tag(text_buf, float(sz_val)), s_it, e_it)
+                        col_val = active_styles.get("color")
+                        if col_val is not None:
+                            col_hex = color_tuple_to_hex(col_val, default="#000000")
+                            if col_hex != color_tuple_to_hex(base_col, default="#000000"):
+                                text_buf.apply_tag(ensure_rich_text_color_tag(text_buf, col_hex), s_it, e_it)
+                finally:
+                    applying_insert[0] = False
+
+            buf.connect_after("insert-text", _on_insert_text_after)
+            buf.connect("notify::cursor-position", _sync_toolbar_from_cursor)
+            buf.connect("notify::has-selection", _sync_toolbar_from_cursor)
+            _sync_toolbar_from_cursor()
 
         entry_data = {
             "field": field,
             "container": container,
             "widget": widget,
+            "mini_toolbar": mini_toolbar,
             "initial_val": field.value,
             "current_val": field.value,
         }
         self._form_field_overlay_widgets[field.field_id] = entry_data
         self._active_form_field_editor_container = container
         self._active_form_field_editor_widget = widget
+        self._active_form_field_mini_toolbar = mini_toolbar
+
+        def _is_descendant(child_w, ancestor_w) -> bool:
+            if child_w is None or ancestor_w is None:
+                return False
+            cur = child_w
+            for _ in range(16):
+                if cur is ancestor_w:
+                    return True
+                cur = cur.get_parent() if hasattr(cur, "get_parent") else None
+                if cur is None:
+                    break
+            return False
+
+        def _on_editor_focus_leave(*_args):
+            def _deferred_check():
+                if getattr(self, '_active_editing_form_field', None) is not field:
+                    return False
+                if getattr(self, '_rich_toolbar_interacting', False):
+                    return False
+                focused = self.get_focus() if hasattr(self, 'get_focus') else None
+                if focused is not None and (
+                    _is_descendant(focused, container)
+                    or _is_descendant(focused, mini_toolbar)
+                ):
+                    return False
+                self._close_active_form_field_editor()
+                return False
+            GLib.idle_add(_deferred_check)
 
         focus_ctrl = Gtk.EventControllerFocus()
-        focus_ctrl.connect("leave", lambda *a: self._close_active_form_field_editor())
+        focus_ctrl.connect("leave", _on_editor_focus_leave)
         widget.add_controller(focus_ctrl)
 
         key_ctrl = Gtk.EventControllerKey()
         def _on_key(ctrl, keyval, keycode, state):
+            ctrl_held = bool(state & Gdk.ModifierType.CONTROL_MASK)
+            if ctrl_held and isinstance(widget, Gtk.TextView) and mini_toolbar is not None:
+                ctrls = getattr(mini_toolbar, "_controls", {})
+                if keyval in (Gdk.KEY_b, Gdk.KEY_B) and "bold" in ctrls:
+                    ctrls["bold"].set_active(not ctrls["bold"].get_active())
+                    return True
+                if keyval in (Gdk.KEY_i, Gdk.KEY_I) and "italic" in ctrls:
+                    ctrls["italic"].set_active(not ctrls["italic"].get_active())
+                    return True
+                if keyval in (Gdk.KEY_u, Gdk.KEY_U) and "underline" in ctrls:
+                    ctrls["underline"].set_active(not ctrls["underline"].get_active())
+                    return True
             if keyval == Gdk.KEY_Escape:
                 self._cancel_active_form_field_editor()
                 return True
@@ -8646,6 +8933,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         if hasattr(self, 'pdf_overlay') and self.pdf_overlay:
             self.pdf_overlay.add_overlay(container)
+            if mini_toolbar is not None:
+                self.pdf_overlay.add_overlay(mini_toolbar)
 
         try:
             widget.grab_focus()
@@ -8659,11 +8948,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
 
     def _close_active_form_field_editor(self):
-        """Close active in-place form field editor, save value, and remove ephemeral widget."""
+        """Close active in-place form field editor, persist plain or Rich Text changes, and remove ephemeral widgets."""
         if getattr(self, '_active_editing_form_field', None) is None:
             return
         active_field = self._active_editing_form_field
         init_val = getattr(self, '_active_form_field_initial_val', active_field.value)
+        init_rich_state = getattr(self, '_active_form_field_initial_rich_state', None)
         widget = getattr(self, '_active_form_field_editor_widget', None)
 
         entry_data = self._get_overlay_for_field(active_field)
@@ -8685,12 +8975,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
 
         new_val = active_field.value
+        extracted_runs = None
         if isinstance(widget, Gtk.Entry):
             new_val = widget.get_text()
         elif isinstance(widget, Gtk.TextView):
+            from .form_fields import extract_runs_from_text_buffer
             buf = widget.get_buffer()
-            start, end = buf.get_bounds()
-            new_val = buf.get_text(start, end, True)
+            extracted_runs = extract_runs_from_text_buffer(buf, active_field)
+            if not getattr(active_field, 'is_multiline', False):
+                for r in extracted_runs:
+                    r.text = r.text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+            new_val = "".join(r.text for r in extracted_runs)
+
+        mini_tb = getattr(self, '_active_form_field_mini_toolbar', None)
+        if mini_tb and hasattr(self, 'pdf_overlay') and self.pdf_overlay:
+            try:
+                self.pdf_overlay.remove_overlay(mini_tb)
+            except Exception:
+                pass
+        self._active_form_field_mini_toolbar = None
+        self._rich_toolbar_interacting = False
 
         container = getattr(self, '_active_form_field_editor_container', None)
         if container and hasattr(self, 'pdf_overlay') and self.pdf_overlay:
@@ -8706,8 +9010,46 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._active_editing_form_field = None
         self._active_form_field_editor_container = None
         self._active_form_field_editor_widget = None
+        self._active_form_field_initial_rich_state = None
 
-        if new_val != init_val:
+        if extracted_runs is not None:
+            from .form_fields import snapshot_field_rich_state
+            eff_size = active_field.text_fontsize if active_field.text_fontsize and active_field.text_fontsize > 0 else 12.0
+            eff_col = active_field.text_color if active_field.text_color is not None else (0.0, 0.0, 0.0)
+            runs_have_rich = any(
+                r.has_formatting(
+                    default_font=active_field.font_family or "Helvetica",
+                    default_size=eff_size,
+                    default_color=eff_col,
+                )
+                for r in extracted_runs
+            )
+            init_runs_dicts = [r.to_dict() for r in (init_rich_state.get("rich_text_runs") or [])] if isinstance(init_rich_state, dict) else []
+            new_runs_dicts = [r.to_dict() for r in extracted_runs]
+            state_changed = (new_val != init_val) or (runs_have_rich and new_runs_dicts != init_runs_dicts) or (
+                bool(getattr(active_field, 'rich_text_enabled', False)) and new_runs_dicts != init_runs_dicts
+            )
+            if state_changed:
+                if getattr(active_field, 'rich_text_enabled', False) or runs_have_rich:
+                    old_state = init_rich_state if isinstance(init_rich_state, dict) else snapshot_field_rich_state(active_field)
+                    active_field.set_rich_text_runs(extracted_runs, auto_enable_rich_text=True)
+                    if self.doc:
+                        pdf_handler.apply_form_field_edits(self.doc, active_field.page_number, [active_field])
+                    new_state = snapshot_field_rich_state(active_field)
+                    self.document_modified = True
+                    cmd = EditFormFieldCommand(
+                        self,
+                        active_field,
+                        init_val,
+                        active_field.value,
+                        old_rich_state=old_state,
+                        new_rich_state=new_state,
+                    )
+                    self.undo_manager.add_command(cmd)
+                    self._update_ui_state()
+                else:
+                    self._sync_form_field_value(active_field, new_val, record_undo=True, old_val_override=init_val)
+        elif new_val != init_val:
             self._sync_form_field_value(active_field, new_val, record_undo=True, old_val_override=init_val)
 
         if hasattr(self, 'pdf_view') and self.pdf_view:
@@ -8718,6 +9060,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         """Cancel active in-place editing without saving changes."""
         if getattr(self, '_active_editing_form_field', None) is None:
             return
+        mini_tb = getattr(self, '_active_form_field_mini_toolbar', None)
+        if mini_tb and hasattr(self, 'pdf_overlay') and self.pdf_overlay:
+            try:
+                self.pdf_overlay.remove_overlay(mini_tb)
+            except Exception:
+                pass
+        self._active_form_field_mini_toolbar = None
+        self._rich_toolbar_interacting = False
+
         container = getattr(self, '_active_form_field_editor_container', None)
         if container and hasattr(self, 'pdf_overlay') and self.pdf_overlay:
             try:
@@ -8730,6 +9081,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._active_editing_form_field = None
         self._active_form_field_editor_container = None
         self._active_form_field_editor_widget = None
+        self._active_form_field_initial_rich_state = None
         if hasattr(self, 'pdf_view') and self.pdf_view:
             self.pdf_view.grab_focus()
             self.pdf_view.queue_draw()

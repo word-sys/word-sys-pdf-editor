@@ -2015,7 +2015,7 @@ class TestDenseAcroFormOverlayMemoryAndWidgetCount(unittest.TestCase):
         self.assertEqual(len(win._form_field_overlay_widgets), 1)
         self.assertEqual(win._active_editing_form_field, text_fields[0])
         first_widget = win._active_form_field_editor_widget
-        self.assertIsInstance(first_widget, Gtk.Entry)
+        self.assertIsInstance(first_widget, (Gtk.TextView, Gtk.Entry))
 
         # Switching directly to another text field closes the previous editor and keeps widget count at 1
         win._open_form_field_editor(text_fields[1])

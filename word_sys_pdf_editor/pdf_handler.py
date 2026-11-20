@@ -4341,6 +4341,7 @@ def apply_form_field_edits(
                 _synthesize_rich_text_appearance_stream(doc, field, widget_xref=wxref)
             else:
                 matched_widget.field_value = field.value
+                matched_widget.field_flags = int(getattr(matched_widget, "field_flags", 0) or 0) & ~FIELD_FLAG_RICH_TEXT
                 if not getattr(matched_widget, "border_color", None):
                     matched_widget.border_color = (0.35, 0.35, 0.35)
                     matched_widget.border_width = 1.0
@@ -4348,6 +4349,17 @@ def apply_form_field_edits(
                     if not getattr(matched_widget, "fill_color", None):
                         matched_widget.fill_color = (1.0, 1.0, 1.0)
                 matched_widget.update()
+                for target_x in ({wxref, field_xref} - {0}):
+                    rv_t, _ = doc.xref_get_key(target_x, "RV")
+                    if rv_t != "null":
+                        doc.xref_set_key(target_x, "RV", "null")
+                    ff_t, ff_v = doc.xref_get_key(target_x, "Ff")
+                    if ff_t == "int":
+                        try:
+                            cleaned_ff = int(ff_v) & ~FIELD_FLAG_RICH_TEXT
+                            doc.xref_set_key(target_x, "Ff", str(cleaned_ff))
+                        except (TypeError, ValueError):
+                            pass
 
             updated_count += 1
             touched_pages.add(p_idx)

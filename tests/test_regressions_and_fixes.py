@@ -4173,6 +4173,199 @@ class TestRichTextAppearanceStreamCairoAndFlattening:
             doc.close()
 
 
+class TestInteractiveRichTextFormOverlayAndUndoRedo:
+    """Verify interactive Rich Text form overlay Gtk.TextView, floating mini-toolbar, auto-enable, and Undo/Redo."""
+
+    def test_text_buffer_rich_text_roundtrip_and_tag_toggling(self):
+        from gi.repository import Gtk
+        from word_sys_pdf_editor.form_fields import (
+            AcroFormField,
+            RichTextRun,
+            apply_buffer_color_tag,
+            apply_buffer_size_tag,
+            extract_runs_from_text_buffer,
+            populate_text_buffer_from_field,
+            toggle_buffer_style_tag,
+        )
+
+        field = AcroFormField(
+            field_id="buf_rt",
+            xref=1,
+            page_number=0,
+            rect=(20.0, 20.0, 220.0, 60.0),
+            field_name="buf_rt",
+            text_fontsize=12.0,
+            text_color=(0.0, 0.0, 0.0),
+        )
+        field.set_rich_text_runs(
+            [
+                RichTextRun(text="Hello ", bold=False),
+                RichTextRun(text="World", bold=True, italic=True, color=(0.8, 0.0, 0.0), font_size=14.0),
+            ]
+        )
+
+        buf = Gtk.TextBuffer()
+        populate_text_buffer_from_field(buf, field)
+        extracted = extract_runs_from_text_buffer(buf, field)
+        assert len(extracted) == 2
+        assert extracted[0].text == "Hello " and extracted[0].bold is False
+        assert extracted[1].text == "World" and extracted[1].bold is True and extracted[1].italic is True
+        assert extracted[1].font_size == 14.0
+
+        # Select "Hello" (0..5) and toggle underline + strikethrough + size 16 + blue color
+        buf.select_range(buf.get_iter_at_offset(0), buf.get_iter_at_offset(5))
+        assert toggle_buffer_style_tag(buf, "underline") is True
+        assert toggle_buffer_style_tag(buf, "strikethrough") is True
+        apply_buffer_size_tag(buf, 16.0)
+        apply_buffer_color_tag(buf, "#0000ff")
+
+        extracted2 = extract_runs_from_text_buffer(buf, field)
+        assert extracted2[0].text == "Hello"
+        assert extracted2[0].underline is True
+        assert extracted2[0].strikethrough is True
+        assert extracted2[0].font_size == 16.0
+        assert extracted2[0].color == (0.0, 0.0, 1.0)
+
+    def test_open_form_field_editor_mini_toolbar_auto_enables_rich_text_and_undo_redo(self):
+        from unittest.mock import patch
+        from gi.repository import Adw, Gdk, Gtk
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import FIELD_FLAG_RICH_TEXT
+        from word_sys_pdf_editor.undo_manager import EditFormFieldCommand, ModifyFormFieldValueCommand
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        assert ModifyFormFieldValueCommand is EditFormFieldCommand
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+        pdf_handler.add_form_widget(
+            doc,
+            0,
+            "text",
+            (60, 100, 320, 130),
+            "std_single_line",
+            default_value="Hello World",
+            is_multiline=False,
+            text_fontsize=12.0,
+        )
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_rich_form_overlay")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess = win.create_session(doc=doc, filepath="/tmp/rich_overlay_test.pdf")
+                win.add_session(sess, switch_to=True)
+                win.view_mode = True
+                win._load_acroform_fields_for_page(0)
+
+                assert len(win.form_fields) == 1
+                field = win.form_fields[0]
+                assert field.rich_text_enabled is False
+
+                # Open ephemeral editor in View Mode
+                win._open_form_field_editor(field)
+                tv = win._active_form_field_editor_widget
+                mini_tb = win._active_form_field_mini_toolbar
+                assert isinstance(tv, Gtk.TextView)
+                assert mini_tb is not None
+                ctrls = mini_tb._controls
+                for key in ("bold", "italic", "underline", "strikethrough", "font_size", "color"):
+                    assert key in ctrls
+
+                # Select "World" (offsets 6..11) and apply Bold, Italic, Underline, Size 15, Red color
+                buf = tv.get_buffer()
+                buf.select_range(buf.get_iter_at_offset(6), buf.get_iter_at_offset(11))
+                ctrls["bold"].set_active(True)
+                ctrls["italic"].set_active(True)
+                ctrls["underline"].set_active(True)
+                ctrls["font_size"].set_value(15.0)
+                red_rgba = Gdk.RGBA()
+                red_rgba.parse("#cc0000")
+                ctrls["color"].set_rgba(red_rgba)
+                ctrls["color"].emit("color-set")
+
+                # Close & commit editor
+                win._close_active_form_field_editor()
+                assert win._active_form_field_editor_widget is None
+                assert win._active_form_field_mini_toolbar is None
+
+                # Standard text field was automatically promoted to Rich Text with /RV, /DS, /Ff bit 26
+                assert field.rich_text_enabled is True
+                assert bool(field.field_flags & FIELD_FLAG_RICH_TEXT) is True
+                assert field.value == "Hello World"
+                assert "Acroform:2.7.0.0" in field.rv_xhtml
+                assert any(
+                    r.text == "World" and r.bold and r.italic and r.underline and r.font_size == 15.0
+                    for r in field.rich_text_runs
+                )
+                rv_type, rv_val = doc.xref_get_key(field.xref, "RV")
+                assert rv_type == "string" and "World" in rv_val
+
+                # Undo restores field back to plain non-rich state
+                assert win.undo_manager.can_undo() is True
+                win.undo_manager.undo()
+                assert field.rich_text_enabled is False
+                assert field.rich_text_runs == []
+                assert field.rv_xhtml == ""
+                rv_after_undo_t, _ = doc.xref_get_key(field.xref, "RV")
+                assert rv_after_undo_t == "null"
+
+                # Redo re-applies Rich Text runs, /RV, and /Ff bit 26
+                win.undo_manager.redo()
+                assert field.rich_text_enabled is True
+                assert bool(field.field_flags & FIELD_FLAG_RICH_TEXT) is True
+                assert any(r.text == "World" and r.bold and r.italic and r.underline for r in field.rich_text_runs)
+                rv_after_redo_t, rv_after_redo_v = doc.xref_get_key(field.xref, "RV")
+                assert rv_after_redo_t == "string" and "World" in rv_after_redo_v
+            finally:
+                win.close_document()
+                win.destroy()
+
+    def test_password_field_uses_masked_entry_without_rich_toolbar(self):
+        from unittest.mock import patch
+        from gi.repository import Adw, Gtk
+        from word_sys_pdf_editor.form_fields import AcroFormField
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_pwd_form_overlay")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess = win.create_session(doc=doc, filepath="/tmp/pwd_overlay_test.pdf")
+                win.add_session(sess, switch_to=True)
+                win.view_mode = True
+
+                pwd_field = AcroFormField(
+                    field_id="pwd_1",
+                    xref=99,
+                    page_number=0,
+                    rect=(50.0, 50.0, 200.0, 80.0),
+                    field_name="secret",
+                    field_type="text",
+                    is_password=True,
+                )
+                win.form_fields = [pwd_field]
+                win._open_form_field_editor(pwd_field)
+                assert isinstance(win._active_form_field_editor_widget, Gtk.Entry)
+                assert win._active_form_field_editor_widget.get_visibility() is False
+                assert win._active_form_field_mini_toolbar is None
+                win._cancel_active_form_field_editor()
+            finally:
+                win.close_document()
+                win.destroy()
+
+
+
 
 
 

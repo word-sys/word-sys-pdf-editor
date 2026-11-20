@@ -1228,29 +1228,49 @@ class ReplaceImageCommand(Command):
 
 
 class EditFormFieldCommand(Command):
-    """Command representing an interactive AcroForm field value modification."""
-    def __init__(self, window, target_field, old_value, new_value):
+    """Command representing an interactive AcroForm field value and Rich Text modification."""
+    def __init__(
+        self,
+        window,
+        target_field,
+        old_value,
+        new_value,
+        old_rich_state: Optional[Dict[str, Any]] = None,
+        new_rich_state: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__(window)
         self.target_field = target_field
         self.old_value = old_value
         self.new_value = new_value
+        self.old_rich_state = copy.deepcopy(old_rich_state) if isinstance(old_rich_state, dict) else None
+        self.new_rich_state = copy.deepcopy(new_rich_state) if isinstance(new_rich_state, dict) else None
 
     def execute(self):
-        self._apply_val(self.new_value)
+        self._apply_val(self.new_value, self.new_rich_state)
 
     def undo(self):
-        self._apply_val(self.old_value)
+        self._apply_val(self.old_value, self.old_rich_state)
 
-    def _apply_val(self, val):
-        self.target_field.set_value(val)
+    def _apply_val(self, val, rich_state: Optional[Dict[str, Any]] = None):
         doc = self._get_doc()
-        if doc:
-            pdf_handler.update_acroform_field_value(
-                doc,
-                self.target_field.page_number,
-                self.target_field.xref,
-                val
-            )
+        if rich_state is not None:
+            from .form_fields import restore_field_rich_state
+            restore_field_rich_state(self.target_field, rich_state)
+            if doc:
+                pdf_handler.apply_form_field_edits(
+                    doc,
+                    self.target_field.page_number,
+                    [self.target_field],
+                )
+        else:
+            self.target_field.set_value(val)
+            if doc:
+                pdf_handler.update_acroform_field_value(
+                    doc,
+                    self.target_field.page_number,
+                    self.target_field.xref,
+                    val
+                )
         sess = self._get_target_session()
         if sess is not None:
             sess.document_modified = True
@@ -1264,6 +1284,9 @@ class EditFormFieldCommand(Command):
                 self.window._update_ui_state()
         elif doc is not None and getattr(self.target_field, 'page_number', None) is not None:
             pdf_handler.invalidate_page_cache(doc, self.target_field.page_number)
+
+
+ModifyFormFieldValueCommand = EditFormFieldCommand
 
 
 class AddFormFieldCommand(Command):
