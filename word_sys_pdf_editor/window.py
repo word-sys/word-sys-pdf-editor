@@ -1304,6 +1304,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 getattr(session, "digital_signatures", None),
                 verifying=bool(getattr(session, "sig_inspection_in_progress", False)),
             )
+            if hasattr(self, '_update_external_reload_banner'):
+                self._update_external_reload_banner(session)
             if hasattr(self, 'search_bar') and self.search_bar and self.search_bar.get_search_mode():
                 self._on_search_query_changed(self.search_entry)
             elif hasattr(self, 'search_engine'):
@@ -1312,6 +1314,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if hasattr(self, 'search_engine'):
                 self.search_engine.clear()
             self._update_signature_banner(None)
+            if hasattr(self, '_update_external_reload_banner'):
+                self._update_external_reload_banner(None)
             self.set_title(constants.APP_NAME)
             if hasattr(self, 'stack') and self.stack:
                 any_docs = any(s.doc is not None for s in self.sessions)
@@ -1574,6 +1578,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._create_tab_for_session(session)
         if switch_to:
             self.set_active_session(session)
+        if getattr(session, 'doc', None) is not None and getattr(session, 'pdf_path', None):
+            if hasattr(self, '_attach_file_monitor_for_session'):
+                self._attach_file_monitor_for_session(session)
 
     def remove_session(self, session_or_id):
         """Remove a session from the session pool, close its tab, and cleanly close it."""
@@ -2225,6 +2232,29 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.signature_banner.append(close_banner_btn)
         self.signature_banner.set_visible(False)
         content_box.append(self.signature_banner)
+
+        # Non-intrusive External PDF Change / Auto-Reload Prompt Banner (for unsaved sessions)
+        self.external_reload_banner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.external_reload_banner.set_margin_start(12)
+        self.external_reload_banner.set_margin_end(12)
+        self.external_reload_banner.set_margin_top(6)
+        self.external_reload_banner.set_margin_bottom(6)
+        self.external_reload_banner.add_css_class("card")
+        self.external_reload_banner_icon = Gtk.Image.new_from_icon_name("view-refresh-symbolic")
+        self.external_reload_banner_label = Gtk.Label(xalign=0.0, hexpand=True)
+        self.external_reload_banner_label.set_wrap(True)
+        self.external_reload_banner_btn = Gtk.Button(label=_("btn_reload_pdf"))
+        self.external_reload_banner_btn.add_css_class("suggested-action")
+        self.external_reload_banner_btn.connect("clicked", self._on_external_reload_banner_clicked)
+        self.external_reload_banner_close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
+        self.external_reload_banner_close_btn.add_css_class("flat")
+        self.external_reload_banner_close_btn.connect("clicked", self._on_external_reload_banner_dismissed)
+        self.external_reload_banner.append(self.external_reload_banner_icon)
+        self.external_reload_banner.append(self.external_reload_banner_label)
+        self.external_reload_banner.append(self.external_reload_banner_btn)
+        self.external_reload_banner.append(self.external_reload_banner_close_btn)
+        self.external_reload_banner.set_visible(False)
+        content_box.append(self.external_reload_banner)
 
         # OCR Progress / Status Banner
         self.ocr_banner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -4196,6 +4226,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
             # Discover and load SyncTeX index for this document and apply any deferred forward search
             self._load_synctex_for_session(sess)
+            self._attach_file_monitor_for_session(sess)
             pending_map = getattr(self, '_pending_synctex_forward', None)
             if pending_map and filepath:
                 try:
@@ -5547,6 +5578,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if self._active_session.pages_model:
                 self._active_session.pages_model.remove_all()
         self._update_signature_banner(None)
+        if hasattr(self, '_update_external_reload_banner'):
+            self._update_external_reload_banner(None)
         self.temp_stroke = None
         self.selected_form_field = None
         if hasattr(self, 'search_engine') and self.search_engine:
@@ -5655,6 +5688,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.is_saving = True
         if target_sess:
             target_sess.is_saving = True
+            target_sess.suppress_file_monitor_until = time.monotonic() + 2.5
 
         if hasattr(self, 'save_spinner') and self.save_spinner:
             self.save_spinner.set_visible(True)
@@ -5709,10 +5743,21 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.document_modified = False 
                 if target_sess:
                     target_sess.is_modified = False
+                    target_sess.external_change_pending = False
                     target_sess.pdf_path = save_path
                     target_sess.original_file_path = save_path
+                    target_sess.suppress_file_monitor_until = time.monotonic() + 1.5
+                    try:
+                        if os.path.isfile(save_path):
+                            target_sess.last_loaded_mtime = os.path.getmtime(save_path)
+                    except OSError:
+                        pass
                     self._update_tab_title(target_sess)
                     self.set_title(f"{constants.APP_NAME} - {target_sess.display_title}")
+                    if hasattr(self, '_update_external_reload_banner'):
+                        self._update_external_reload_banner(target_sess)
+                    if hasattr(self, '_attach_file_monitor_for_session'):
+                        self._attach_file_monitor_for_session(target_sess)
                 if self.doc:
                     self.doc._is_modified = False
 
@@ -20474,4 +20519,302 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         btn_synctex.connect("clicked", _on_jump_clicked)
         popover_box.append(btn_synctex)
+        return True
+
+    # ------------------------------------------------------------------
+    # Live File Monitor & Seamless Auto-Reload for LaTeX Compilation
+    # ------------------------------------------------------------------
+
+    FILE_MONITOR_DEBOUNCE_MS = 400
+    FILE_MONITOR_MAX_TRAILER_RETRIES = 5
+
+    @staticmethod
+    def _is_pdf_file_ready_for_reload(filepath: str) -> bool:
+        """Return True when `filepath` exists, is non-empty, and has a complete PDF `%%EOF` trailer."""
+        if not filepath or not os.path.isfile(filepath):
+            return False
+        try:
+            size = os.path.getsize(filepath)
+            if size < 16:
+                return False
+            with open(filepath, "rb") as fh:
+                seek_pos = max(0, size - 1024)
+                fh.seek(seek_pos)
+                tail = fh.read(1024)
+            return b"%%EOF" in tail
+        except OSError:
+            return False
+
+    def _attach_file_monitor_for_session(self, session: DocumentSession) -> bool:
+        """Attach a `Gio.FileMonitor` to `session.pdf_path` with 400 ms compilation debounce."""
+        if session is None:
+            return False
+        if hasattr(session, 'stop_file_monitor'):
+            session.stop_file_monitor()
+
+        filepath = getattr(session, 'pdf_path', None)
+        if not filepath or not os.path.isfile(filepath):
+            return False
+
+        abs_path = os.path.abspath(filepath)
+        try:
+            session.last_loaded_mtime = os.path.getmtime(abs_path)
+        except OSError:
+            session.last_loaded_mtime = 0.0
+
+        try:
+            gfile = Gio.File.new_for_path(abs_path)
+            monitor = gfile.monitor_file(Gio.FileMonitorFlags.NONE, None)
+            hid = monitor.connect("changed", self._on_session_file_monitor_changed, session)
+            session.file_monitor = monitor
+            session.file_monitor_handler_id = hid
+            session.file_monitor_path = abs_path
+            session._file_monitor_retry_count = 0
+            return True
+        except Exception as e:
+            print(f"Warning: Could not attach Gio.FileMonitor for {abs_path}: {e}")
+            return False
+
+    def _on_session_file_monitor_changed(self, monitor, gfile, other_file, event_type, session):
+        """Debounce external PDF modification events from `Gio.FileMonitor` (400 ms)."""
+        relevant_events = (
+            Gio.FileMonitorEvent.CHANGED,
+            Gio.FileMonitorEvent.CHANGES_DONE_HINT,
+            Gio.FileMonitorEvent.CREATED,
+            Gio.FileMonitorEvent.MOVED_IN,
+            Gio.FileMonitorEvent.RENAMED,
+        )
+        if event_type not in relevant_events:
+            return
+        if session is None or session not in getattr(self, 'sessions', []):
+            return
+        if getattr(session, 'doc', None) is None:
+            return
+        if getattr(session, 'is_saving', False) or getattr(self, 'is_saving', False):
+            return
+        if time.monotonic() < float(getattr(session, 'suppress_file_monitor_until', 0.0)):
+            return
+
+        prev_id = getattr(session, 'file_monitor_debounce_id', None)
+        if prev_id is not None:
+            try:
+                GLib.source_remove(prev_id)
+            except Exception:
+                pass
+            session.file_monitor_debounce_id = None
+
+        session._file_monitor_retry_count = 0
+        session.file_monitor_debounce_id = GLib.timeout_add(
+            self.FILE_MONITOR_DEBOUNCE_MS,
+            self._on_file_monitor_debounce_fired,
+            session,
+        )
+
+    def _on_file_monitor_debounce_fired(self, session: DocumentSession) -> bool:
+        """Execute after 400 ms quiet period: auto-reload clean sessions or prompt if unsaved edits exist."""
+        if session is None:
+            return False
+        session.file_monitor_debounce_id = None
+
+        if session not in getattr(self, 'sessions', []) or getattr(session, 'doc', None) is None:
+            return False
+        filepath = getattr(session, 'pdf_path', None)
+        if not filepath or not os.path.isfile(filepath):
+            return False
+        if getattr(session, 'is_saving', False) or getattr(self, 'is_saving', False):
+            return False
+        if time.monotonic() < float(getattr(session, 'suppress_file_monitor_until', 0.0)):
+            return False
+
+        from .settings_manager import get_settings_manager
+        if not bool(get_settings_manager().get("auto_reload_modified_pdf", True)):
+            return False
+
+        # Wait until pdflatex / xelatex / lualatex finishes writing the PDF trailer
+        if not self._is_pdf_file_ready_for_reload(filepath):
+            retries = int(getattr(session, '_file_monitor_retry_count', 0))
+            if retries < self.FILE_MONITOR_MAX_TRAILER_RETRIES:
+                session._file_monitor_retry_count = retries + 1
+                session.file_monitor_debounce_id = GLib.timeout_add(
+                    self.FILE_MONITOR_DEBOUNCE_MS,
+                    self._on_file_monitor_debounce_fired,
+                    session,
+                )
+            return False
+
+        session._file_monitor_retry_count = 0
+        is_active = (session is getattr(self, '_active_session', None))
+        has_unsaved = bool(
+            getattr(session, 'is_modified', False)
+            or (is_active and getattr(self, 'document_modified', False))
+        )
+
+        if has_unsaved:
+            session.external_change_pending = True
+            if is_active:
+                self._update_external_reload_banner(session)
+                if hasattr(self, 'status_label') and self.status_label:
+                    self.status_label.set_text(
+                        _("status_external_change_unsaved").format(os.path.basename(filepath))
+                    )
+            return False
+
+        self.reload_session_from_disk(session, discard_edits=False)
+        return False
+
+    def _update_external_reload_banner(self, session: Optional[DocumentSession] = None):
+        """Show or hide the non-intrusive external PDF change prompt banner for `session`."""
+        banner = getattr(self, 'external_reload_banner', None)
+        if banner is None:
+            return
+        if session is not None and getattr(session, 'external_change_pending', False) and getattr(session, 'pdf_path', None):
+            if hasattr(self, 'external_reload_banner_label') and self.external_reload_banner_label:
+                self.external_reload_banner_label.set_text(
+                    _("external_change_banner_msg").format(os.path.basename(session.pdf_path))
+                )
+            banner.set_visible(True)
+        else:
+            banner.set_visible(False)
+
+    def _on_external_reload_banner_clicked(self, _button=None):
+        """User confirmed reloading an externally modified PDF with unsaved edits."""
+        sess = getattr(self, '_active_session', None)
+        if sess is not None:
+            self.reload_session_from_disk(sess, discard_edits=True)
+
+    def _on_external_reload_banner_dismissed(self, _button=None):
+        """Dismiss the external modification banner without reloading."""
+        sess = getattr(self, '_active_session', None)
+        if sess is not None:
+            sess.external_change_pending = False
+        self._update_external_reload_banner(None)
+
+    def reload_session_from_disk(self, session: DocumentSession, discard_edits: bool = False) -> bool:
+        """Reload `session`'s PDF and `.synctex.gz` in place, preserving page index, scroll offset, and zoom."""
+        if session is None or not getattr(session, 'pdf_path', None):
+            return False
+        filepath = session.pdf_path
+        if not os.path.isfile(filepath):
+            return False
+
+        is_active = (session is getattr(self, '_active_session', None))
+        if not discard_edits and (
+            getattr(session, 'is_modified', False)
+            or (is_active and getattr(self, 'document_modified', False))
+        ):
+            session.external_change_pending = True
+            if is_active:
+                self._update_external_reload_banner(session)
+            return False
+
+        # Snapshot current viewport position & zoom BEFORE swapping document
+        saved_page = self.current_page_index if is_active else getattr(session, 'current_page_index', 0)
+        saved_zoom = float(self.zoom_level if is_active else getattr(session, 'zoom_level', 1.0))
+        saved_cont = bool(self.continuous_scroll if is_active else getattr(session, 'continuous_scroll', False))
+        saved_scroll_x = float(getattr(session, 'scroll_x', 0.0))
+        saved_scroll_y = float(getattr(session, 'scroll_y', 0.0))
+        if is_active and hasattr(self, 'pdf_scroll') and self.pdf_scroll:
+            h_adj = self.pdf_scroll.get_hadjustment()
+            v_adj = self.pdf_scroll.get_vadjustment()
+            if h_adj:
+                saved_scroll_x = float(h_adj.get_value())
+            if v_adj:
+                saved_scroll_y = float(v_adj.get_value())
+
+        pw_to_try = getattr(session, 'vault_password', None) or getattr(session, 'pdf_password', None)
+        new_doc, error_msg = pdf_handler.load_pdf_document(filepath, password=pw_to_try)
+        if error_msg or new_doc is None:
+            return False
+
+        old_doc = session.doc
+        if old_doc is not None:
+            try:
+                pdf_handler.release_page_snapshots(old_doc)
+                pdf_handler.close_pdf_document(old_doc)
+            except Exception as e:
+                print(f"Warning closing previous PDF handle during auto-reload: {e}")
+
+        session.doc = new_doc
+        session.is_modified = False
+        session.external_change_pending = False
+        session.page_cache.clear()
+        session.page_objects_cache.clear()
+        session.editable_texts.clear()
+        session.editable_images.clear()
+        session.editable_shapes.clear()
+        session.editable_strokes.clear()
+        session.form_fields.clear()
+        session.measurements.clear()
+        session.sticky_notes.clear()
+        session.redaction_marks.clear()
+        session.selected_text = None
+        session.selected_image = None
+        session.selected_shape = None
+        session.selected_stroke = None
+        session.selected_form_field = None
+        session.selected_measurement = None
+        session.selected_sticky_note = None
+        session.selected_redaction_mark = None
+        if session.undo_manager:
+            session.undo_manager.clear()
+
+        page_count = pdf_handler.get_page_count(new_doc)
+        target_page = max(0, min(int(saved_page), max(0, page_count - 1)))
+        session.current_page_index = target_page
+        session.zoom_level = saved_zoom
+        session.continuous_scroll = saved_cont
+        session.scroll_x = saved_scroll_x
+        session.scroll_y = saved_scroll_y
+
+        # Reload SyncTeX index & re-attach file monitor (important after atomic rename by LaTeX)
+        self._load_synctex_for_session(session, force_reload=True)
+        self._attach_file_monitor_for_session(session)
+
+        if is_active:
+            self.document_modified = False
+            self.zoom_level = saved_zoom
+            self.current_page_index = target_page
+            self.hide_text_editor()
+            self._clear_form_field_overlays()
+            if hasattr(self, '_invalidate_spatial_index'):
+                self._invalidate_spatial_index()
+            self._invalidate_continuous_layout()
+            self._load_page(target_page, reload_objects=True, preserve_scroll=True)
+            self._update_external_reload_banner(session)
+            self._update_tab_title(session)
+
+            # Restore exact scroll position synchronously and once layout settles on idle
+            def _apply_saved_scroll(sx=saved_scroll_x, sy=saved_scroll_y, target_sess=session):
+                if getattr(self, '_active_session', None) is not target_sess:
+                    return False
+                if hasattr(self, 'pdf_scroll') and self.pdf_scroll:
+                    self._is_programmatic_scrolling = True
+                    try:
+                        h_a = self.pdf_scroll.get_hadjustment()
+                        v_a = self.pdf_scroll.get_vadjustment()
+                        if h_a and sx > 0:
+                            max_h = max(0.0, h_a.get_upper() - h_a.get_page_size())
+                            h_a.set_value(min(sx, max_h))
+                        if v_a and sy > 0:
+                            max_v = max(0.0, v_a.get_upper() - v_a.get_page_size())
+                            v_a.set_value(min(sy, max_v))
+                    finally:
+                        self._is_programmatic_scrolling = False
+                if hasattr(self, 'pdf_view') and self.pdf_view:
+                    self.pdf_view.queue_draw()
+                return False
+
+            _apply_saved_scroll()
+            GLib.idle_add(_apply_saved_scroll)
+
+            self._load_thumbnails(session)
+            if hasattr(self, 'annotations_sidebar') and self.annotations_sidebar.get_visible():
+                self.annotations_sidebar.refresh()
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(_("status_pdf_auto_reloaded").format(os.path.basename(filepath)))
+            self._update_ui_state()
+        else:
+            self._update_tab_title(session)
+            self._load_thumbnails(session)
+
         return True

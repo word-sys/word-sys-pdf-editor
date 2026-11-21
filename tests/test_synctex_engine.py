@@ -736,3 +736,210 @@ class TestSyncTeXBackwardSearchAndPreferences:
             prefs.destroy()
 
 
+class TestLiveFileMonitorAndAutoReload:
+    """Verify Gio.FileMonitor attachment, 400 ms debounce, PDF trailer checks, seamless auto-reload, and unsaved-edit banner."""
+
+    def test_auto_reload_preserves_page_scroll_zoom_and_reloads_synctex(self, tmp_path):
+        import fitz
+        from gi.repository import Adw, Gio
+        from word_sys_pdf_editor.settings_manager import SettingsManager
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        pdf_path = tmp_path / "thesis.pdf"
+        st_path = tmp_path / "thesis.synctex.gz"
+        tex_path = str(tmp_path / "thesis.tex")
+
+        def _write_pdf(marker: str, pages: int = 3):
+            d = fitz.open()
+            for idx in range(pages):
+                p = d.new_page(width=595, height=842)
+                p.insert_text((72, 120), f"{marker} Page {idx + 1}", fontsize=12)
+            d.save(str(pdf_path))
+            d.close()
+
+        def _write_synctex(line_num: int):
+            payload = (
+                f"SyncTeX Version:1\nInput:1:{tex_path}\nOutput:thesis.pdf\n"
+                f"Magnification:1000\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n"
+                f"{{1\n(1,{line_num}:{_sp(72)},{_sp(120)}:{_sp(200)},{_sp(12)},{_sp(2)}\n)\n}}1\nPostamble:\n"
+            )
+            with gzip.open(st_path, "wb") as gz:
+                gz.write(payload.encode("utf-8"))
+
+        _write_pdf("Initial LaTeX v1", pages=3)
+        _write_synctex(12)
+
+        temp_mgr = SettingsManager(config_file=tmp_path / "auto_reload_settings.json")
+        temp_mgr.set("auto_reload_modified_pdf", True)
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"), \
+             patch("word_sys_pdf_editor.settings_manager.get_settings_manager", return_value=temp_mgr):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_auto_reload_clean")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                doc = fitz.open(str(pdf_path))
+                sess = win.create_session(doc=doc, filepath=str(pdf_path))
+                win.add_session(sess, switch_to=True)
+
+                # FileMonitor attached cleanly
+                assert sess.file_monitor is not None
+                assert isinstance(sess.file_monitor, Gio.FileMonitor)
+                assert win._is_pdf_file_ready_for_reload(str(pdf_path)) is True
+
+                # Configure active viewport: page index 1, zoom 1.45, continuous scroll, scroll offset (35, 420)
+                win.continuous_scroll = True
+                sess.continuous_scroll = True
+                win.zoom_level = 1.45
+                sess.zoom_level = 1.45
+                win._load_page(1, reload_objects=True)
+                win.current_page_index = 1
+                sess.current_page_index = 1
+                h_adj = win.pdf_scroll.get_hadjustment()
+                v_adj = win.pdf_scroll.get_vadjustment()
+                h_adj.set_upper(2000.0)
+                h_adj.set_page_size(500.0)
+                h_adj.set_value(35.0)
+                v_adj.set_upper(4000.0)
+                v_adj.set_page_size(600.0)
+                v_adj.set_value(420.0)
+                sess.scroll_x = 35.0
+                sess.scroll_y = 420.0
+
+                # Burst of CHANGED events debounces cleanly into a single 400 ms timer
+                with patch("gi.repository.GLib.timeout_add", side_effect=[101, 102]) as timeout_mock, \
+                     patch("gi.repository.GLib.source_remove") as remove_mock:
+                    win._on_session_file_monitor_changed(
+                        sess.file_monitor, None, None, Gio.FileMonitorEvent.CHANGED, sess
+                    )
+                    win._on_session_file_monitor_changed(
+                        sess.file_monitor, None, None, Gio.FileMonitorEvent.CHANGES_DONE_HINT, sess
+                    )
+                    assert timeout_mock.call_count == 2
+                    assert timeout_mock.call_args_list[0][0][0] == 400
+                    remove_mock.assert_called_once_with(101)
+                    sess.file_monitor_debounce_id = None
+
+                # Simulate LaTeX recompilation writing v2 PDF + updated .synctex.gz (line 77)
+                _write_pdf("Recompiled LaTeX v2", pages=3)
+                _write_synctex(77)
+
+                assert win._on_file_monitor_debounce_fired(sess) is False
+                assert "Recompiled LaTeX v2 Page 2" in sess.doc[1].get_text()
+                assert win.current_page_index == 1
+                assert abs(win.zoom_level - 1.45) < 1e-6
+                assert abs(sess.scroll_x - 35.0) < 0.5
+                assert abs(sess.scroll_y - 420.0) < 0.5
+                assert win.external_reload_banner.get_visible() is False
+
+                # SyncTeX index was refreshed in place and resolves new line 77
+                assert sess.synctex_doc is not None
+                hl = sess.synctex_doc.forward_search(tex_path, 77)
+                assert len(hl) == 1 and hl[0].line == 77
+
+                # Self-save suppression ignores file monitor events completely
+                sess.suppress_file_monitor_until = time.monotonic() + 5.0
+                with patch("gi.repository.GLib.timeout_add") as timeout_mock:
+                    win._on_session_file_monitor_changed(
+                        sess.file_monitor, None, None, Gio.FileMonitorEvent.CHANGED, sess
+                    )
+                    assert timeout_mock.call_count == 0
+                sess.suppress_file_monitor_until = 0.0
+
+                # Incomplete PDF without %%EOF trailer does NOT clobber open doc and schedules retry
+                pdf_path.write_bytes(b"%PDF-1.7\n1 0 obj\n<< /Incomplete true >>\n")
+                assert win._is_pdf_file_ready_for_reload(str(pdf_path)) is False
+                with patch("gi.repository.GLib.timeout_add", return_value=205) as retry_mock:
+                    win._on_file_monitor_debounce_fired(sess)
+                    assert retry_mock.call_count == 1
+                    assert sess._file_monitor_retry_count == 1
+                    assert "Recompiled LaTeX v2 Page 2" in sess.doc[1].get_text()
+                    sess.file_monitor_debounce_id = None
+            finally:
+                for s in list(win.sessions):
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+                assert sess.file_monitor is None
+                win.destroy()
+
+    def test_unsaved_edits_show_reload_banner_and_respects_auto_reload_setting(self, tmp_path):
+        import fitz
+        from gi.repository import Adw
+        from word_sys_pdf_editor.settings_manager import SettingsManager
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        pdf_a = tmp_path / "doc_a.pdf"
+        pdf_b = tmp_path / "doc_b.pdf"
+
+        def _save_text_pdf(path, text):
+            d = fitz.open()
+            p = d.new_page(width=595, height=842)
+            p.insert_text((72, 120), text, fontsize=12)
+            d.save(str(path))
+            d.close()
+
+        _save_text_pdf(pdf_a, "Version A1")
+        _save_text_pdf(pdf_b, "Doc B")
+
+        temp_mgr = SettingsManager(config_file=tmp_path / "banner_settings.json")
+        temp_mgr.set("auto_reload_modified_pdf", True)
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"), \
+             patch("word_sys_pdf_editor.settings_manager.get_settings_manager", return_value=temp_mgr):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_auto_reload_banner")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess_a = win.create_session(doc=fitz.open(str(pdf_a)), filepath=str(pdf_a))
+                win.add_session(sess_a, switch_to=True)
+                sess_b = win.create_session(doc=fitz.open(str(pdf_b)), filepath=str(pdf_b))
+                win.add_session(sess_b, switch_to=False)
+
+                # Mark session A as having unsaved edits
+                sess_a.is_modified = True
+                win.document_modified = True
+
+                # External update on disk -> must NOT auto-reload; must show non-intrusive banner
+                _save_text_pdf(pdf_a, "Version A2 From LaTeX")
+                win._on_file_monitor_debounce_fired(sess_a)
+                assert "Version A1" in sess_a.doc[0].get_text()
+                assert sess_a.external_change_pending is True
+                assert win.external_reload_banner.get_visible() is True
+
+                # Switching to clean tab B hides banner; switching back to tab A shows it again
+                win.set_active_session(sess_b)
+                assert win.external_reload_banner.get_visible() is False
+                win.set_active_session(sess_a)
+                assert win.external_reload_banner.get_visible() is True
+
+                # Clicking Reload button discards unsaved edits, loads Version A2, and hides banner
+                win.external_reload_banner_btn.emit("clicked")
+                assert "Version A2 From LaTeX" in sess_a.doc[0].get_text()
+                assert sess_a.is_modified is False
+                assert sess_a.external_change_pending is False
+                assert win.external_reload_banner.get_visible() is False
+
+                # When auto_reload_modified_pdf is False, external changes are ignored
+                temp_mgr.set("auto_reload_modified_pdf", False)
+                _save_text_pdf(pdf_a, "Version A3 Ignored")
+                win._on_file_monitor_debounce_fired(sess_a)
+                assert "Version A2 From LaTeX" in sess_a.doc[0].get_text()
+                assert win.external_reload_banner.get_visible() is False
+            finally:
+                for s in list(win.sessions):
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+                win.destroy()
+
+
+

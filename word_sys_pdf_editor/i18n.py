@@ -1190,6 +1190,10 @@ _STRINGS = {
         "prefs_synctex_command_title": "Editor Command",
         "prefs_synctex_command_subtitle": "Placeholders: %f (file), %l (line), %c (column)",
         "prefs_synctex_preset_custom": "Custom Command",
+        "external_change_banner_msg": "'{}' was modified on disk. Reload from disk and discard unsaved edits?",
+        "btn_reload_pdf": "Reload",
+        "status_pdf_auto_reloaded": "Reloaded updated PDF: {}",
+        "status_external_change_unsaved": "'{}' changed on disk (unsaved edits present)",
     },
 
     "tr": {
@@ -2312,6 +2316,10 @@ _STRINGS = {
         "prefs_synctex_command_title": "Düzenleyici Komutu",
         "prefs_synctex_command_subtitle": "Yer tutucular: %f (dosya), %l (satır), %c (sütun)",
         "prefs_synctex_preset_custom": "Özel Komut",
+        "external_change_banner_msg": "'{}' diskte değiştirildi. Kaydedilmemiş düzenlemeleri yoksayıp yeniden yüklensin mi?",
+        "btn_reload_pdf": "Yeniden Yükle",
+        "status_pdf_auto_reloaded": "Güncellenen PDF yeniden yüklendi: {}",
+        "status_external_change_unsaved": "'{}' diskte değişti (kaydedilmemiş düzenlemeler var)",
     },
 }
 

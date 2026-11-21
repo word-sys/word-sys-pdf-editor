@@ -1760,6 +1760,16 @@ class DocumentSession:
     synctex_doc: Any = None
     synctex_file_path: Optional[str] = None
 
+    # Live file monitoring & auto-reload state
+    file_monitor: Any = None
+    file_monitor_handler_id: Optional[int] = None
+    file_monitor_debounce_id: Optional[int] = None
+    file_monitor_path: Optional[str] = None
+    last_loaded_mtime: float = 0.0
+    suppress_file_monitor_until: float = 0.0
+    external_change_pending: bool = False
+    _file_monitor_retry_count: int = 0
+
     def __post_init__(self):
         """Ensure Gio.ListStore for pages_model if not provided and apply view mode settings."""
         if self.pages_model is None:
@@ -1817,8 +1827,34 @@ class DocumentSession:
                 return 0
         return 0
 
+    def stop_file_monitor(self):
+        """Cancel any active Gio.FileMonitor and pending debounce timer for this session."""
+        if self.file_monitor_debounce_id is not None:
+            try:
+                from gi.repository import GLib
+                GLib.source_remove(self.file_monitor_debounce_id)
+            except Exception:
+                pass
+            self.file_monitor_debounce_id = None
+        if self.file_monitor is not None:
+            try:
+                if self.file_monitor_handler_id is not None:
+                    self.file_monitor.disconnect(self.file_monitor_handler_id)
+            except Exception:
+                pass
+            try:
+                self.file_monitor.cancel()
+            except Exception:
+                pass
+            self.file_monitor = None
+        self.file_monitor_handler_id = None
+        self.file_monitor_path = None
+        self._file_monitor_retry_count = 0
+
     def close(self):
         """Cleanly close the underlying document and free session resources."""
+        self.stop_file_monitor()
+        self.external_change_pending = False
         self.sig_inspection_in_progress = False
         self.sig_inspection_token += 1
         self._sig_inspection_on_complete = None
