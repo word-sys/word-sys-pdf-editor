@@ -10013,7 +10013,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if getattr(self, '_image_dialog_open', False) is True:
             return
         self._image_dialog_open = True
-        click_mods = int(getattr(self, "_last_placement_modifiers", 0) or 0)
+        raw_click_mods = getattr(self, "_last_placement_modifiers", 0)
+        click_mods = int(raw_click_mods) if isinstance(raw_click_mods, (int, Gdk.ModifierType)) and not isinstance(raw_click_mods, bool) else 0
 
         filter_img = Gtk.FileFilter(name=_("image_filter_label"))
         for mime in ["image/png", "image/jpeg", "image/webp", "image/bmp", "image/gif", "image/tiff"]:
@@ -16198,7 +16199,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 end_mods_int = int(end_mods) if isinstance(end_mods, (int, Gdk.ModifierType)) else 0
             except Exception:
                 end_mods_int = 0
-            drag_mods = int(getattr(self, "_last_placement_modifiers", 0) or 0) | end_mods_int
+            raw_drag_mods = getattr(self, "_last_placement_modifiers", 0)
+            base_drag_mods = int(raw_drag_mods) if isinstance(raw_drag_mods, (int, Gdk.ModifierType)) and not isinstance(raw_drag_mods, bool) else 0
+            drag_mods = base_drag_mods | end_mods_int
             if getattr(self, 'temp_stroke', None) is not None:
                 stroke_to_add = self.temp_stroke
                 self.temp_stroke = None
@@ -19544,8 +19547,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             base_switch = bool(get_setting("auto_switch_to_select", True))
 
         if modifiers is None:
-            modifiers = int(getattr(self, "_last_placement_modifiers", 0) or 0)
-        shift_held = bool(int(modifiers) & int(Gdk.ModifierType.SHIFT_MASK))
+            raw_mods = getattr(self, "_last_placement_modifiers", 0)
+            modifiers = int(raw_mods) if isinstance(raw_mods, (int, Gdk.ModifierType)) and not isinstance(raw_mods, bool) else 0
+        else:
+            modifiers = int(modifiers) if isinstance(modifiers, (int, Gdk.ModifierType)) and not isinstance(modifiers, bool) else 0
+        shift_held = bool(modifiers & int(Gdk.ModifierType.SHIFT_MASK))
         return (not base_switch) if shift_held else base_switch
 
     def _maybe_auto_switch_to_select(self, modifiers: Optional[int] = None, is_drawing_stroke: bool = False) -> bool:
@@ -19557,7 +19563,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         )
         self._last_placement_modifiers = 0
         if should_switch:
-            if getattr(self, "view_mode", False):
+            if getattr(self, "view_mode", False) is True:
                 if hasattr(self, "view_sticky_note_btn") and self.view_sticky_note_btn:
                     self.view_sticky_note_btn.set_active(False)
                 self.view_tool_mode = None

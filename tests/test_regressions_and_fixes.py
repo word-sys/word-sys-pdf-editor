@@ -4600,6 +4600,232 @@ class TestFormBuilderRichTextToggle:
                 win.destroy()
 
 
+class TestEndToEndCustomizationCrossTabAndRichForms:
+    """Headless GTK integration checks for context popover cleanup, Shift tool lock, settings reload, and cross-tab Rich Text forms."""
+
+    def test_context_popover_dismisses_and_unparents_on_image_patch_text_shape_delete(self):
+        import io
+        from unittest.mock import patch
+        from gi.repository import Adw, Gtk
+        from PIL import Image
+        from word_sys_pdf_editor.models import EditableImage, EditableShape, EditableText, PatchObject
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+        im = Image.new("RGBA", (60, 40), (200, 210, 220, 255))
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        png_bytes = buf.getvalue()
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"), \
+             patch("word_sys_pdf_editor.window.get_setting", return_value=False):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_ctx_popdown_all")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess = win.create_session(doc=doc, filepath="/tmp/ctx_popdown_all.pdf")
+                win.add_session(sess, switch_to=True)
+                win.view_mode = False
+
+                img_obj = EditableImage(xref=0, bbox=(40.0, 40.0, 100.0, 80.0), page_number=0, image_bytes=png_bytes, is_new=True)
+                patch_obj = PatchObject(bbox=(120.0, 40.0, 180.0, 80.0), page_number=0, image_bytes=png_bytes)
+                txt_obj = EditableText(40.0, 120.0, "Remove me", page_number=0, is_new=True)
+                shp_obj = EditableShape("rectangle", (40.0, 160.0, 140.0, 220.0), page_number=0, is_new=True)
+
+                win.editable_images = [img_obj, patch_obj]
+                win.editable_texts = [txt_obj]
+                win.editable_shapes = [shp_obj]
+
+                for obj, confirm_key in (
+                    (img_obj, "delete_image_confirm"),
+                    (patch_obj, "delete_image_confirm"),
+                    (txt_obj, "delete_text_confirm"),
+                    (shp_obj, "delete_shape_confirm"),
+                ):
+                    pop = Gtk.Popover(autohide=True, has_arrow=True)
+                    pop.set_parent(win.pdf_view)
+                    popdown_calls = []
+                    orig_popdown = pop.popdown
+                    pop.popdown = lambda _orig=orig_popdown, _c=popdown_calls: (_c.append(True), _orig())
+                    win.context_popover = pop
+
+                    win._handle_delete_with_confirmation(obj, confirm_key)
+                    assert len(popdown_calls) >= 1
+                    pop.unparent()
+
+                assert win.editable_images == []
+                assert win.editable_texts == []
+                assert win.editable_shapes == []
+            finally:
+                win.close_document()
+                win.destroy()
+
+    def test_shift_modifier_override_during_live_text_and_shape_placement(self):
+        from unittest.mock import MagicMock, patch
+        from gi.repository import Adw, Gdk, Gtk
+        from word_sys_pdf_editor.i18n import set_setting
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        doc = fitz.open()
+        doc.new_page(width=595, height=842)
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_shift_override_live")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess = win.create_session(doc=doc, filepath="/tmp/shift_override.pdf")
+                win.add_session(sess, switch_to=True)
+                win.view_mode = False
+                win.current_pdf_page_width = 595
+                win.current_pdf_page_height = 842
+                win.zoom_level = 1.0
+                win._show_inline_editor = MagicMock()
+                set_setting("auto_switch_to_select", True)
+
+                # Shift held during add_text press keeps add_text active
+                gesture = Gtk.GestureClick.new()
+                win.tool_mode = "add_text"
+                with patch.object(Gtk.EventController, "get_current_event_state", return_value=Gdk.ModifierType.SHIFT_MASK), \
+                     patch.object(win, "canvas_to_page_coords", return_value=(0, 120.0, 140.0)), \
+                     patch.object(win, "is_canvas_point_on_page", return_value=True):
+                    win.on_pdf_view_pressed(gesture, 1, 120.0, 140.0)
+                assert win.tool_mode == "add_text"
+
+                # Shift held during rectangle drag placement keeps add_rectangle active
+                drag_g = Gtk.GestureDrag.new()
+                win.tool_mode = "add_rectangle"
+                with patch.object(Gtk.EventController, "get_current_event_state", return_value=Gdk.ModifierType.SHIFT_MASK), \
+                     patch.object(win, "canvas_to_page_coords", side_effect=[(0, 100.0, 100.0), (0, 180.0, 150.0), (0, 180.0, 150.0)]), \
+                     patch.object(win, "is_canvas_point_on_page", return_value=True):
+                    win.on_drag_begin(drag_g, 100.0, 100.0)
+                    win.on_drag_update(drag_g, 80.0, 50.0)
+                    win.on_drag_end(drag_g, 80.0, 50.0)
+                assert win.tool_mode == "add_rectangle"
+            finally:
+                win.close_document()
+                win.destroy()
+
+    def test_settings_persistence_roundtrip_rebuilds_window_menu_and_toolbar(self, tmp_path):
+        from unittest.mock import patch
+        from gi.repository import Adw
+        from word_sys_pdf_editor.preferences_dialog import PreferencesWindow
+        from word_sys_pdf_editor.settings_manager import SettingsManager
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        cfg = tmp_path / "persisted_ui.json"
+        mgr1 = SettingsManager(config_file=cfg)
+        prefs = PreferencesWindow(editor_window=None, settings_manager=mgr1)
+        try:
+            # Choose minimal hamburger preset & essential toolbar preset
+            min_idx = prefs._hamburger_preset_codes.index("minimal")
+            prefs.hamburger_preset_dropdown.set_selected(min_idx)
+            ess_idx = prefs._toolbar_preset_codes.index("essential")
+            prefs.toolbar_preset_dropdown.set_selected(ess_idx)
+        finally:
+            prefs.close()
+            prefs.destroy()
+
+        # Reload fresh SettingsManager from disk and apply to a fresh PdfEditorWindow
+        mgr2 = SettingsManager(config_file=cfg)
+        assert mgr2.get("hamburger_menu_preset") == "minimal"
+        vis_tools = mgr2.get("toolbar_visible_tools")
+        assert vis_tools["select"] is True
+        assert vis_tools["add_text"] is True
+        assert vis_tools["pen"] is False
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"), \
+             patch("word_sys_pdf_editor.settings_manager.get_settings_manager", return_value=mgr2):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_persist_rebuild")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                win.rebuild_hamburger_menu()
+                win.rebuild_tools_grid()
+                assert win.more_tools_button.get_visible() is True
+                assert "pen" in win.hidden_toolbar_tool_ids
+                assert "select" not in win.hidden_toolbar_tool_ids
+                assert "select" in win.visible_toolbar_tool_ids
+            finally:
+                win.close_document()
+                win.destroy()
+
+    def test_cross_tab_page_copy_preserves_rich_text_acroform_field_and_undo_redo(self):
+        from unittest.mock import patch
+        from gi.repository import Adw
+        from word_sys_pdf_editor import pdf_handler
+        from word_sys_pdf_editor.form_fields import FIELD_FLAG_RICH_TEXT, RichTextRun
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        src_doc = fitz.open()
+        src_doc.new_page(width=595, height=842)
+        pdf_handler.add_form_widget(
+            src_doc, 0, "text", (50, 50, 280, 95), "rich_copy_field", default_value="Bold Copy", rich_text_enabled=True
+        )
+        fields, err = pdf_handler.extract_acroform_fields(src_doc, page_index=0)
+        assert err is None and len(fields) == 1
+        fields[0].rich_text_runs = [
+            RichTextRun(text="Bold ", bold=True, color=(0.8, 0.1, 0.1)),
+            RichTextRun(text="Copy", italic=True, underline=True),
+        ]
+        pdf_handler.apply_form_field_edits(src_doc, 0, [fields[0]])
+
+        dst_doc = fitz.open()
+        dst_doc.new_page(width=595, height=842)
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_crosstab_rich_form")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                sess_src = win.create_session(doc=src_doc, filepath="/tmp/src_rich.pdf")
+                win.add_session(sess_src, switch_to=True)
+                sess_dst = win.create_session(doc=dst_doc, filepath="/tmp/dst_rich.pdf")
+                win.add_session(sess_dst, switch_to=False)
+
+                ok = win.copy_page_from_session(sess_src.session_id, 0, to_index=1, target_session=sess_dst)
+                assert ok is True
+                assert len(sess_dst.doc) == 2
+
+                copied_fields, err2 = pdf_handler.extract_acroform_fields(sess_dst.doc, page_index=1)
+                assert err2 is None and len(copied_fields) == 1
+                cf = copied_fields[0]
+                assert cf.rich_text_enabled is True
+                assert bool(cf.field_flags & FIELD_FLAG_RICH_TEXT) is True
+                assert any(r.text == "Bold " and r.bold for r in cf.rich_text_runs)
+                assert any(r.text == "Copy" and r.italic and r.underline for r in cf.rich_text_runs)
+
+                # Undo / Redo on destination tab cleanly removes & restores the Rich Text page
+                assert sess_dst.undo_manager.can_undo() is True
+                sess_dst.undo_manager.undo()
+                assert len(sess_dst.doc) == 1
+                sess_dst.undo_manager.redo()
+                assert len(sess_dst.doc) == 2
+                redone_fields, _ = pdf_handler.extract_acroform_fields(sess_dst.doc, page_index=1)
+                assert len(redone_fields) == 1 and redone_fields[0].rich_text_enabled is True
+            finally:
+                for s in list(win.sessions):
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+                win.destroy()
+
+
+
 
 
 
