@@ -1068,3 +1068,51 @@ class TestLocaleDetectionAndPersistence(unittest.TestCase):
         self.assertTrue(all(r["row"].get_visible() for r in dlg._filter_records))
         dlg.destroy()
 
+
+class TestSevenLanguageCompleteness(unittest.TestCase):
+    """Verify full 7-language translation key completeness, placeholder parity, and code key coverage."""
+
+    def test_all_english_keys_exist_and_match_placeholders_in_all_7_languages(self):
+        import re
+        from word_sys_pdf_editor import i18n
+
+        en = i18n._STRINGS["en"]
+        en_keys = set(en.keys())
+        self.assertGreater(len(en_keys), 1100)
+
+        for lang_code in ("tr", "fr", "de", "es", "it", "ru"):
+            table = i18n._STRINGS[lang_code]
+            missing = sorted(en_keys - set(table.keys()))
+            self.assertEqual(missing, [], f"Missing keys in '{lang_code}': {missing[:10]}")
+
+            for key in en_keys:
+                ev = en[key]
+                lv = table[key]
+                self.assertTrue(lv, f"Empty translation for '{key}' in '{lang_code}'")
+                if isinstance(ev, str) and isinstance(lv, str):
+                    ec = len(re.findall(r"\{[0-9a-zA-Z_.:]*\}", ev))
+                    lc = len(re.findall(r"\{[0-9a-zA-Z_.:]*\}", lv))
+                    self.assertEqual(ec, lc, f"Placeholder count mismatch for '{key}' in '{lang_code}': {ev!r} vs {lv!r}")
+                    for tok in ("%f", "%l", "%c"):
+                        self.assertEqual(tok in ev, tok in lv, f"Token '{tok}' mismatch for '{key}' in '{lang_code}'")
+
+    def test_all_literal_translation_calls_exist_in_all_7_languages(self):
+        import ast
+        import glob
+        from word_sys_pdf_editor import i18n
+
+        pkg_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "word_sys_pdf_editor")
+        used_keys = set()
+        for py_path in glob.glob(os.path.join(pkg_dir, "*.py")):
+            with open(py_path, "r", encoding="utf-8") as fh:
+                tree = ast.parse(fh.read(), filename=py_path)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_":
+                    if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                        used_keys.add(node.args[0].value)
+
+        for lang_code in ("en", "tr", "fr", "de", "es", "it", "ru"):
+            missing = sorted(used_keys - set(i18n._STRINGS[lang_code].keys()))
+            self.assertEqual(missing, [], f"Code uses undefined keys in '{lang_code}': {missing}")
+
+
