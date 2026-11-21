@@ -2485,6 +2485,43 @@ class TestAppImagePythonIsolation:
         assert str(poison_dir) not in data["sys_path"]
         assert data["argv"] == ["--test-arg", "sample.pdf"]
 
+    def test_build_script_top_level_sanitization_and_synctex_argv_forwarding(self, tmp_path):
+        import json
+        import subprocess
+
+        script_path = os.path.join(workspace_dir, "build-appimage.sh")
+        with open(script_path, "r", encoding="utf-8") as fh:
+            top_lines = "\n".join(fh.read().splitlines()[:15])
+        assert "unset PYTHONPATH" in top_lines
+        assert "unset PYTHONHOME" in top_lines
+        assert "unset PYTHONUSERBASE" in top_lines
+        assert "export PYTHONNOUSERSITE=1" in top_lines
+
+        launcher_body = self._extract_launcher_heredoc()
+        bin_dir = tmp_path / "AppDir" / "usr" / "bin"
+        bin_dir.mkdir(parents=True)
+        os.symlink(sys.executable, str(bin_dir / "python3"))
+        (bin_dir / "word-sys-pdf-editor.py").write_text(
+            "import json, sys; print(json.dumps(sys.argv[1:]))\n",
+            encoding="utf-8",
+        )
+        wrapper = bin_dir / "word-sys-pdf-editor"
+        wrapper.write_text(launcher_body + "\n", encoding="utf-8")
+        wrapper.chmod(0o755)
+
+        proc = subprocess.run(
+            [str(wrapper), "--synctex-forward", "42:3:/tmp/my paper/main.tex", "/tmp/my paper/main.pdf"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout.strip()) == [
+            "--synctex-forward",
+            "42:3:/tmp/my paper/main.tex",
+            "/tmp/my paper/main.pdf",
+        ]
+
 
 class TestSettingsManagerSchemaAndPersistence:
     """Verify SettingsManager schema validation, presets, listener callbacks, and atomic JSON persistence."""

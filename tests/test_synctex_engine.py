@@ -364,6 +364,46 @@ class TestSyncTeXCliFallbackAndHelpers:
 
         assert format_editor_command("", "/tmp/doc.tex", 1, 0) == []
 
+    def test_all_synctex_editor_presets_expand_unicode_and_spaced_paths(self):
+        from word_sys_pdf_editor.settings_manager import SYNCTEX_EDITOR_PRESETS
+
+        tricky_path = "/home/user/My Thesis (Draft)/chápter 1.tex"
+        for preset_name, template in SYNCTEX_EDITOR_PRESETS.items():
+            argv = format_editor_command(template, tricky_path, 128, 9)
+            assert len(argv) >= 2, f"Preset {preset_name!r} produced empty argv"
+            joined = " ".join(argv)
+            assert tricky_path in joined, f"Preset {preset_name!r} lost tex path: {argv}"
+            assert "128" in joined, f"Preset {preset_name!r} lost line number: {argv}"
+            assert "%f" not in joined and "%l" not in joined and "%c" not in joined
+
+    def test_forward_then_backward_search_roundtrip_consistency(self, tmp_path):
+        payload = _build_sample_synctex(str(tmp_path))
+        gz = tmp_path / "roundtrip.synctex.gz"
+        with gzip.open(gz, "wb") as fh:
+            fh.write(payload.encode("utf-8"))
+        pdf = tmp_path / "roundtrip.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+        doc = SyncTeXDocument.from_pdf(str(pdf), use_cli_fallback=False)
+        assert doc is not None
+        cases = [
+            (os.path.normpath(str(tmp_path / "main.tex")), 10, 0),
+            (os.path.normpath(str(tmp_path / "main.tex")), 14, 0),
+            (os.path.normpath(str(tmp_path / "chapters" / "intro.tex")), 25, 1),
+            (os.path.normpath(str(tmp_path / "chapters" / "intro.tex")), 30, 1),
+        ]
+        for tex_path, line_num, expected_page in cases:
+            highlights = doc.forward_search(tex_path, line_num)
+            assert len(highlights) >= 1
+            hl = highlights[0]
+            assert hl.page_index == expected_page
+            cx = (hl.x0 + hl.x1) / 2.0
+            cy = (hl.y0 + hl.y1) / 2.0
+            loc = doc.backward_search(hl.page_index, cx, cy)
+            assert loc is not None
+            assert loc.tex_path == tex_path
+            assert loc.line == line_num
+
 
 class TestSyncTeXCliAndSingleInstanceForwardSearch:
     """Verify CLI argument parsing, single-instance command-line IPC, tab focus, and canvas highlight pulse."""
