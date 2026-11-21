@@ -13609,6 +13609,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if url:
                 self._open_url(url)
                 return
+            if is_on_page and hasattr(self, '_has_synctex_for_active_session') and self._has_synctex_for_active_session():
+                unrot_x, unrot_y = (
+                    self._visual_to_unrotated_page_coords(page_x_unzoomed, page_y_unzoomed)
+                    if hasattr(self, '_visual_to_unrotated_page_coords')
+                    else (page_x_unzoomed, page_y_unzoomed)
+                )
+                if self.handle_synctex_backward_search(target_page, unrot_x, unrot_y) is not None:
+                    return
 
         if self.view_mode:
             if n_press == 1:
@@ -18518,6 +18526,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_add_note.connect("clicked", lambda b: (self.context_popover.popdown() if hasattr(self, 'context_popover') else None, self._create_sticky_note_at(page_x, page_y)))
             popover_box.append(btn_add_note)
 
+            if is_on_page and hasattr(self, '_append_synctex_context_item'):
+                self._append_synctex_context_item(popover_box, target_page, page_x, page_y)
+
             if hasattr(self, 'context_popover') and self.context_popover:
                 try:
                     self.context_popover.popdown()
@@ -18946,6 +18957,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 btn_paste_patch = Gtk.Button(label=_("btn_paste_patch"))
                 btn_paste_patch.connect("clicked", lambda b: self._handle_context_action("paste_clone_patch", (page_x, page_y), x, y))
                 popover_box_empty.append(btn_paste_patch)
+
+            if is_on_page and hasattr(self, '_append_synctex_context_item'):
+                self._append_synctex_context_item(popover_box_empty, target_page, page_x, page_y)
             
             if hasattr(self, 'context_popover') and self.context_popover:
                 try:
@@ -18975,6 +18989,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.context_popover.unparent()
             except Exception:
                 pass
+
+        if is_on_page and hasattr(self, '_append_synctex_context_item'):
+            self._append_synctex_context_item(popover_box, target_page, page_x, page_y)
 
         self.context_popover = Gtk.Popover(autohide=True, has_arrow=True)
         self.context_popover.set_child(popover_box)
@@ -20319,3 +20336,142 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             cr.set_line_width(2.0 + 1.0 * phase)
             cr.stroke()
             cr.restore()
+
+    # ------------------------------------------------------------------
+    # SyncTeX Backward Search (Ctrl+Click / Context Menu) & Editor Launcher
+    # ------------------------------------------------------------------
+
+    def _has_synctex_for_active_session(self) -> bool:
+        """Return True if SyncTeX integration is enabled and SyncTeX data is available for the active session."""
+        from .settings_manager import get_settings_manager
+        from .synctex_engine import find_synctex_file
+
+        if not bool(get_settings_manager().get("synctex_enabled", True)):
+            return False
+        sess = getattr(self, '_active_session', None)
+        if sess is None or getattr(sess, 'doc', None) is None:
+            return False
+        st_doc = getattr(sess, 'synctex_doc', None)
+        if st_doc is not None and getattr(st_doc, 'is_loaded', False):
+            return True
+        pdf_path = getattr(sess, 'pdf_path', None)
+        if pdf_path and find_synctex_file(pdf_path):
+            return True
+        return False
+
+    def _get_synctex_editor_command(self) -> str:
+        """Return the configured external LaTeX editor command template (`%f`, `%l`, `%c`)."""
+        from .settings_manager import SYNCTEX_EDITOR_PRESETS, get_settings_manager
+
+        mgr = get_settings_manager()
+        cmd = str(mgr.get("synctex_editor_command", "") or "").strip()
+        if cmd:
+            return cmd
+        preset = str(mgr.get("synctex_editor_preset", "vscode") or "vscode")
+        return SYNCTEX_EDITOR_PRESETS.get(preset, SYNCTEX_EDITOR_PRESETS["vscode"])
+
+    def launch_external_latex_editor(
+        self,
+        tex_path: str,
+        line: int,
+        column: int = 0,
+        command_template: Optional[str] = None,
+    ) -> bool:
+        """Launch the configured external LaTeX editor at `(tex_path, line, column)`."""
+        import subprocess
+        from .synctex_engine import format_editor_command
+
+        template = command_template if command_template is not None else self._get_synctex_editor_command()
+        argv = format_editor_command(template, tex_path, line, column)
+        if not argv:
+            return False
+
+        try:
+            subprocess.Popen(
+                argv,
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception as e:
+            print(f"SyncTeX editor launch failed ({argv[0]}): {e}")
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(_("synctex_editor_launch_failed").format(argv[0]))
+            return False
+
+    def handle_synctex_backward_search(
+        self,
+        page_index: int,
+        pdf_x: float,
+        pdf_y: float,
+    ):
+        """Resolve `(page_index, pdf_x, pdf_y)` via SyncTeX and open the `.tex` source in the configured editor."""
+        from .settings_manager import get_settings_manager
+
+        if not bool(get_settings_manager().get("synctex_enabled", True)):
+            return None
+
+        sess = getattr(self, '_active_session', None)
+        if sess is None or getattr(sess, 'doc', None) is None:
+            return None
+
+        st_doc = self._load_synctex_for_session(sess)
+        if st_doc is None or not st_doc.is_loaded:
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(_("synctex_not_available"))
+            return None
+
+        loc = st_doc.backward_search(page_index, pdf_x, pdf_y)
+        if loc is None:
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.set_text(_("synctex_backward_not_found"))
+            return None
+
+        if getattr(loc, 'bbox', None) is not None:
+            self.trigger_synctex_highlight_pulse(
+                [{
+                    "page_index": page_index,
+                    "bbox": loc.bbox,
+                    "tex_path": loc.tex_path,
+                    "line": loc.line,
+                    "column": loc.column,
+                }],
+                duration_sec=1.0,
+            )
+
+        launched = self.launch_external_latex_editor(loc.tex_path, loc.line, loc.column)
+        if launched and hasattr(self, 'status_label') and self.status_label:
+            self.status_label.set_text(
+                _("synctex_backward_jumped").format(os.path.basename(loc.tex_path), loc.line)
+            )
+        return loc
+
+    def _append_synctex_context_item(
+        self,
+        popover_box: Gtk.Box,
+        page_index: int,
+        page_x: float,
+        page_y: float,
+    ) -> bool:
+        """Append 'Jump to LaTeX Source (.tex)' button to a canvas context popover when SyncTeX is available."""
+        if not self._has_synctex_for_active_session():
+            return False
+
+        if popover_box.get_first_child() is not None:
+            popover_box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        btn_synctex = Gtk.Button(label=_("menu_synctex_jump_source"))
+
+        def _on_jump_clicked(_btn):
+            PdfEditorWindow._dismiss_context_popover(self)
+            unrot_x, unrot_y = (
+                self._visual_to_unrotated_page_coords(page_x, page_y)
+                if hasattr(self, '_visual_to_unrotated_page_coords')
+                else (page_x, page_y)
+            )
+            self.handle_synctex_backward_search(page_index, unrot_x, unrot_y)
+
+        btn_synctex.connect("clicked", _on_jump_clicked)
+        popover_box.append(btn_synctex)
+        return True

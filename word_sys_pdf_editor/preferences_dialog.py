@@ -17,11 +17,25 @@ from .settings_manager import (
     HAMBURGER_DOCUMENT_ACTION_KEYS,
     HAMBURGER_INLINE_TOGGLE_KEYS,
     HAMBURGER_ITEM_LABELS,
+    SYNCTEX_EDITOR_PRESETS,
     TOOLBAR_LAYOUT_PRESETS,
     TOOLBAR_TOOL_METADATA,
+    VALID_SYNCTEX_PRESETS,
     SettingsManager,
     get_settings_manager,
 )
+
+
+SYNCTEX_PRESET_DISPLAY_NAMES: Dict[str, str] = {
+    "vscode": "VS Code",
+    "texstudio": "TeXstudio",
+    "vim": "Vim (GVim)",
+    "neovim": "Neovim",
+    "emacs": "Emacs",
+    "kate": "Kate",
+    "gedit": "Gedit",
+    "sublime": "Sublime Text",
+}
 
 
 class PreferencesWindow(Adw.PreferencesWindow):
@@ -166,6 +180,63 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.behavior_group.add(self.auto_reload_row)
 
         self.general_page.add(self.behavior_group)
+
+        # SyncTeX & LaTeX integration group
+        self.synctex_group = Adw.PreferencesGroup(
+            title=_("prefs_group_synctex"),
+            description=_("prefs_group_synctex_desc"),
+        )
+
+        self.synctex_enabled_row = Adw.ActionRow(
+            title=_("prefs_synctex_enabled_title"),
+            subtitle=_("prefs_synctex_enabled_subtitle"),
+        )
+        self.synctex_enabled_switch = Gtk.Switch()
+        self.synctex_enabled_switch.set_valign(Gtk.Align.CENTER)
+        init_st_enabled = bool(self.settings.get("synctex_enabled", True))
+        self.synctex_enabled_switch.set_active(init_st_enabled)
+        self.synctex_enabled_switch.connect("notify::active", self._on_synctex_enabled_toggled)
+        self.synctex_enabled_row.add_suffix(self.synctex_enabled_switch)
+        self.synctex_enabled_row.set_activatable_widget(self.synctex_enabled_switch)
+        self.synctex_group.add(self.synctex_enabled_row)
+
+        self.synctex_preset_row = Adw.ActionRow(
+            title=_("prefs_synctex_preset_title"),
+            subtitle=_("prefs_synctex_preset_subtitle"),
+        )
+        self._synctex_preset_codes: List[str] = list(VALID_SYNCTEX_PRESETS)
+        preset_labels: List[str] = [
+            SYNCTEX_PRESET_DISPLAY_NAMES.get(code, _("prefs_synctex_preset_custom"))
+            for code in self._synctex_preset_codes
+        ]
+        self.synctex_preset_dropdown = Gtk.DropDown.new_from_strings(preset_labels)
+        self.synctex_preset_dropdown.set_valign(Gtk.Align.CENTER)
+        saved_preset = str(self.settings.get("synctex_editor_preset", "vscode") or "vscode")
+        if saved_preset in self._synctex_preset_codes:
+            self.synctex_preset_dropdown.set_selected(self._synctex_preset_codes.index(saved_preset))
+        self.synctex_preset_dropdown.connect("notify::selected", self._on_synctex_preset_changed)
+        self.synctex_preset_row.add_suffix(self.synctex_preset_dropdown)
+        self.synctex_preset_row.set_activatable_widget(self.synctex_preset_dropdown)
+        self.synctex_preset_row.set_sensitive(init_st_enabled)
+        self.synctex_group.add(self.synctex_preset_row)
+
+        self.synctex_command_row = Adw.ActionRow(
+            title=_("prefs_synctex_command_title"),
+            subtitle=_("prefs_synctex_command_subtitle"),
+        )
+        self.synctex_command_entry = Gtk.Entry()
+        self.synctex_command_entry.set_valign(Gtk.Align.CENTER)
+        self.synctex_command_entry.set_width_chars(28)
+        self.synctex_command_entry.set_placeholder_text('code -g "%f:%l"')
+        saved_cmd = str(self.settings.get("synctex_editor_command", SYNCTEX_EDITOR_PRESETS["vscode"]) or "")
+        self.synctex_command_entry.set_text(saved_cmd)
+        self.synctex_command_entry.connect("changed", self._on_synctex_command_changed)
+        self.synctex_command_row.add_suffix(self.synctex_command_entry)
+        self.synctex_command_row.set_activatable_widget(self.synctex_command_entry)
+        self.synctex_command_row.set_sensitive(init_st_enabled)
+        self.synctex_group.add(self.synctex_command_row)
+
+        self.general_page.add(self.synctex_group)
         self.add(self.general_page)
 
 
@@ -638,6 +709,47 @@ class PreferencesWindow(Adw.PreferencesWindow):
         active = bool(switch.get_active())
         self.settings.set("auto_reload_modified_pdf", active)
 
+    def _on_synctex_enabled_toggled(self, switch: Gtk.Switch, _pspec: Any) -> None:
+        if self._syncing_ui:
+            return
+        active = bool(switch.get_active())
+        self.settings.set("synctex_enabled", active)
+        self.synctex_preset_row.set_sensitive(active)
+        self.synctex_command_row.set_sensitive(active)
+
+    def _on_synctex_preset_changed(self, dropdown: Gtk.DropDown, _pspec: Any) -> None:
+        if self._syncing_ui:
+            return
+        idx = int(dropdown.get_selected())
+        if 0 <= idx < len(self._synctex_preset_codes):
+            preset_code = self._synctex_preset_codes[idx]
+            self.settings.set("synctex_editor_preset", preset_code)
+            if preset_code in SYNCTEX_EDITOR_PRESETS:
+                expected_cmd = SYNCTEX_EDITOR_PRESETS[preset_code]
+                self._syncing_ui = True
+                try:
+                    if self.synctex_command_entry.get_text() != expected_cmd:
+                        self.synctex_command_entry.set_text(expected_cmd)
+                finally:
+                    self._syncing_ui = False
+
+    def _on_synctex_command_changed(self, entry: Gtk.Entry) -> None:
+        if self._syncing_ui:
+            return
+        cmd_text = entry.get_text().strip()
+        if not cmd_text:
+            return
+        self.settings.set("synctex_editor_command", cmd_text)
+        cur_preset = str(self.settings.get("synctex_editor_preset", "vscode") or "vscode")
+        if cur_preset != "custom" and SYNCTEX_EDITOR_PRESETS.get(cur_preset) != cmd_text:
+            self._syncing_ui = True
+            try:
+                self.settings.set("synctex_editor_preset", "custom")
+                if "custom" in self._synctex_preset_codes:
+                    self.synctex_preset_dropdown.set_selected(self._synctex_preset_codes.index("custom"))
+            finally:
+                self._syncing_ui = False
+
     def _on_auto_switch_toggled(self, switch: Gtk.Switch, _pspec: Any) -> None:
         if self._syncing_ui:
             return
@@ -713,6 +825,20 @@ class PreferencesWindow(Adw.PreferencesWindow):
                 bval = bool(value)
                 if self.auto_reload_switch.get_active() != bval:
                     self.auto_reload_switch.set_active(bval)
+            elif key == "synctex_enabled":
+                bval = bool(value)
+                if self.synctex_enabled_switch.get_active() != bval:
+                    self.synctex_enabled_switch.set_active(bval)
+                self.synctex_preset_row.set_sensitive(bval)
+                self.synctex_command_row.set_sensitive(bval)
+            elif key == "synctex_editor_preset" and isinstance(value, str):
+                if value in self._synctex_preset_codes:
+                    idx = self._synctex_preset_codes.index(value)
+                    if self.synctex_preset_dropdown.get_selected() != idx:
+                        self.synctex_preset_dropdown.set_selected(idx)
+            elif key == "synctex_editor_command" and isinstance(value, str):
+                if self.synctex_command_entry.get_text() != value:
+                    self.synctex_command_entry.set_text(value)
             elif key == "auto_switch_to_select":
                 bval = bool(value)
                 if self.auto_switch_switch.get_active() != bval:

@@ -570,3 +570,169 @@ class TestSyncTeXCliAndSingleInstanceForwardSearch:
                         pass
                 win.destroy()
 
+
+class TestSyncTeXBackwardSearchAndPreferences:
+    """Verify Ctrl+Click backward search, context menu jump action, editor launcher, and Preferences SyncTeX UI."""
+
+    def test_ctrl_click_backward_search_hyperlink_priority_and_context_menu(self, tmp_path):
+        import fitz
+        from gi.repository import Adw, Gdk, Gtk
+        from word_sys_pdf_editor.settings_manager import SettingsManager
+        from word_sys_pdf_editor.window import PdfEditorWindow
+
+        main_pdf_path = tmp_path / "main.pdf"
+        d_main = fitz.open()
+        d_main.new_page(width=595, height=842)
+        d_main.new_page(width=595, height=842)
+        d_main.save(str(main_pdf_path))
+        d_main.close()
+
+        gz_path = tmp_path / "main.synctex.gz"
+        with gzip.open(gz_path, "wb") as gz:
+            gz.write(_build_sample_synctex(str(tmp_path)).encode("utf-8"))
+
+        plain_pdf_path = tmp_path / "no_synctex.pdf"
+        d_plain = fitz.open()
+        d_plain.new_page(width=595, height=842)
+        d_plain.save(str(plain_pdf_path))
+        d_plain.close()
+
+        temp_mgr = SettingsManager(config_file=tmp_path / "settings.json")
+        temp_mgr.set("synctex_enabled", True)
+        temp_mgr.set("synctex_editor_preset", "vscode")
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"), \
+             patch("word_sys_pdf_editor.settings_manager.get_settings_manager", return_value=temp_mgr):
+            try:
+                app = Adw.Application(application_id="org.word_sys.test_synctex_backward")
+            except Exception:
+                app = None
+            win = PdfEditorWindow(application=app)
+            try:
+                win.font_scan_in_progress = False
+                doc_main = fitz.open(str(main_pdf_path))
+                sess_main = win.create_session(doc=doc_main, filepath=str(main_pdf_path))
+                win.add_session(sess_main, switch_to=True)
+                win.current_pdf_page_width = 595
+                win.current_pdf_page_height = 842
+                win.zoom_level = 1.0
+
+                main_tex_expected = os.path.normpath(str(tmp_path / "main.tex"))
+
+                # 1. Ctrl+Click on line 10 (not over a web hyperlink) launches VS Code at main.tex:10
+                gesture = Gtk.GestureClick.new()
+                with patch.object(Gtk.EventController, "get_current_event_state", return_value=Gdk.ModifierType.CONTROL_MASK), \
+                     patch.object(win, "canvas_to_page_coords", return_value=(0, 115.0, 115.0)), \
+                     patch.object(win, "is_canvas_point_on_page", return_value=True), \
+                     patch.object(win, "_get_link_url_at_pos", return_value=None), \
+                     patch("subprocess.Popen") as popen_mock:
+                    win.on_pdf_view_pressed(gesture, 1, 115.0, 115.0)
+                    assert popen_mock.call_count == 1
+                    argv = popen_mock.call_args[0][0]
+                    assert argv == ["code", "-g", f"{main_tex_expected}:10"]
+
+                # 2. Ctrl+Click over a web hyperlink opens URL and does NOT launch LaTeX editor
+                with patch.object(Gtk.EventController, "get_current_event_state", return_value=Gdk.ModifierType.CONTROL_MASK), \
+                     patch.object(win, "canvas_to_page_coords", return_value=(0, 115.0, 115.0)), \
+                     patch.object(win, "is_canvas_point_on_page", return_value=True), \
+                     patch.object(win, "_get_link_url_at_pos", return_value="https://example.org"), \
+                     patch.object(win, "_open_url") as open_url_mock, \
+                     patch("subprocess.Popen") as popen_mock:
+                    win.on_pdf_view_pressed(gesture, 1, 115.0, 115.0)
+                    open_url_mock.assert_called_once_with("https://example.org")
+                    assert popen_mock.call_count == 0
+
+                # 3. Context menu adds 'Jump to LaTeX Source (.tex)' and clicking it invokes backward search
+                pop_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                pop_box.append(Gtk.Button(label="Existing Action"))
+                added = win._append_synctex_context_item(pop_box, 0, 115.0, 115.0)
+                assert added is True
+                children = []
+                child = pop_box.get_first_child()
+                while child is not None:
+                    children.append(child)
+                    child = child.get_next_sibling()
+                jump_btn = children[-1]
+                assert isinstance(jump_btn, Gtk.Button)
+                assert ".tex" in (jump_btn.get_label() or "")
+
+                with patch("subprocess.Popen") as popen_mock:
+                    jump_btn.emit("clicked")
+                    assert popen_mock.call_count == 1
+                    assert popen_mock.call_args[0][0] == ["code", "-g", f"{main_tex_expected}:10"]
+
+                # 4. FileNotFoundError during editor launch is handled gracefully without raising
+                with patch("subprocess.Popen", side_effect=FileNotFoundError("no such binary")):
+                    assert win.launch_external_latex_editor(main_tex_expected, 10, 0) is False
+
+                # 5. Disabling synctex_enabled suppresses both Ctrl+Click and context menu item
+                temp_mgr.set("synctex_enabled", False)
+                assert win._has_synctex_for_active_session() is False
+                pop_box_disabled = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                assert win._append_synctex_context_item(pop_box_disabled, 0, 115.0, 115.0) is False
+                assert win.handle_synctex_backward_search(0, 115.0, 115.0) is None
+
+                # 6. Document without .synctex/.synctex.gz does not add context menu item
+                temp_mgr.set("synctex_enabled", True)
+                doc_plain = fitz.open(str(plain_pdf_path))
+                sess_plain = win.create_session(doc=doc_plain, filepath=str(plain_pdf_path))
+                win.add_session(sess_plain, switch_to=True)
+                assert win._has_synctex_for_active_session() is False
+                pop_box_plain = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                assert win._append_synctex_context_item(pop_box_plain, 0, 100.0, 100.0) is False
+            finally:
+                win.clear_synctex_highlight_pulse()
+                for s in list(win.sessions):
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+                win.destroy()
+
+    def test_preferences_window_synctex_presets_and_custom_command(self, tmp_path):
+        from word_sys_pdf_editor.preferences_dialog import PreferencesWindow
+        from word_sys_pdf_editor.settings_manager import (
+            SYNCTEX_EDITOR_PRESETS,
+            VALID_SYNCTEX_PRESETS,
+            SettingsManager,
+        )
+
+        mgr = SettingsManager(config_file=tmp_path / "prefs_synctex.json")
+        prefs = PreferencesWindow(editor_window=None, settings_manager=mgr)
+        try:
+            assert hasattr(prefs, "synctex_group")
+            assert prefs.synctex_enabled_switch.get_active() is True
+            assert prefs._synctex_preset_codes == list(VALID_SYNCTEX_PRESETS)
+            assert prefs.synctex_command_entry.get_text() == SYNCTEX_EDITOR_PRESETS["vscode"]
+
+            # Select TeXstudio preset -> command entry and SettingsManager update automatically
+            ts_idx = prefs._synctex_preset_codes.index("texstudio")
+            prefs.synctex_preset_dropdown.set_selected(ts_idx)
+            assert mgr.get("synctex_editor_preset") == "texstudio"
+            assert mgr.get("synctex_editor_command") == SYNCTEX_EDITOR_PRESETS["texstudio"]
+            assert prefs.synctex_command_entry.get_text() == SYNCTEX_EDITOR_PRESETS["texstudio"]
+
+            # Select Kate, Sublime, Emacs presets
+            for code in ("kate", "sublime", "emacs", "vim", "neovim", "gedit"):
+                idx = prefs._synctex_preset_codes.index(code)
+                prefs.synctex_preset_dropdown.set_selected(idx)
+                assert mgr.get("synctex_editor_preset") == code
+                assert mgr.get("synctex_editor_command") == SYNCTEX_EDITOR_PRESETS[code]
+
+            # Typing a custom command switches preset to "custom" and saves the template
+            custom_cmd = 'my-tex-ide --file "%f" --line %l --col %c'
+            prefs.synctex_command_entry.set_text(custom_cmd)
+            assert mgr.get("synctex_editor_command") == custom_cmd
+            assert mgr.get("synctex_editor_preset") == "custom"
+            assert prefs.synctex_preset_dropdown.get_selected() == prefs._synctex_preset_codes.index("custom")
+
+            # Disabling SyncTeX disables preset and command rows
+            prefs.synctex_enabled_switch.set_active(False)
+            assert mgr.get("synctex_enabled") is False
+            assert prefs.synctex_preset_row.get_sensitive() is False
+            assert prefs.synctex_command_row.get_sensitive() is False
+        finally:
+            prefs.close()
+            prefs.destroy()
+
+
