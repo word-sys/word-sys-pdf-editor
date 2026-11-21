@@ -6138,3 +6138,84 @@ STRINGS_RU.update({
     'status_pdf_auto_reloaded': 'Обновлённый PDF перезагружен: {}',
     'status_external_change_unsaved': "Файл '{}' изменён на диске (есть несохранённые правки)",
 })
+
+# v1.12.1 Quick Start Guide & Manual (F1) Updates
+STRINGS_FR.update({
+    'guide_tool_rich_forms_title': 'Champs AcroForm en texte enrichi',
+    'guide_tool_rich_forms_desc': "Mettez en forme le texte dans les champs de formulaire AcroForm avec Gras (Ctrl+B), Italique (Ctrl+I), Souligné (Ctrl+U), Barré, tailles et couleurs via la mini-barre flottante, ou activez le Texte enrichi (G/I/S) dans le Créateur de formulaires.",
+    'guide_prefs_customization_title': "Personnalisation des préférences, barre d'outils et menu",
+    'guide_prefs_customization_desc': "Ouvrez les Préférences (Ctrl+,) pour personnaliser l'ordre et la visibilité des outils, choisir des préréglages de travail, configurer le menu principal (Standard, Minimal, Complet, Personnalisé) et régler le retour automatique à l'outil Sélection (maintenez Maj pour inverser).",
+    'guide_synctex_title': 'Recherche directe et inverse SyncTeX LaTeX',
+    'guide_synctex_desc': "Sautez de n'importe quelle ligne PDF vers sa source LaTeX .tex avec Ctrl+Clic ou le menu contextuel, et lancez une recherche directe depuis votre éditeur via --synctex-forward LIGNE:COL:TEX PDF avec rechargement automatique lors de la recompilation.",
+    'guide_cross_tab_pages_title': 'Copier, coller et glisser-déposer des pages entre onglets',
+    'guide_cross_tab_pages_desc': "Faites glisser des vignettes de page entre les onglets ouverts (survolez un onglet pour basculer), copiez/collez/dupliquez des pages avec Ctrl+Maj+C, Ctrl+Maj+V et Ctrl+Maj+D, ou transférez des plages via « Copier des pages vers un onglet… ».",
+    'guide_sc_preferences': 'Ouvrir la fenêtre des préférences',
+    'guide_sc_synctex_backward': 'SyncTeX : aller à la source LaTeX (.tex)',
+    'guide_sc_page_copy_paste_dup': 'Copier / Coller / Dupliquer une page entre onglets',
+    'guide_sc_rich_text_format': 'Texte enrichi Gras / Italique / Souligné dans les formulaires',
+    'guide_sc_shift_keep_tool': "Garder l'outil actuel actif après le placement",
+})
+
+STRINGS_DE.update({
+    'guide_tool_rich_forms_title': 'Rich-Text-AcroForm-Felder',
+    'guide_tool_rich_forms_desc': 'Formatieren Sie Text in ausfüllbaren AcroForm-Feldern mit Fett (Strg+B), Kursiv (Strg+I), Unterstrichen (Strg+U), Durchgestrichen, Schriftgrößen und Farben über die schwebende Mini-Symbolleiste oder aktivieren Sie Rich Text (F/K/U) im Formular-Editor.',
+    'guide_prefs_customization_title': 'Einstellungen, Symbolleiste & Menüanpassung',
+    'guide_prefs_customization_desc': 'Öffnen Sie die Einstellungen (Strg+,), um Reihenfolge und Sichtbarkeit der Werkzeuge anzupassen, Workflow-Profile zu wählen, das Hauptmenü (Standard, Minimal, Vollständig, Benutzerdefiniert) zu konfigurieren und den automatischen Wechsel zum Auswahlwerkzeug zu steuern (Umschalttaste gedrückt halten zum Umkehren).',
+    'guide_synctex_title': 'SyncTeX-LaTeX-Vorwärts- & Rückwärtssuche',
+    'guide_synctex_desc': 'Springen Sie mit Strg+Klick oder über das Kontextmenü von jeder PDF-Zeile zurück zur LaTeX-.tex-Quelle und nutzen Sie --synctex-forward ZEILE:SPALTE:TEX PDF mit automatischem Live-Reload nach dem Kompilieren.',
+    'guide_cross_tab_pages_title': 'Seiten tabübergreifend kopieren, einfügen & ziehen',
+    'guide_cross_tab_pages_desc': 'Ziehen Sie Seitenvorschaubilder zwischen offenen Dokument-Tabs (über einem Tab verweilen zum Wechseln), kopieren/fügen/duplizieren Sie Seiten mit Strg+Umschalt+C, Strg+Umschalt+V und Strg+Umschalt+D oder übertragen Sie Seitenbereiche über „Seiten in Tab kopieren…“.',
+    'guide_sc_preferences': 'Einstellungsfenster öffnen',
+    'guide_sc_synctex_backward': 'SyncTeX: Zur LaTeX-Quelle springen (.tex)',
+    'guide_sc_page_copy_paste_dup': 'Seite tabübergreifend kopieren / einfügen / duplizieren',
+    'guide_sc_rich_text_format': 'Rich-Text Fett / Kursiv / Unterstrichen in Formularen',
+    'guide_sc_shift_keep_tool': 'Aktuelles Werkzeug nach dem Platzieren aktiv halten',
+})
+
+STRINGS_ES.update({
+    'guide_tool_rich_forms_title': 'Campos AcroForm de texto enriquecido',
+    'guide_tool_rich_forms_desc': 'Da formato al texto en campos AcroForm rellenables con Negrita (Ctrl+B), Cursiva (Ctrl+I), Subrayado (Ctrl+U), Tachado, tamaños y colores mediante la minibarra flotante, o activa Texto enriquecido (N/K/S) en el Creador de formularios.',
+    'guide_prefs_customization_title': 'Personalización de preferencias, barra y menú',
+    'guide_prefs_customization_desc': 'Abre Preferencias (Ctrl+,) para personalizar el orden y visibilidad de herramientas, elegir perfiles de trabajo, configurar el menú principal (Estándar, Mínimo, Completo, Personalizado) y ajustar el cambio automático a Selección (mantén Mayús para invertir).',
+    'guide_synctex_title': 'Búsqueda directa e inversa SyncTeX LaTeX',
+    'guide_synctex_desc': 'Salta de cualquier línea PDF a su código fuente LaTeX .tex con Ctrl+Clic o el menú contextual, y salta desde tu editor con --synctex-forward LÍNEA:COL:TEX PDF con recarga automática al recompilar.',
+    'guide_cross_tab_pages_title': 'Copiar, pegar y arrastrar páginas entre pestañas',
+    'guide_cross_tab_pages_desc': 'Arrastra miniaturas de página entre pestañas abiertas (mantén el cursor sobre una pestaña para cambiar), copia/pega/duplica páginas con Ctrl+Mayús+C, Ctrl+Mayús+V y Ctrl+Mayús+D, o transfiere rangos con «Copiar páginas a pestaña…».',
+    'guide_sc_preferences': 'Abrir ventana de preferencias',
+    'guide_sc_synctex_backward': 'SyncTeX: ir al código fuente LaTeX (.tex)',
+    'guide_sc_page_copy_paste_dup': 'Copiar / Pegar / Duplicar página entre pestañas',
+    'guide_sc_rich_text_format': 'Texto enriquecido Negrita / Cursiva / Subrayado en formulaires',
+    'guide_sc_shift_keep_tool': 'Mantener activa la herramienta actual tras colocar',
+})
+
+STRINGS_IT.update({
+    'guide_tool_rich_forms_title': 'Campi modulo AcroForm con testo formattato',
+    'guide_tool_rich_forms_desc': 'Formatta il testo nei campi AcroForm compilabili con Grassetto (Ctrl+B), Corsivo (Ctrl+I), Sottolineato (Ctrl+U), Barrato, dimensioni e colori tramite la mini-barra flottante, o abilita Testo formattato (G/C/S) nel Costruttore moduli.',
+    'guide_prefs_customization_title': 'Personalizzazione preferenze, barra strumenti e menu',
+    'guide_prefs_customization_desc': 'Apri Preferenze (Ctrl+,) per personalizzare ordine e visibilità degli strumenti, scegliere profili di lavoro, configurare il menu principale (Standard, Minimale, Completo, Personalizzato) e regolare il passaggio automatico a Selezione (tieni premuto Maiusc per invertire).',
+    'guide_synctex_title': 'Ricerca diretta e inversa SyncTeX LaTeX',
+    'guide_synctex_desc': 'Passa da qualsiasi riga PDF al sorgente LaTeX .tex con Ctrl+Clic o dal menu contestuale, ed esegui la ricerca diretta dal tuo editor con --synctex-forward RIGA:COL:TEX PDF con ricaricamento automatico alla ricompilazione.',
+    'guide_cross_tab_pages_title': 'Copia, incolla e trascina pagine tra schede',
+    'guide_cross_tab_pages_desc': 'Trascina le miniature delle pagine tra le schede aperte (passa sopra una scheda per attivare), copia/incolla/duplica pagine con Ctrl+Maiusc+C, Ctrl+Maiusc+V e Ctrl+Maiusc+D o trasferisci intervalli con «Copia pagine in scheda…».',
+    'guide_sc_preferences': 'Apri finestra delle preferenze',
+    'guide_sc_synctex_backward': 'SyncTeX: vai al sorgente LaTeX (.tex)',
+    'guide_sc_page_copy_paste_dup': 'Copia / Incolla / Duplica pagina tra schede',
+    'guide_sc_rich_text_format': 'Testo formattato Grassetto / Corsivo / Sottolineato nei moduli',
+    'guide_sc_shift_keep_tool': 'Mantieni attivo lo strumento corrente dopo il posizionamento',
+})
+
+STRINGS_RU.update({
+    'guide_tool_rich_forms_title': 'Поля форм AcroForm с форматированным текстом',
+    'guide_tool_rich_forms_desc': 'Форматируйте текст в заполняемых полях AcroForm с помощью Жирного (Ctrl+B), Курсива (Ctrl+I), Подчёркнутого (Ctrl+U), Зачёркнутого, размера и цвета на всплывающей мини-панели или включите Rich Text (Ж/К/Ч) в Конструкторе форм.',
+    'guide_prefs_customization_title': 'Настройка параметров, панели инструментов и меню',
+    'guide_prefs_customization_desc': 'Откройте Настройки (Ctrl+,) для изменения порядка и видимости инструментов, выбора рабочих профилей, настройки главного меню (Стандартный, Минималистичный, Полный, Пользовательский) и автопереключения на инструмент «Выбор» (удерживайте Shift для инверсии).',
+    'guide_synctex_title': 'Прямой и обратный поиск SyncTeX LaTeX',
+    'guide_synctex_desc': 'Переходите от любой строки PDF к исходному коду LaTeX .tex через Ctrl+Щелчок или контекстное меню и выполняйте прямой переход из редактора через --synctex-forward СТРОКА:СТОЛБЕЦ:TEX PDF с автоперезагрузкой после компиляции.',
+    'guide_cross_tab_pages_title': 'Копирование, вставка и перетаскивание страниц между вкладками',
+    'guide_cross_tab_pages_desc': 'Перетаскивайте миниатюры страниц между открытыми вкладками (наведите на заголовок вкладки для переключения), копируйте/вставляйте/дублируйте страницы клавишами Ctrl+Shift+C, Ctrl+Shift+V и Ctrl+Shift+D или переносите диапазоны через «Копировать страницы во вкладку…».',
+    'guide_sc_preferences': 'Открыть окно настроек',
+    'guide_sc_synctex_backward': 'SyncTeX: перейти к исходнику LaTeX (.tex)',
+    'guide_sc_page_copy_paste_dup': 'Копировать / Вставить / Дублировать страницу между вкладками',
+    'guide_sc_rich_text_format': 'Rich Text Жирный / Курсив / Подчёркнутый в формах',
+    'guide_sc_shift_keep_tool': 'Оставлять текущий инструмент активным после размещения',
+})

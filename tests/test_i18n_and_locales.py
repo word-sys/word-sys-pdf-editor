@@ -1042,6 +1042,19 @@ class TestLocaleDetectionAndPersistence(unittest.TestCase):
             "guide_sc_tool_signature",
             "guide_sc_tool_ocr_region",
             "guide_sc_tool_form_builder",
+            "guide_tool_rich_forms_title",
+            "guide_tool_rich_forms_desc",
+            "guide_prefs_customization_title",
+            "guide_prefs_customization_desc",
+            "guide_synctex_title",
+            "guide_synctex_desc",
+            "guide_cross_tab_pages_title",
+            "guide_cross_tab_pages_desc",
+            "guide_sc_preferences",
+            "guide_sc_synctex_backward",
+            "guide_sc_page_copy_paste_dup",
+            "guide_sc_rich_text_format",
+            "guide_sc_shift_keep_tool",
         ]
         for lang_code, _ in get_supported_languages():
             table = i18n._STRINGS[lang_code]
@@ -1061,6 +1074,13 @@ class TestLocaleDetectionAndPersistence(unittest.TestCase):
         self.assertEqual(dlg.view_stack.get_visible_child_name(), "security_ocr")
         visible_rows = [r for r in dlg._filter_records if r["row"].get_visible()]
         self.assertGreaterEqual(len(visible_rows), 1)
+
+        # Verify searching for SyncTeX, Ctrl + ,, and Ctrl + Shift + C matches the new guide rows
+        for query in ("--synctex-forward", "ctrl + ,", "ctrl + shift + c", "ctrl + b"):
+            dlg.search_entry.set_text(query)
+            dlg._on_search_changed(dlg.search_entry)
+            matched_rows = [r for r in dlg._filter_records if r["row"].get_visible()]
+            self.assertGreaterEqual(len(matched_rows), 1, f"Expected Quick Guide search match for {query!r}")
 
         # Clearing search restores all rows
         dlg.search_entry.set_text("")

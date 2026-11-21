@@ -313,6 +313,11 @@ class QuickGuideDialog(Adw.Window):
             "guide_tool_forms_title", "guide_tool_forms_desc",
             "view-list-symbolic", "B",
         )
+        self._add_feature_row(
+            tab_id, grp_annot, rows_annot,
+            "guide_tool_rich_forms_title", "guide_tool_rich_forms_desc",
+            "format-text-bold-symbolic", "Ctrl + B", "Ctrl + I", "Ctrl + U",
+        )
         page.add(grp_annot)
         self._tab_groups[tab_id].append((grp_annot, rows_annot))
 
@@ -349,6 +354,16 @@ class QuickGuideDialog(Adw.Window):
             "guide_nav_undo_title", "guide_nav_undo_desc",
             "edit-undo-symbolic", "Ctrl + Z", "Ctrl + Y",
         )
+        self._add_feature_row(
+            tab_id, grp_nav, rows_nav,
+            "guide_prefs_customization_title", "guide_prefs_customization_desc",
+            "preferences-system-symbolic", "Ctrl + ,",
+        )
+        self._add_feature_row(
+            tab_id, grp_nav, rows_nav,
+            "guide_synctex_title", "guide_synctex_desc",
+            "text-x-generic-symbolic", "Ctrl + Click", "--synctex-forward",
+        )
         page.add(grp_nav)
         self._tab_groups[tab_id].append((grp_nav, rows_nav))
 
@@ -381,6 +396,11 @@ class QuickGuideDialog(Adw.Window):
             tab_id, grp_pages, rows_pages,
             "guide_tabs_title", "guide_tabs_desc",
             "tab-new-symbolic", "Ctrl + W", "Ctrl + Tab",
+        )
+        self._add_feature_row(
+            tab_id, grp_pages, rows_pages,
+            "guide_cross_tab_pages_title", "guide_cross_tab_pages_desc",
+            "edit-paste-symbolic", "Ctrl + Shift + C", "Ctrl + Shift + V", "Ctrl + Shift + D",
         )
         self._add_feature_row(
             tab_id, grp_pages, rows_pages,
@@ -488,6 +508,8 @@ class QuickGuideDialog(Adw.Window):
         self._add_shortcut_row(tab_id, grp_doc, rows_doc, _("guide_sc_close_tab"), "Ctrl + W")
         self._add_shortcut_row(tab_id, grp_doc, rows_doc, _("guide_sc_next_tab"), "Ctrl + Tab", "Ctrl + PgDn")
         self._add_shortcut_row(tab_id, grp_doc, rows_doc, _("guide_sc_prev_tab"), "Ctrl + Shift + Tab", "Ctrl + PgUp")
+        self._add_shortcut_row(tab_id, grp_doc, rows_doc, _("guide_sc_preferences"), "Ctrl + ,")
+        self._add_shortcut_row(tab_id, grp_doc, rows_doc, _("guide_sc_synctex_backward"), "Ctrl + Click")
         self._add_shortcut_row(tab_id, grp_doc, rows_doc, _("guide_sc_quick_guide"), "F1")
         self._add_shortcut_row(tab_id, grp_doc, rows_doc, _("guide_sc_quit"), "Ctrl + Q")
         page.add(grp_doc)
@@ -500,6 +522,9 @@ class QuickGuideDialog(Adw.Window):
         self._add_shortcut_row(tab_id, grp_edit, rows_edit, _("guide_sc_undo"), "Ctrl + Z")
         self._add_shortcut_row(tab_id, grp_edit, rows_edit, _("guide_sc_redo"), "Ctrl + Y", "Ctrl + Shift + Z")
         self._add_shortcut_row(tab_id, grp_edit, rows_edit, _("guide_sc_copy_paste_dup"), "Ctrl + C", "Ctrl + V", "Ctrl + D")
+        self._add_shortcut_row(tab_id, grp_edit, rows_edit, _("guide_sc_page_copy_paste_dup"), "Ctrl + Shift + C", "Ctrl + Shift + V", "Ctrl + Shift + D")
+        self._add_shortcut_row(tab_id, grp_edit, rows_edit, _("guide_sc_rich_text_format"), "Ctrl + B", "Ctrl + I", "Ctrl + U")
+        self._add_shortcut_row(tab_id, grp_edit, rows_edit, _("guide_sc_shift_keep_tool"), "Shift + Drag / Click")
         self._add_shortcut_row(tab_id, grp_edit, rows_edit, _("guide_sc_rotate_cw"), "Ctrl + Shift + R")
         self._add_shortcut_row(tab_id, grp_edit, rows_edit, _("guide_sc_rotate_ccw"), "Ctrl + Shift + L")
         self._add_shortcut_row(tab_id, grp_edit, rows_edit, _("guide_sc_zoom_in"), "Ctrl + +")
