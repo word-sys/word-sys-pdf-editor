@@ -16,7 +16,7 @@ Licenza: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Versione stabile consigliata: v1.12.0** — Per la massima stabilità operativa, si consiglia vivamente l'utilizzo della versione **1.12.0**. Consultare le sezioni di installazione seguenti per tutti i dettagli.
+> **Versione stabile consigliata: v1.12.1** — Per la massima stabilità operativa, si consiglia vivamente l'utilizzo della versione **1.12.1**. Consultare le sezioni di installazione seguenti per tutti i dettagli.
 
 ---
 
@@ -38,6 +38,10 @@ Licenza: **GPL-3.0-or-later**
 
 ## Funzionalità principali
 
+*   Finestra Preferenze Libadwaita dedicata (`Ctrl+,`) con barra degli strumenti personalizzabile, profili di lavoro, layout del menu principale e passaggio automatico a Selezione (inversione con `Maiusc`)
+*   Trascinamento di pagine tra schede (cambio scheda al passaggio 350 ms), appunti pagine persistenti (`Ctrl+Maiusc+C` / `V` / `D`) e trasferimento di intervalli di pagine con Annulla/Ripeti completo
+*   Supporto ISO 32000 Rich Text nei campi AcroForm compilabili (`/RV`, `/DS`, `/AP /N`) con mini-barra flottante Grassetto/Corsivo/Sottolineato/Barrato/Dimensione/Colore (`Ctrl+B` / `I` / `U`) e interruttore nel Costruttore moduli
+*   Integrazione SyncTeX LaTeX bidirezionale (`--synctex-forward` IPC istanza singola + impulso di evidenziazione, ricerca inversa `Ctrl+Clic` e menu contestuale con editor esterni, e ricaricamento automatico live 400 ms)
 *   Scorrimento verticale continuo delle pagine con rendering ritagliato sulla viewport, prefetching direzionale e scaling frazionario (HiDPI / 4K / Retina)
 *   Motore interattivo AcroForms: compilazione diretta di campi di testo, caselle di controllo, pulsanti radio e menu a discesa in modalità lettura, e appiattimento vettoriale
 *   Strumento interattivo per la creazione di moduli (`B`) per progettare, allineare e configurare nuovi campi AcroForm
@@ -128,18 +132,18 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 Il metodo di installazione pacchetti più immediato per le distribuzioni basate su Debian, Ubuntu e Pardus.
 
-1.  Scaricare il pacchetto `.deb` più recente dalla pagina [**Versioni GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). Il nome del file è `word-sys-pdf-editor_1.12.0_amd64.deb` (oppure `_arm64.deb` per ARM64).
+1.  Scaricare il pacchetto `.deb` più recente dalla pagina [**Versioni GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). Il nome del file è `word-sys-pdf-editor_1.12.1_amd64.deb` (oppure `_arm64.deb` per ARM64).
 
     > [!TIP]
-    > **Utilizzare la versione 1.12.0** per garantire stabilità: cercare `word-sys-pdf-editor_1.12.0_amd64.deb` nella pagina dei rilasci.
+    > **Utilizzare la versione 1.12.1** per garantire stabilità: cercare `word-sys-pdf-editor_1.12.1_amd64.deb` nella pagina dei rilasci.
 
 2.  Aprire un terminale nella cartella in cui è stato salvato il pacchetto `.deb`.
 3.  Eseguire il comando di installazione:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.12.0_amd64.deb
+    sudo apt install ./word-sys-pdf-editor_1.12.1_amd64.deb
     ```
-    *(Nota: sostituire `word-sys-pdf-editor_1.12.0_amd64.deb` con il nome file effettivo se differente.)*
+    *(Nota: sostituire `word-sys-pdf-editor_1.12.1_amd64.deb` con il nome file effettivo se differente.)*
 4.  Qualora si riscontrino errori di dipendenze, eseguire il comando correttivo:
     ```bash
     sudo apt --fix-broken install
@@ -154,7 +158,7 @@ Questo formato è utilizzabile universalmente su qualsiasi distribuzione Linux.
 
 1.  Scaricare il file `.AppImage` o `*-linux-*.tar.gz` dalla pagina [**Versioni GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases) (`word-sys-pdf-editor-x86_64.AppImage` o `word-sys-pdf-editor-linux-x86_64.tar.gz`).
 
-    > **Utilizzare la versione 1.12.0** per la migliore affidabilità: fare riferimento al tag `v1.12.0`.
+    > **Utilizzare la versione 1.12.1** per la migliore affidabilità: fare riferimento al tag `v1.12.1`.
 
 #### A. Installazione AppImage
 
@@ -201,7 +205,7 @@ Questo formato è utilizzabile universalmente su qualsiasi distribuzione Linux.
 Adatto agli utenti che preferiscono eseguire l'applicazione dal codice sorgente o contribuire al progetto.
 
 > [!TIP]
-> Per un ambiente stabile clonare il tag **v1.12.0**. Per testare i cambiamenti più recenti clonare il ramo `main` (potrebbe essere meno stabile).
+> Per un ambiente stabile clonare il tag **v1.12.1**. Per testare i cambiamenti più recenti clonare il ramo `main` (potrebbe essere meno stabile).
 
 ---
 
@@ -219,9 +223,9 @@ Adatto agli utenti che preferiscono eseguire l'applicazione dal codice sorgente 
 
 2.  **Scaricare il codice sorgente:**
 
-    **Consigliato (versione stabile v1.12.0):**
+    **Consigliato (versione stabile v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -240,7 +244,7 @@ Adatto agli utenti che preferiscono eseguire l'applicazione dal codice sorgente 
 
 4.  **Installare le dipendenze Python:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
     ```
 
 5.  **Avviare l'applicazione:**
@@ -264,9 +268,9 @@ Adatto agli utenti che preferiscono eseguire l'applicazione dal codice sorgente 
 
 2.  **Scaricare il codice sorgente:**
 
-    **Consigliato (versione stabile v1.12.0):**
+    **Consigliato (versione stabile v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -284,7 +288,7 @@ Adatto agli utenti che preferiscono eseguire l'applicazione dal codice sorgente 
 
 4.  **Installare le dipendenze Python:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 5.  **Avviare l'applicazione:**
@@ -298,9 +302,9 @@ Adatto agli utenti che preferiscono eseguire l'applicazione dal codice sorgente 
 
 1.  **Scaricare il codice sorgente:**
 
-    **Consigliato (versione stabile v1.12.0):**
+    **Consigliato (versione stabile v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -319,7 +323,7 @@ Adatto agli utenti che preferiscono eseguire l'applicazione dal codice sorgente 
 
 3.  **Installare le dipendenze Python:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 4.  **Avviare l'applicazione:**

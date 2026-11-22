@@ -20,6 +20,7 @@ tests/test_regressions_and_fixes.py
 tests/test_rendering_and_cache.py
 tests/test_signatures_and_security.py
 tests/test_stamps_and_notes.py
+tests/test_synctex_engine.py
 tests/test_text_editing_suite.py
 tests/test_v1120_atomic.py
 word_sys_pdf_editor/LICENSE
@@ -33,6 +34,7 @@ word_sys_pdf_editor/digital_signature.py
 word_sys_pdf_editor/docmdp_guard.py
 word_sys_pdf_editor/export_dialog.py
 word_sys_pdf_editor/flatten_dialog.py
+word_sys_pdf_editor/form_fields.py
 word_sys_pdf_editor/hardware.py
 word_sys_pdf_editor/i18n.py
 word_sys_pdf_editor/license_data.py
@@ -46,15 +48,18 @@ word_sys_pdf_editor/ocr_engine.py
 word_sys_pdf_editor/pades_signer.py
 word_sys_pdf_editor/pdf_handler.py
 word_sys_pdf_editor/pkcs11_manager.py
+word_sys_pdf_editor/preferences_dialog.py
 word_sys_pdf_editor/print_handler.py
 word_sys_pdf_editor/protect_dialog.py
 word_sys_pdf_editor/quick_guide_dialog.py
 word_sys_pdf_editor/sanitize_dialog.py
 word_sys_pdf_editor/search_engine.py
 word_sys_pdf_editor/search_redact_dialog.py
+word_sys_pdf_editor/settings_manager.py
 word_sys_pdf_editor/signature_dialog.py
 word_sys_pdf_editor/stamp_manager.py
 word_sys_pdf_editor/stamp_renderer.py
+word_sys_pdf_editor/synctex_engine.py
 word_sys_pdf_editor/trust_dialog.py
 word_sys_pdf_editor/trust_manager.py
 word_sys_pdf_editor/tsa_client.py

@@ -67,6 +67,11 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="1.12.1" date="2026-11-22">
+      <description>
+        <p>Quality-of-life, workflow, LaTeX, and Rich Text Forms release introducing a dedicated Preferences Window (Ctrl+,) with customizable Toolbar ordering/visibility and Hamburger Menu presets, consistent post-action auto-switch to Select with Shift override, cross-tab page drag-and-drop with hover tab switching and Page Clipboard (Ctrl+Shift+C/V/D) plus multi-page range transfer, ISO 32000 Rich Text AcroForm fields with floating B/I/U/color mini-toolbar and Form Builder toggle, full bidirectional SyncTeX LaTeX forward/backward search with live Gio.FileMonitor auto-reload, AppImage host Python environment isolation, updated anyconvert 0.1.13 export engine, and complete 7-language localization.</p>
+      </description>
+    </release>
     <release version="1.12.0" date="2026-10-31">
       <description>
         <p>Major feature release introducing continuous vertical scrolling with viewport culling, interactive AcroForm filling and form builder, PAdES digital signatures with PKCS#11 hardware security tokens, permanent cryptographic redaction with automated PII detection and deep document sanitization, multi-language streaming OCR with neural models and region recognition, sticky notes and threaded comments, precision distance and area measurement tools, PDF compression with target size solver, AES-256 document encryption and password vault, clone and patch tool, modernized Quick Start Guide with live search, and an updated 10-screenshot visual showcase.</p>

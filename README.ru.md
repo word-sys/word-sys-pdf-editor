@@ -16,7 +16,7 @@
 ---
 
 > [!TIP]
-> **Рекомендуемая стабильная версия: v1.12.0** — Для наиболее стабильной работы настоятельно рекомендуется использовать версию **1.12.0**. Инструкции по установке приведены ниже.
+> **Рекомендуемая стабильная версия: v1.12.1** — Для наиболее стабильной работы настоятельно рекомендуется использовать версию **1.12.1**. Инструкции по установке приведены ниже.
 
 ---
 
@@ -38,6 +38,10 @@
 
 ## Основные возможности
 
+*   Окно настроек Libadwaita (`Ctrl+,`) с настройкой порядка/видимости панели инструментов, профилями рабочего процесса, макетами главного меню и автопереключением на «Выбор» (переопределение клавишей `Shift`)
+*   Перетаскивание страниц между вкладками (автопереключение при наведении 350 мс), постоянный буфер страниц (`Ctrl+Shift+C` / `V` / `D`) и перенос диапазонов страниц с полной поддержкой Отмены/Повтора
+*   Поддержка форматированного текста ISO 32000 в полях AcroForm (`/RV`, `/DS`, `/AP /N`) со всплывающей мини-панелью Жирный/Курсив/Подчёркнутый/Зачёркнутый/Размер/Цвет (`Ctrl+B` / `I` / `U`) и переключателем в Конструкторе форм
+*   Двусторонняя интеграция SyncTeX LaTeX (`--synctex-forward` IPC одного экземпляра + пульсация подсветки, обратный поиск `Ctrl+Щелчок` и контекстное меню с пресетами редакторов, автоперезагрузка PDF с задержкой 400 мс)
 *   Непрерывная вертикальная прокрутка страниц с оптимизированным рендерингом (viewport culling), упреждающей загрузкой и поддержкой дробного масштабирования (HiDPI / 4K / Retina)
 *   Интерактивный движок AcroForms: прямое заполнение текстовых полей, флажков, радиокнопок и выпадающих списков в режиме просмотра, а также векторное уплощение (flattening)
 *   Интерактивный конструктор форм (`B`) для создания, выравнивания и настройки новых полей AcroForm
@@ -128,16 +132,16 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 Наиболее простой способ установки пакета для дистрибутивов на базе Debian, Ubuntu и Pardus.
 
-1.  Скачайте свежий пакет `.deb` со страницы [**Релизы GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). Имя файла: `word-sys-pdf-editor_1.12.0_amd64.deb` (или `_arm64.deb` для ARM64).
+1.  Скачайте свежий пакет `.deb` со страницы [**Релизы GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases). Имя файла: `word-sys-pdf-editor_1.12.1_amd64.deb` (или `_arm64.deb` для ARM64).
 
     > [!TIP]
-    > **Используйте версию 1.12.0** для максимальной стабильности: найдите файл `word-sys-pdf-editor_1.12.0_amd64.deb` на странице релизов.
+    > **Используйте версию 1.12.1** для максимальной стабильности: найдите файл `word-sys-pdf-editor_1.12.1_amd64.deb` на странице релизов.
 
 2.  Откройте терминал в папке с загруженным `.deb` пакетом.
 3.  Выполните команду установки:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.12.0_amd64.deb
+    sudo apt install ./word-sys-pdf-editor_1.12.1_amd64.deb
     ```
     *(Примечание: укажите точное имя загруженного файла, если оно отличается.)*
 4.  При возникновении ошибок зависимостей выполните команду исправления:
@@ -154,7 +158,7 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 1.  Скачайте пакет `.AppImage` или архив `*-linux-*.tar.gz` со страницы [**Релизы GitHub**](https://github.com/word-sys/word-sys-pdf-editor/releases) (`word-sys-pdf-editor-x86_64.AppImage` или `word-sys-pdf-editor-linux-x86_64.tar.gz`).
 
-    > **Используйте версию 1.12.0** для максимальной надежности: ориентируйтесь на тег `v1.12.0`.
+    > **Используйте версию 1.12.1** для максимальной надежности: ориентируйтесь на тег `v1.12.1`.
 
 #### A. Установка AppImage
 
@@ -201,7 +205,7 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 Подходит для тех, кто хочет запускать приложение непосредственно из исходников или участвовать в разработке.
 
 > [!TIP]
-> Для стабильной работы используйте тег **v1.12.0** при клонировании. Для тестирования актуальных разработок клонируйте ветку `main` (может быть менее стабильной).
+> Для стабильной работы используйте тег **v1.12.1** при клонировании. Для тестирования актуальных разработок клонируйте ветку `main` (может быть менее стабильной).
 
 ---
 
@@ -219,9 +223,9 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 2.  **Загрузка исходного кода:**
 
-    **Рекомендуется (стабильная v1.12.0):**
+    **Рекомендуется (стабильная v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -240,7 +244,7 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 4.  **Установка зависимостей Python:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
     ```
 
 5.  **Запуск приложения:**
@@ -264,9 +268,9 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 2.  **Загрузка исходного кода:**
 
-    **Рекомендуется (стабильная v1.12.0):**
+    **Рекомендуется (стабильная v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -284,7 +288,7 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 4.  **Установка зависимостей Python:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 5.  **Запуск приложения:**
@@ -298,9 +302,9 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 1.  **Загрузка исходного кода:**
 
-    **Рекомендуется (стабильная v1.12.0):**
+    **Рекомендуется (стабильная v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -319,7 +323,7 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 3.  **Установка зависимостей Python:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 4.  **Запуск приложения:**

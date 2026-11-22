@@ -1,3 +1,18 @@
+word-sys-pdf-editor (1.12.1) bookworm; urgency=medium
+
+  * Added dedicated Libadwaita Preferences Window (Ctrl+,) backed by schema-validated SettingsManager
+  * Added Hamburger Menu layout presets (Standard, Clean/Minimal, Full, Custom) and customizable Toolbar ordering, visibility, presets, and 'More...' overflow menu
+  * Fixed AppImage host Python environment leakage by sanitizing PYTHONPATH, PYTHONHOME, and PYTHONUSERBASE with isolated Python flags (-s -B)
+  * Fixed canvas context menu auto-dismissal on Clone/Patch, Text, Shape, and Image deletion
+  * Unified consistent post-action auto-switch to Select tool across all creation tools with temporary Shift-key override
+  * Added Cross-Tab Page Drag-and-Drop with 350 ms tab-hover auto-switching, persistent Page Clipboard (Ctrl+Shift+C/V/D), and Multi-Page Range Copy to Tab dialog with full Undo/Redo
+  * Added full ISO 32000 Rich Text support in fillable AcroForm text fields (/Ff bit 26, /RV XHTML, /DS CSS, synthesized /AP /N appearance streams, Cairo rendering, flattening, floating B/I/U/size/color mini-toolbar, and Form Builder toggle)
+  * Added pure-Python SyncTeX forward (--synctex-forward) and backward (Ctrl+Click & context menu) search with single-instance D-Bus IPC, animated highlight pulse, external editor presets, and 400 ms debounced Gio.FileMonitor auto-reload
+  * Updated native anyconvert document conversion engine to v0.1.13 across all manifests and installers
+  * Completed 7-language localization (EN, TR, DE, FR, ES, IT, RU) and updated Quick Start Guide (F1) for all v1.12.1 features
+
+ -- Barın Güzeldemirci <baringuzeldemir@gmail.com>  Sun, 22 Nov 2026 12:30:00 +0300
+
 word-sys-pdf-editor (1.12.0) bookworm; urgency=medium
 
   * Grand Release v1.12.0: Unified major release consolidating corporate, enterprise, and accessibility enhancements

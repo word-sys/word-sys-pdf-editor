@@ -2018,7 +2018,7 @@ def test_debian_and_appimage_packaging_ocr_and_runtime_configuration(tmp_path, m
     for rel_path in ("pyproject.toml", "requirements.txt", "debian/postinst", "build-appimage.sh"):
         content = (repo_root / rel_path).read_text(encoding="utf-8")
         assert "PyMuPDF>=1.24.0,<2.0.0" in content, f"Missing PyMuPDF>=1.24.0,<2.0.0 in {rel_path}"
-        assert "anyconvert>=0.1.11" in content, f"Missing anyconvert>=0.1.11 in {rel_path}"
+        assert "anyconvert>=0.1.13" in content, f"Missing anyconvert>=0.1.13 in {rel_path}"
         assert "pyhanko-certvalidator>=0.24.0" in content, f"Missing pyhanko-certvalidator>=0.24.0 in {rel_path}"
         assert "Pillow>=9.0.0" in content, f"Missing Pillow>=9.0.0 in {rel_path}"
 

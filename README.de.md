@@ -16,7 +16,7 @@ Lizenz: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Empfohlene stabile Version: v1.12.0** — Für die bestmögliche Stabilität wird dringend empfohlen, Version **1.12.0** zu verwenden. Details zur Installation finden Sie in den nachfolgenden Abschnitten.
+> **Empfohlene stabile Version: v1.12.1** — Für die bestmögliche Stabilität wird dringend empfohlen, Version **1.12.1** zu verwenden. Details zur Installation finden Sie in den nachfolgenden Abschnitten.
 
 ---
 
@@ -38,6 +38,10 @@ Lizenz: **GPL-3.0-or-later**
 
 ## Hauptfunktionen
 
+*   Dediziertes Libadwaita-Einstellungsfenster (`Strg+,`) mit anpassbarer Werkzeugleiste, Workflow-Profilen, Hauptmenü-Voreinstellungen und automatischem Wechsel zum Auswahlwerkzeug (`Umschalt`-Umkehrung)
+*   Tabübergreifendes Seiten-Drag-and-Drop (mit 350 ms Tab-Hover-Wechsel), dauerhafte Seiten-Zwischenablage (`Strg+Umschalt+C` / `V` / `D`) und Seitenbereichs-Transfer mit vollständigem Rückgängig/Wiederholen
+*   ISO-32000-Rich-Text-Unterstützung in ausfüllbaren AcroForm-Feldern (`/RV`, `/DS`, synthetisierte `/AP /N`-Streams) mit schwebender Fett/Kursiv/Unterstrichen/Größe/Farbe-Mini-Symbolleiste (`Strg+B` / `I` / `U`) und Formular-Editor-Schalter
+*   Bidirektionale SyncTeX-LaTeX-Integration (`--synctex-forward` Einzelinstanz-IPC + Highlight-Puls, `Strg+Klick`- & Kontextmenü-Rückwärtssuche mit externen Editor-Voreinstellungen sowie 400-ms-Live-Auto-Reload)
 *   Fortlaufendes vertikales Seitenscrollen mit Viewport-Culling, direktionalem Prefetching und fraktionaler Skalierung (HiDPI / 4K / Retina)
 *   Interaktive AcroForms-Engine: Ausfüllen von Textfeldern, Kontrollkästchen, Optionsfeldern und Dropdowns im Ansichtsmodus sowie Vektor-Flattening
 *   Interaktives Formular-Erstellungswerkzeug (`B`) zum Erstellen, Ausrichten und Konfigurieren neuer AcroForm-Felder
@@ -128,18 +132,18 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 Dies ist der einfachste Paket-Installationsweg für Debian-, Ubuntu- und Pardus-basierte Distributionen.
 
-1.  Laden Sie das neueste `.deb`-Paket von der [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases)-Seite herunter. Die Datei heißt üblicherweise `word-sys-pdf-editor_1.12.0_amd64.deb` (oder `_arm64.deb`).
+1.  Laden Sie das neueste `.deb`-Paket von der [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases)-Seite herunter. Die Datei heißt üblicherweise `word-sys-pdf-editor_1.12.1_amd64.deb` (oder `_arm64.deb`).
 
     > [!TIP]
-    > **Verwenden Sie Version 1.12.0** für die stabilste Nutzung: Suchen Sie nach `word-sys-pdf-editor_1.12.0_amd64.deb` auf der Releases-Seite.
+    > **Verwenden Sie Version 1.12.1** für die stabilste Nutzung: Suchen Sie nach `word-sys-pdf-editor_1.12.1_amd64.deb` auf der Releases-Seite.
 
 2.  Öffnen Sie ein Terminal in dem Verzeichnis, in das Sie die `.deb`-Datei heruntergeladen haben.
 3.  Führen Sie folgenden Befehl aus, um das Paket zu installieren:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.12.0_amd64.deb
+    sudo apt install ./word-sys-pdf-editor_1.12.1_amd64.deb
     ```
-    *(Hinweis: Ersetzen Sie `word-sys-pdf-editor_1.12.0_amd64.deb` durch den genauen Dateinamen, falls dieser abweicht.)*
+    *(Hinweis: Ersetzen Sie `word-sys-pdf-editor_1.12.1_amd64.deb` durch den genauen Dateinamen, falls dieser abweicht.)*
 4.  Falls während der Installation ein Abhängigkeitsfehler auftritt, führen Sie folgenden Befehl aus, um fehlende Abhängigkeiten zu beheben:
     ```bash
     sudo apt --fix-broken install
@@ -154,7 +158,7 @@ Diese Methode ist sofort auf allen Linux-Distributionen einsatzbereit.
 
 1.  Laden Sie das `.AppImage` oder `*-linux-*.tar.gz`-Paket von der [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases)-Seite herunter (`word-sys-pdf-editor-x86_64.AppImage` oder `word-sys-pdf-editor-linux-x86_64.tar.gz`).
 
-    > **Verwenden Sie Version 1.12.0** für die stabilste Nutzung: Achten Sie auf das Tag `v1.12.0` auf der Releases-Seite.
+    > **Verwenden Sie Version 1.12.1** für die stabilste Nutzung: Achten Sie auf das Tag `v1.12.1` auf der Releases-Seite.
 
 #### A. AppImage-Installation
 
@@ -201,7 +205,7 @@ Diese Methode ist sofort auf allen Linux-Distributionen einsatzbereit.
 Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellcode ausführen oder zur Entwicklung beitragen möchten.
 
 > [!TIP]
-> Verwenden Sie für eine stabile Version das Tag **v1.12.0** beim Klonen. Wenn Sie neueste Änderungen testen möchten, können Sie direkt den Branch `main` klonen (dieser kann jedoch weniger stabil sein).
+> Verwenden Sie für eine stabile Version das Tag **v1.12.1** beim Klonen. Wenn Sie neueste Änderungen testen möchten, können Sie direkt den Branch `main` klonen (dieser kann jedoch weniger stabil sein).
 
 ---
 
@@ -219,9 +223,9 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 2.  **Quellcode herunterladen:**
 
-    **Empfohlen (stabil v1.12.0):**
+    **Empfohlen (stabil v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -240,7 +244,7 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 4.  **Python-Abhängigkeiten installieren:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
     ```
 
 5.  **Anwendung starten:**
@@ -264,9 +268,9 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 2.  **Quellcode herunterladen:**
 
-    **Empfohlen (stabil v1.12.0):**
+    **Empfohlen (stabil v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -284,7 +288,7 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 4.  **Python-Abhängigkeiten installieren:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 5.  **Anwendung starten:**
@@ -298,9 +302,9 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 1.  **Quellcode herunterladen:**
 
-    **Empfohlen (stabil v1.12.0):**
+    **Empfohlen (stabil v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -319,7 +323,7 @@ Diese Methode eignet sich für Benutzer, die die Anwendung direkt aus dem Quellc
 
 3.  **Python-Abhängigkeiten installieren:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 4.  **Anwendung starten:**

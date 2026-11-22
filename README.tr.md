@@ -16,7 +16,7 @@ Lisans: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Önerilen Kararlı Sürüm: v1.12.0** — En kararlı deneyim için **1.12.0** sürümünü kullanmanız önemle tavsiye edilir. Kurulum ayrıntıları için aşağıdaki bölümleri inceleyebilirsiniz.
+> **Önerilen Kararlı Sürüm: v1.12.1** — En kararlı deneyim için **1.12.1** sürümünü kullanmanız önemle tavsiye edilir. Kurulum ayrıntıları için aşağıdaki bölümleri inceleyebilirsiniz.
 
 ---
 
@@ -38,6 +38,10 @@ Lisans: **GPL-3.0-or-later**
 
 ## Temel Özellikler
 
+*   Özelleştirilebilir kenar araç çubuğu sırası/görünürlüğü, iş akışı ön ayarları, Ana Menü düzenleri ve `Shift` geçersiz kılmalı tutarlı Seç aracına otomatik geçiş içeren Libadwaita Tercihler Penceresi (`Ctrl+,`)
+*   Sekmeler arası sayfa sürükle-bırak (350 ms sekme üzerine gelme geçişiyle), kalıcı Sayfa Panosu (`Ctrl+Shift+C` / `V` / `D`) ve tam Geri Al/Yinele destekli çoklu sayfa aralığı aktarımı
+*   Yüzen Kalın/İtalik/Altı Çizili/Üstü Çizili/Boyut/Renk mini araç çubuğu (`Ctrl+B` / `I` / `U`) ve Form Oluşturucu anahtarı ile doldurulabilir AcroForm alanlarında ISO 32000 Zengin Metin (`/RV`, `/DS`, `/AP /N`) desteği
+*   Çift yönlü SyncTeX LaTeX entegrasyonu (`--synctex-forward` tek örnek IPC + vurgu animasyonu, harici düzenleyici ön ayarlı `Ctrl+Tıklama` ve sağ tık geri arama, 400 ms gecikmeli canlı PDF otomatik yenileme)
 *   Görünüm alanı kırpması (viewport culling), yönlü önbellekleme ve kesirli ölçeklendirme (HiDPI / 4K / Retina) ile kesintisiz dikey sayfa kaydırma
 *   Etkileşimli AcroForm Motoru: Görüntüleme modunda metin alanlarını, onay kutularını, radyo gruplarını ve açılır menüleri doğrudan doldurma ve vektör düzleştirme (flattening)
 *   Yeni AcroForm alanları oluşturmak, hizalamak ve biçimlendirmek için etkileşimli Form Oluşturucu Aracı (`B`)
@@ -123,16 +127,16 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 Pardus, Debian ve Ubuntu tabanlı dağıtımlar için en kolay paket kurulum yöntemidir.
 
-1.  [**GitHub Sürümleri**](https://github.com/word-sys/word-sys-pdf-editor/releases) sayfasından en güncel `.deb` paketini indirin. Dosya adı `word-sys-pdf-editor_1.12.0_amd64.deb` (veya ARM64 için `_arm64.deb`) şeklindedir.
+1.  [**GitHub Sürümleri**](https://github.com/word-sys/word-sys-pdf-editor/releases) sayfasından en güncel `.deb` paketini indirin. Dosya adı `word-sys-pdf-editor_1.12.1_amd64.deb` (veya ARM64 için `_arm64.deb`) şeklindedir.
 
     > [!TIP]
-    > En kararlı deneyim için **1.12.0 sürümünü** tercih edin: Sürümler sayfasında `word-sys-pdf-editor_1.12.0_amd64.deb` dosyasını bulun.
+    > En kararlı deneyim için **1.12.1 sürümünü** tercih edin: Sürümler sayfasında `word-sys-pdf-editor_1.12.1_amd64.deb` dosyasını bulun.
 
 2.  `.deb` dosyasını indirdiğiniz dizinde bir uçbirim (terminal) açın.
 3.  Paketi kurmak için aşağıdaki komutu çalıştırın:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.12.0_amd64.deb
+    sudo apt install ./word-sys-pdf-editor_1.12.1_amd64.deb
     ```
     *(Not: İndirdiğiniz dosya adı farklıysa komuttaki dosya adını güncelleyin.)*
 4.  Kurulum sırasında bağımlılık sorunu yaşarsanız eksik paketleri gidermek için şu komutu çalıştırın:
@@ -149,7 +153,7 @@ Tüm Linux dağıtımlarında kurulum yapmadan doğrudan çalıştırmak için u
 
 1.  [**GitHub Sürümleri**](https://github.com/word-sys/word-sys-pdf-editor/releases) sayfasından `.AppImage` veya `*-linux-*.tar.gz` paketini indirin (`word-sys-pdf-editor-x86_64.AppImage` veya `word-sys-pdf-editor-linux-x86_64.tar.gz`).
 
-    > En kararlı sürüm için sürümler sayfasındaki `v1.12.0` etiketini kullanın.
+    > En kararlı sürüm için sürümler sayfasındaki `v1.12.1` etiketini kullanın.
 
 #### A. AppImage ile Çalıştırma
 
@@ -196,7 +200,7 @@ Tüm Linux dağıtımlarında kurulum yapmadan doğrudan çalıştırmak için u
 Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda bulunmak isteyenler için uygundur.
 
 > [!TIP]
-> Kararlı bir deneyim için klonlarken **v1.12.0** etiketini kullanın. Geliştirme aşamasındaki en son değişiklikleri denemek isterseniz doğrudan `main` dalını klonlayabilirsiniz.
+> Kararlı bir deneyim için klonlarken **v1.12.1** etiketini kullanın. Geliştirme aşamasındaki en son değişiklikleri denemek isterseniz doğrudan `main` dalını klonlayabilirsiniz.
 
 ---
 
@@ -214,9 +218,9 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 2.  **Kaynak Kodu İndirin:**
 
-    **Önerilen (kararlı v1.12.0):**
+    **Önerilen (kararlı v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -235,7 +239,7 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 4.  **Python Paketlerini Kurun:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
     ```
 
 5.  **Uygulamayı Başlatın:**
@@ -259,9 +263,9 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 2.  **Kaynak Kodu İndirin:**
 
-    **Önerilen (kararlı v1.12.0):**
+    **Önerilen (kararlı v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -279,7 +283,7 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 4.  **Python Paketlerini Kurun:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 5.  **Uygulamayı Başlatın:**
@@ -293,9 +297,9 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 1.  **Kaynak Kodu İndirin:**
 
-    **Önerilen (kararlı v1.12.0):**
+    **Önerilen (kararlı v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -314,7 +318,7 @@ Uygulamayı doğrudan kaynak koddan çalıştırmak veya geliştirmeye katkıda 
 
 3.  **Python Paketlerini Kurun:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 4.  **Uygulamayı Başlatın:**

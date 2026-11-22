@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.12.1] - 2026-11-22
+
+### Added
+- **Dedicated Preferences Window & Centralized `SettingsManager` (`Ctrl+,`)**:
+  - Added a 4-page Libadwaita `PreferencesWindow` (`General`, `Tools & Workflow`, `Hamburger Menu`, `Toolbar & Tools`) backed by schema-validated atomic JSON persistence.
+  - Added Hamburger Menu layout presets (`Standard`, `Clean / Minimal`, `Full (Legacy)`, `Custom`) with per-item toggles and live menu rebuilding.
+  - Added Customizable Sidebar Toolbar with drag-and-drop & Move Up/Down tool reordering, per-tool visibility switches, workflow presets (`Default`, `Essential Editing`, `Annotation & Review`, `Forms & Signing`), reset to default, and a `More…` overflow popover.
+- **Cross-Tab Page Drag-and-Drop, Page Clipboard & Batch Range Transfer**:
+  - Drag page thumbnails directly between open document tabs (with 350 ms tab-hover auto-switching and `Ctrl`-drag duplication) while deep-copying uncommitted editor objects (`EditableText`, `EditableImage`/`PatchObject`, `EditableShape`, `EditableStroke`, `AcroFormField`, `StickyNoteObject`, `MeasurementObject`, `RedactionMark`).
+  - Added persistent Page Clipboard (`Ctrl+Shift+C`, `Ctrl+Shift+V`, `Ctrl+Shift+D`) that remains usable even after closing the source tab, plus a **"Copy Pages to Tab…"** dialog supporting custom ranges (e.g. `1-3, 5`), target open tabs or "New Document Tab", insertion positions, and full Undo/Redo.
+- **Rich Text Support in Fillable AcroForm Fields**:
+  - Full ISO 32000-1 Rich Text AcroForm engine (`FIELD_FLAG_RICH_TEXT` bit 26, Adobe Acrobat-compliant `/RV` XHTML & `/DS` CSS parsing/serialization, Base-14 multi-style `/AP /N` appearance stream synthesis with underline/strikethrough/colors/alignment, live Cairo rendering, and vector flattening).
+  - Upgraded View Mode text form editing with a tag-enabled `Gtk.TextView` and floating Rich Text mini-toolbar (**Bold `Ctrl+B`**, **Italic `Ctrl+I`**, **Underline `Ctrl+U`**, **Strikethrough**, **Font Size**, **Text Color**) with full rich-state Undo/Redo, plus a **"Rich Text (B/I/U)"** toggle in the Form Builder (`B`) property bar.
+- **SyncTeX LaTeX Integration & Live Auto-Reload**:
+  - Added pure-Python SyncTeX Version 1 parser & coordinate mapper (`synctex_engine.py`) with automatic `.synctex.gz`/`.synctex` discovery and optional system `synctex` CLI fallback.
+  - Added single-instance D-Bus CLI activation (`--synctex-forward LINE:COL:TEX_PATH PDF_PATH`, `-p`/`--page PAGE_NUM PDF_PATH`), tab focusing, smooth scrolling, and animated Cairo highlight pulse.
+  - Added `Ctrl+Click` and right-click **"Jump to LaTeX Source (.tex)"** backward search with external editor presets (`VS Code`, `TeXstudio`, `Vim`, `Neovim`, `Emacs`, `Kate`, `Gedit`, `Sublime Text`, and Custom Command `%f`/`%l`/`%c`).
+  - Added per-session `Gio.FileMonitor` with 400 ms debounce and `%%EOF` trailer readiness check to seamlessly auto-reload recompiled PDFs & `.synctex.gz` while preserving page index, continuous scroll offset, and zoom factor (or prompting via a non-intrusive banner when unsaved edits exist).
+- **7-Language Localization & Quick Start Guide (`F1`)**:
+  - Completed full 7-language translations (`en`, `tr`, `de`, `fr`, `es`, `it`, `ru`) across all 1,180 UI & guide strings and updated the interactive Quick Start Guide (`F1`).
+
+### Fixed & Changed
+- **AppImage Host Python Isolation**: Sanitized `PYTHONPATH`, `PYTHONHOME`, and `PYTHONUSERBASE`, exported `PYTHONNOUSERSITE=1` / `PYTHONDONTWRITEBYTECODE=1`, and invoked bundled Python with `-s -B` in `build-appimage.sh` so AppImage builds never fail on Ubuntu/Debian systems with incompatible host `gi` or dist-packages.
+- **Context Menu Auto-Dismissal**: Guaranteed canvas context popovers immediately dismiss upon deleting Clone/Patch, Text, Shape, or Image objects.
+- **Consistent Auto-Switch to Select Tool**: Unified post-action automatic return to the Selection tool (`auto_switch_to_select`) across all creation tools with temporary `Shift`-key inversion.
+- **anyconvert Engine Update**: Upgraded native document export engine requirement and Flatpak wheels to `anyconvert>=0.1.13` (`0.1.13`) across all manifests, installers, and documentation.
+
+---
+
 ## [1.12.0] - 2026-10-31
 
 ### Added

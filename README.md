@@ -16,7 +16,7 @@ License: **GPL-3.0-or-later**
 ---
 
 > [!TIP]
-> **Recommended Stable Release: v1.12.0** — For the most stable experience, it is strongly recommended to use version **1.12.0**. See the installation sections below for details on how to install this version.
+> **Recommended Stable Release: v1.12.1** — For the most stable experience, it is strongly recommended to use version **1.12.1**. See the installation sections below for details on how to install this version.
 
 ---
 
@@ -38,6 +38,10 @@ License: **GPL-3.0-or-later**
 
 ## Key Features
 
+*   Dedicated Libadwaita Preferences Window (`Ctrl+,`) with customizable Sidebar Toolbar ordering/visibility, workflow presets, Hamburger Menu layouts, and consistent auto-switch to Select (`Shift` override)
+*   Cross-Tab Page Drag-and-Drop (with 350 ms hover tab switching), persistent Page Clipboard (`Ctrl+Shift+C` / `V` / `D`), and Multi-Page Range Transfer across open tabs with full Undo/Redo
+*   ISO 32000 Rich Text support in fillable AcroForm fields (`/RV`, `/DS`, synthesized `/AP /N`) with a floating Bold/Italic/Underline/Strikethrough/Size/Color mini-toolbar (`Ctrl+B` / `I` / `U`) and Form Builder toggle
+*   Bidirectional SyncTeX LaTeX integration (`--synctex-forward` single-instance IPC + highlight pulse, `Ctrl+Click` & context menu backward search with external editor presets, and 400 ms debounced live PDF auto-reload)
 *   Continuous vertical page scrolling with viewport-culled rendering, directional prefetching, and fractional scaling (HiDPI / 4K / Retina)
 *   Interactive AcroForms Engine: fill text fields, checkboxes, radio groups, and dropdowns directly in View Mode, plus vector flattening
 *   Interactive Form Builder Tool (`B`) to create, align, style, and configure new AcroForm fields
@@ -123,18 +127,18 @@ flatpak run io.github.word_sys.word-sys-pdf-editor
 
 This method is the easiest installation path for Debian, Ubuntu, and Pardus distributions.
 
-1.  Download the latest `.deb` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named `word-sys-pdf-editor_1.12.0_amd64.deb` (or `_arm64.deb` for ARM64).
+1.  Download the latest `.deb` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named `word-sys-pdf-editor_1.12.1_amd64.deb` (or `_arm64.deb` for ARM64).
 
     > [!TIP]
-    > **Use version 1.12.0** for the most stable experience: look for `word-sys-pdf-editor_1.12.0_amd64.deb` on the releases page.
+    > **Use version 1.12.1** for the most stable experience: look for `word-sys-pdf-editor_1.12.1_amd64.deb` on the releases page.
 
 2.  Open a terminal in the directory where you downloaded the `.deb` file.
 3.  Run the following command to install the package:
     ```bash
     sudo apt update
-    sudo apt install ./word-sys-pdf-editor_1.12.0_amd64.deb
+    sudo apt install ./word-sys-pdf-editor_1.12.1_amd64.deb
     ```
-    *(Note: Replace `word-sys-pdf-editor_1.12.0_amd64.deb` with the exact filename you downloaded if different, such as `arm64`.)*
+    *(Note: Replace `word-sys-pdf-editor_1.12.1_amd64.deb` with the exact filename you downloaded if different, such as `arm64`.)*
 4.  If you encounter a dependency error during installation, it may happens because of you existing broken system, firstly try running the following command to fix missing dependencies or problems on your other packages:
     ```bash
     sudo apt --fix-broken install
@@ -149,7 +153,7 @@ This method is the easiest usable path for all Linux distributions.
 
 1.  Download the latest `.AppImage` or `*-linux-*.tar.gz` package from the [**GitHub Releases**](https://github.com/word-sys/word-sys-pdf-editor/releases) page. The file will typically be named `word-sys-pdf-editor-x86_64.AppImage` (or `-aarch64.AppImage`) or `word-sys-pdf-editor-linux-x86_64.tar.gz`.
 
-    > **Use version 1.12.0** for the most stable experience: look for `v1.12.0` tag on the releases page.
+    > **Use version 1.12.1** for the most stable experience: look for `v1.12.1` tag on the releases page.
 
 #### A. AppImage Installation
 
@@ -196,7 +200,7 @@ This method is the easiest usable path for all Linux distributions.
 This method is suitable for users who want to run the application directly from source code or contribute to development.
 
 > [!TIP]
-> For a stable experience, use the **v1.12.0** tag when cloning. If you want to test the latest development changes, you can clone the `main` branch directly — but note that it may be less stable.
+> For a stable experience, use the **v1.12.1** tag when cloning. If you want to test the latest development changes, you can clone the `main` branch directly — but note that it may be less stable.
 
 ---
 
@@ -215,9 +219,9 @@ This method is suitable for users who want to run the application directly from 
 
 2.  **Download the Source Code:**
 
-    **Recommended (stable v1.12.0):**
+    **Recommended (stable v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -238,7 +242,7 @@ This method is suitable for users who want to run the application directly from 
 4.  **Install Python Dependencies:**
     Install the core Python dependencies (PyMuPDF, numpy, anyconvert, cryptography, Pillow, pyhanko, python-pkcs11, and certifi):
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject==3.50.0
     ```
 
 5.  **Run the Application:**
@@ -263,9 +267,9 @@ This method is suitable for users who want to run the application directly from 
 
 2.  **Download the Source Code:**
 
-    **Recommended (stable v1.12.0):**
+    **Recommended (stable v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -284,7 +288,7 @@ This method is suitable for users who want to run the application directly from 
 
 4.  **Install Python Dependencies:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 5.  **Run the Application:**
@@ -298,9 +302,9 @@ This method is suitable for users who want to run the application directly from 
 
 1.  **Download the Source Code:**
 
-    **Recommended (stable v1.12.0):**
+    **Recommended (stable v1.12.1):**
     ```bash
-    git clone --branch v1.12.0 https://github.com/word-sys/word-sys-pdf-editor.git
+    git clone --branch v1.12.1 https://github.com/word-sys/word-sys-pdf-editor.git
     cd word-sys-pdf-editor
     ```
 
@@ -320,7 +324,7 @@ This method is suitable for users who want to run the application directly from 
 
 3.  **Install Python Dependencies:**
     ```bash
-    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.11" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
+    pip install "PyMuPDF>=1.24.0,<2.0.0" numpy "anyconvert>=0.1.13" "cryptography>=41.0.0" "Pillow>=9.0.0" "pyhanko[image-support,opentype]>=0.25.0" "pyhanko-certvalidator>=0.24.0" "python-pkcs11>=0.7.0" "asn1crypto>=1.5.1" certifi pygobject
     ```
 
 4.  **Run the Application:**

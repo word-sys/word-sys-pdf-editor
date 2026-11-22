@@ -80,8 +80,8 @@
             "sources": [
                 {
                     "type": "file",
-                    "url": "https://files.pythonhosted.org/packages/d1/3a/81bb8eb58d69344105958752f9afc2e0d30caf5ca2c67c76cd404c68d770/anyconvert-0.1.11-py3-none-any.whl",
-                    "sha256": "0ae8c8596cc38f215c05217dc9ac079b9dbd5bf6daaf184952e170c4d528ff34"
+                    "url": "https://files.pythonhosted.org/packages/e9/66/3f4144738c336e165a8c8c1c9a06aa53ab66f1ad358697eb63ac12e18ef6/anyconvert-0.1.13-py3-none-any.whl",
+                    "sha256": "52f0cd970122d43e759cf34b2fe8ed9039f7b59266f076e0acb1fff3a1921e22"
                 }
             ]
         },
