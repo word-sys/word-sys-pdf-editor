@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any, Dict, List, Optional
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, GObject, Gtk
+from gi.repository import Adw, Gdk, GLib, GObject, Gtk, Pango
 
 from . import utils
 from .i18n import _, get_language, get_setting, get_supported_languages
@@ -36,6 +37,69 @@ SYNCTEX_PRESET_DISPLAY_NAMES: Dict[str, str] = {
     "gedit": "Gedit",
     "sublime": "Sublime Text",
 }
+
+DEFAULT_DROPDOWN_MAX_WIDTH_CHARS: int = 22
+TOOLBAR_DROPDOWN_MAX_WIDTH_CHARS: int = 24
+
+
+def _escape_markup(text: Optional[str]) -> str:
+    """Safely escape plain or pre-escaped text for Pango markup in Adw rows/groups."""
+    if not text:
+        return ""
+    return GLib.markup_escape_text(html.unescape(str(text)))
+
+
+def _create_compact_dropdown(
+    items: List[str],
+    max_width_chars: int = DEFAULT_DROPDOWN_MAX_WIDTH_CHARS,
+) -> Gtk.DropDown:
+    """Create a Gtk.DropDown whose button ellipsizes cleanly while its popup shows full labels."""
+    dropdown = Gtk.DropDown.new_from_strings(items)
+    dropdown.set_valign(Gtk.Align.CENTER)
+    dropdown.set_hexpand(False)
+
+    button_factory = Gtk.SignalListItemFactory()
+
+    def _on_button_setup(_factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
+        lbl = Gtk.Label()
+        lbl.set_xalign(0.0)
+        lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        lbl.set_single_line_mode(True)
+        lbl.set_max_width_chars(max_width_chars)
+        lbl.set_width_chars(min(12, max_width_chars))
+        list_item.set_child(lbl)
+
+    def _on_button_bind(_factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
+        lbl = list_item.get_child()
+        item = list_item.get_item()
+        if isinstance(lbl, Gtk.Label) and item is not None:
+            text = item.get_string() if hasattr(item, "get_string") else str(item)
+            lbl.set_label(text)
+            lbl.set_tooltip_text(text)
+
+    button_factory.connect("setup", _on_button_setup)
+    button_factory.connect("bind", _on_button_bind)
+
+    popup_factory = Gtk.SignalListItemFactory()
+
+    def _on_popup_setup(_factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
+        lbl = Gtk.Label()
+        lbl.set_xalign(0.0)
+        list_item.set_child(lbl)
+
+    def _on_popup_bind(_factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
+        lbl = list_item.get_child()
+        item = list_item.get_item()
+        if isinstance(lbl, Gtk.Label) and item is not None:
+            text = item.get_string() if hasattr(item, "get_string") else str(item)
+            lbl.set_label(text)
+
+    popup_factory.connect("setup", _on_popup_setup)
+    popup_factory.connect("bind", _on_popup_bind)
+
+    dropdown.set_factory(button_factory)
+    dropdown.set_list_factory(popup_factory)
+    return dropdown
 
 
 class PreferencesWindow(Adw.PreferencesWindow):
@@ -75,19 +139,18 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.general_page.set_name("general")
 
         self.appearance_group = Adw.PreferencesGroup(
-            title=_("prefs_group_appearance"),
-            description=_("prefs_group_appearance_desc"),
+            title=_escape_markup(_("prefs_group_appearance")),
+            description=_escape_markup(_("prefs_group_appearance_desc")),
         )
 
         self.language_row = Adw.ActionRow(
-            title=_("prefs_lang_title"),
-            subtitle=_("prefs_lang_subtitle"),
+            title=_escape_markup(_("prefs_lang_title")),
+            subtitle=_escape_markup(_("prefs_lang_subtitle")),
         )
         supported = get_supported_languages()
         self._lang_codes: List[str] = [code for code, _name in supported]
         lang_names: List[str] = [name for _code, name in supported]
-        self.language_dropdown = Gtk.DropDown.new_from_strings(lang_names)
-        self.language_dropdown.set_valign(Gtk.Align.CENTER)
+        self.language_dropdown = _create_compact_dropdown(lang_names)
         current_lang = get_language()
         if current_lang in self._lang_codes:
             self.language_dropdown.set_selected(self._lang_codes.index(current_lang))
@@ -97,8 +160,8 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.appearance_group.add(self.language_row)
 
         self.continuous_scroll_row = Adw.ActionRow(
-            title=_("prefs_continuous_scroll_title"),
-            subtitle=_("prefs_continuous_scroll_subtitle"),
+            title=_escape_markup(_("prefs_continuous_scroll_title")),
+            subtitle=_escape_markup(_("prefs_continuous_scroll_subtitle")),
         )
         self.continuous_scroll_switch = Gtk.Switch()
         self.continuous_scroll_switch.set_valign(Gtk.Align.CENTER)
@@ -114,8 +177,8 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.appearance_group.add(self.continuous_scroll_row)
 
         self.eco_mode_row = Adw.ActionRow(
-            title=_("prefs_eco_mode_title"),
-            subtitle=_("prefs_eco_mode_subtitle"),
+            title=_escape_markup(_("prefs_eco_mode_title")),
+            subtitle=_escape_markup(_("prefs_eco_mode_subtitle")),
         )
         self.eco_mode_switch = Gtk.Switch()
         self.eco_mode_switch.set_valign(Gtk.Align.CENTER)
@@ -133,12 +196,12 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.general_page.add(self.appearance_group)
 
         self.behavior_group = Adw.PreferencesGroup(
-            title=_("prefs_group_behavior"),
+            title=_escape_markup(_("prefs_group_behavior")),
         )
 
         self.confirm_delete_row = Adw.ActionRow(
-            title=_("prefs_confirm_delete_title"),
-            subtitle=_("prefs_confirm_delete_subtitle"),
+            title=_escape_markup(_("prefs_confirm_delete_title")),
+            subtitle=_escape_markup(_("prefs_confirm_delete_subtitle")),
         )
         self.confirm_delete_switch = Gtk.Switch()
         self.confirm_delete_switch.set_valign(Gtk.Align.CENTER)
@@ -150,8 +213,8 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.behavior_group.add(self.confirm_delete_row)
 
         self.ocr_overlay_row = Adw.ActionRow(
-            title=_("prefs_ocr_overlay_title"),
-            subtitle=_("prefs_ocr_overlay_subtitle"),
+            title=_escape_markup(_("prefs_ocr_overlay_title")),
+            subtitle=_escape_markup(_("prefs_ocr_overlay_subtitle")),
         )
         self.ocr_overlay_switch = Gtk.Switch()
         self.ocr_overlay_switch.set_valign(Gtk.Align.CENTER)
@@ -167,8 +230,8 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.behavior_group.add(self.ocr_overlay_row)
 
         self.auto_reload_row = Adw.ActionRow(
-            title=_("prefs_auto_reload_title"),
-            subtitle=_("prefs_auto_reload_subtitle"),
+            title=_escape_markup(_("prefs_auto_reload_title")),
+            subtitle=_escape_markup(_("prefs_auto_reload_subtitle")),
         )
         self.auto_reload_switch = Gtk.Switch()
         self.auto_reload_switch.set_valign(Gtk.Align.CENTER)
@@ -183,13 +246,13 @@ class PreferencesWindow(Adw.PreferencesWindow):
 
         # SyncTeX & LaTeX integration group
         self.synctex_group = Adw.PreferencesGroup(
-            title=_("prefs_group_synctex"),
-            description=_("prefs_group_synctex_desc"),
+            title=_escape_markup(_("prefs_group_synctex")),
+            description=_escape_markup(_("prefs_group_synctex_desc")),
         )
 
         self.synctex_enabled_row = Adw.ActionRow(
-            title=_("prefs_synctex_enabled_title"),
-            subtitle=_("prefs_synctex_enabled_subtitle"),
+            title=_escape_markup(_("prefs_synctex_enabled_title")),
+            subtitle=_escape_markup(_("prefs_synctex_enabled_subtitle")),
         )
         self.synctex_enabled_switch = Gtk.Switch()
         self.synctex_enabled_switch.set_valign(Gtk.Align.CENTER)
@@ -201,16 +264,15 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.synctex_group.add(self.synctex_enabled_row)
 
         self.synctex_preset_row = Adw.ActionRow(
-            title=_("prefs_synctex_preset_title"),
-            subtitle=_("prefs_synctex_preset_subtitle"),
+            title=_escape_markup(_("prefs_synctex_preset_title")),
+            subtitle=_escape_markup(_("prefs_synctex_preset_subtitle")),
         )
         self._synctex_preset_codes: List[str] = list(VALID_SYNCTEX_PRESETS)
         preset_labels: List[str] = [
             SYNCTEX_PRESET_DISPLAY_NAMES.get(code, _("prefs_synctex_preset_custom"))
             for code in self._synctex_preset_codes
         ]
-        self.synctex_preset_dropdown = Gtk.DropDown.new_from_strings(preset_labels)
-        self.synctex_preset_dropdown.set_valign(Gtk.Align.CENTER)
+        self.synctex_preset_dropdown = _create_compact_dropdown(preset_labels)
         saved_preset = str(self.settings.get("synctex_editor_preset", "vscode") or "vscode")
         if saved_preset in self._synctex_preset_codes:
             self.synctex_preset_dropdown.set_selected(self._synctex_preset_codes.index(saved_preset))
@@ -221,12 +283,14 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.synctex_group.add(self.synctex_preset_row)
 
         self.synctex_command_row = Adw.ActionRow(
-            title=_("prefs_synctex_command_title"),
-            subtitle=_("prefs_synctex_command_subtitle"),
+            title=_escape_markup(_("prefs_synctex_command_title")),
+            subtitle=_escape_markup(_("prefs_synctex_command_subtitle")),
         )
         self.synctex_command_entry = Gtk.Entry()
         self.synctex_command_entry.set_valign(Gtk.Align.CENTER)
-        self.synctex_command_entry.set_width_chars(28)
+        self.synctex_command_entry.set_width_chars(22)
+        self.synctex_command_entry.set_max_width_chars(24)
+        self.synctex_command_entry.set_hexpand(False)
         self.synctex_command_entry.set_placeholder_text('code -g "%f:%l"')
         saved_cmd = str(self.settings.get("synctex_editor_command", SYNCTEX_EDITOR_PRESETS["vscode"]) or "")
         self.synctex_command_entry.set_text(saved_cmd)
@@ -248,13 +312,13 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.workflow_page.set_name("workflow")
 
         self.tool_switching_group = Adw.PreferencesGroup(
-            title=_("prefs_group_tool_switching"),
-            description=_("prefs_group_tool_switching_desc"),
+            title=_escape_markup(_("prefs_group_tool_switching")),
+            description=_escape_markup(_("prefs_group_tool_switching_desc")),
         )
 
         self.auto_switch_row = Adw.ActionRow(
-            title=_("prefs_auto_switch_select_title"),
-            subtitle=_("prefs_auto_switch_select_subtitle"),
+            title=_escape_markup(_("prefs_auto_switch_select_title")),
+            subtitle=_escape_markup(_("prefs_auto_switch_select_subtitle")),
         )
         self.auto_switch_switch = Gtk.Switch()
         self.auto_switch_switch.set_valign(Gtk.Align.CENTER)
@@ -265,8 +329,8 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.tool_switching_group.add(self.auto_switch_row)
 
         self.keep_drawing_row = Adw.ActionRow(
-            title=_("prefs_keep_drawing_active_title"),
-            subtitle=_("prefs_keep_drawing_active_subtitle"),
+            title=_escape_markup(_("prefs_keep_drawing_active_title")),
+            subtitle=_escape_markup(_("prefs_keep_drawing_active_subtitle")),
         )
         self.keep_drawing_switch = Gtk.Switch()
         self.keep_drawing_switch.set_valign(Gtk.Align.CENTER)
@@ -279,17 +343,16 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.workflow_page.add(self.tool_switching_group)
 
         self.text_defaults_group = Adw.PreferencesGroup(
-            title=_("prefs_group_text_defaults"),
-            description=_("prefs_group_text_defaults_desc"),
+            title=_escape_markup(_("prefs_group_text_defaults")),
+            description=_escape_markup(_("prefs_group_text_defaults_desc")),
         )
 
         self.default_font_row = Adw.ActionRow(
-            title=_("prefs_default_font_family_title"),
-            subtitle=_("prefs_default_font_family_subtitle"),
+            title=_escape_markup(_("prefs_default_font_family_title")),
+            subtitle=_escape_markup(_("prefs_default_font_family_subtitle")),
         )
         self._font_families: List[str] = self._collect_available_font_families()
-        self.default_font_dropdown = Gtk.DropDown.new_from_strings(self._font_families)
-        self.default_font_dropdown.set_valign(Gtk.Align.CENTER)
+        self.default_font_dropdown = _create_compact_dropdown(self._font_families)
         saved_font = str(self.settings.get("default_font_family", "Liberation Sans") or "Liberation Sans")
         if saved_font in self._font_families:
             self.default_font_dropdown.set_selected(self._font_families.index(saved_font))
@@ -299,8 +362,8 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.text_defaults_group.add(self.default_font_row)
 
         self.default_font_size_row = Adw.ActionRow(
-            title=_("prefs_default_font_size_title"),
-            subtitle=_("prefs_default_font_size_subtitle"),
+            title=_escape_markup(_("prefs_default_font_size_title")),
+            subtitle=_escape_markup(_("prefs_default_font_size_subtitle")),
         )
         self.default_font_size_spin = Gtk.SpinButton.new_with_range(4.0, 144.0, 0.5)
         self.default_font_size_spin.set_digits(1)
@@ -322,13 +385,13 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.hamburger_page.set_name("hamburger")
 
         self.hamburger_preset_group = Adw.PreferencesGroup(
-            title=_("prefs_group_hamburger_preset"),
-            description=_("prefs_group_hamburger_preset_desc"),
+            title=_escape_markup(_("prefs_group_hamburger_preset")),
+            description=_escape_markup(_("prefs_group_hamburger_preset_desc")),
         )
 
         self.hamburger_preset_row = Adw.ActionRow(
-            title=_("prefs_hamburger_preset_title"),
-            subtitle=_("prefs_hamburger_preset_subtitle"),
+            title=_escape_markup(_("prefs_hamburger_preset_title")),
+            subtitle=_escape_markup(_("prefs_hamburger_preset_subtitle")),
         )
         self._hamburger_preset_codes: List[str] = ["standard", "minimal", "full", "custom"]
         preset_labels: List[str] = [
@@ -337,8 +400,7 @@ class PreferencesWindow(Adw.PreferencesWindow):
             _("prefs_hamburger_preset_full"),
             _("prefs_hamburger_preset_custom"),
         ]
-        self.hamburger_preset_dropdown = Gtk.DropDown.new_from_strings(preset_labels)
-        self.hamburger_preset_dropdown.set_valign(Gtk.Align.CENTER)
+        self.hamburger_preset_dropdown = _create_compact_dropdown(preset_labels)
         current_preset = str(self.settings.get("hamburger_menu_preset", "standard"))
         if current_preset in self._hamburger_preset_codes:
             self.hamburger_preset_dropdown.set_selected(self._hamburger_preset_codes.index(current_preset))
@@ -353,12 +415,12 @@ class PreferencesWindow(Adw.PreferencesWindow):
         visible_items: Dict[str, bool] = dict(self.settings.get("hamburger_visible_items"))
 
         self.hamburger_doc_actions_group = Adw.PreferencesGroup(
-            title=_("prefs_group_hamburger_doc_actions"),
-            description=_("prefs_group_hamburger_doc_actions_desc"),
+            title=_escape_markup(_("prefs_group_hamburger_doc_actions")),
+            description=_escape_markup(_("prefs_group_hamburger_doc_actions_desc")),
         )
         for item_key in HAMBURGER_DOCUMENT_ACTION_KEYS:
             label_key = HAMBURGER_ITEM_LABELS.get(item_key, item_key)
-            row = Adw.ActionRow(title=_(label_key))
+            row = Adw.ActionRow(title=_escape_markup(_(label_key)))
             sw = Gtk.Switch()
             sw.set_valign(Gtk.Align.CENTER)
             sw.set_active(bool(visible_items.get(item_key, True)))
@@ -371,12 +433,12 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.hamburger_page.add(self.hamburger_doc_actions_group)
 
         self.hamburger_inline_toggles_group = Adw.PreferencesGroup(
-            title=_("prefs_group_hamburger_inline_toggles"),
-            description=_("prefs_group_hamburger_inline_toggles_desc"),
+            title=_escape_markup(_("prefs_group_hamburger_inline_toggles")),
+            description=_escape_markup(_("prefs_group_hamburger_inline_toggles_desc")),
         )
         for item_key in HAMBURGER_INLINE_TOGGLE_KEYS:
             label_key = HAMBURGER_ITEM_LABELS.get(item_key, item_key)
-            row = Adw.ActionRow(title=_(label_key))
+            row = Adw.ActionRow(title=_escape_markup(_(label_key)))
             sw = Gtk.Switch()
             sw.set_valign(Gtk.Align.CENTER)
             sw.set_active(bool(visible_items.get(item_key, False)))
@@ -398,12 +460,12 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.toolbar_page.set_name("toolbar")
 
         self.toolbar_preset_group = Adw.PreferencesGroup(
-            title=_("prefs_group_toolbar_presets"),
-            description=_("prefs_group_toolbar_presets_desc"),
+            title=_escape_markup(_("prefs_group_toolbar_presets")),
+            description=_escape_markup(_("prefs_group_toolbar_presets_desc")),
         )
         self.toolbar_preset_row = Adw.ActionRow(
-            title=_("prefs_toolbar_preset_title"),
-            subtitle=_("prefs_toolbar_preset_subtitle"),
+            title=_escape_markup(_("prefs_toolbar_preset_title")),
+            subtitle=_escape_markup(_("prefs_toolbar_preset_subtitle")),
         )
         self._toolbar_preset_codes: List[str] = [
             "default",
@@ -419,8 +481,10 @@ class PreferencesWindow(Adw.PreferencesWindow):
             _("prefs_toolbar_preset_forms"),
             _("prefs_toolbar_preset_custom"),
         ]
-        self.toolbar_preset_dropdown = Gtk.DropDown.new_from_strings(preset_labels)
-        self.toolbar_preset_dropdown.set_valign(Gtk.Align.CENTER)
+        self.toolbar_preset_dropdown = _create_compact_dropdown(
+            preset_labels,
+            max_width_chars=TOOLBAR_DROPDOWN_MAX_WIDTH_CHARS,
+        )
         detected_preset = self._detect_current_toolbar_preset()
         if detected_preset in self._toolbar_preset_codes:
             self.toolbar_preset_dropdown.set_selected(self._toolbar_preset_codes.index(detected_preset))
@@ -430,15 +494,16 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.toolbar_reset_button.set_valign(Gtk.Align.CENTER)
         self.toolbar_reset_button.set_tooltip_text(_("prefs_toolbar_reset_tip"))
         self.toolbar_reset_button.connect("clicked", self._on_toolbar_reset_clicked)
+        self.toolbar_preset_group.set_header_suffix(self.toolbar_reset_button)
 
         self.toolbar_preset_row.add_suffix(self.toolbar_preset_dropdown)
-        self.toolbar_preset_row.add_suffix(self.toolbar_reset_button)
+        self.toolbar_preset_row.set_activatable_widget(self.toolbar_preset_dropdown)
         self.toolbar_preset_group.add(self.toolbar_preset_row)
         self.toolbar_page.add(self.toolbar_preset_group)
 
         self.toolbar_tools_group = Adw.PreferencesGroup(
-            title=_("prefs_group_toolbar_tools"),
-            description=_("prefs_group_toolbar_tools_desc"),
+            title=_escape_markup(_("prefs_group_toolbar_tools")),
+            description=_escape_markup(_("prefs_group_toolbar_tools_desc")),
         )
         self.toolbar_tools_listbox = Gtk.ListBox()
         self.toolbar_tools_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -489,8 +554,8 @@ class PreferencesWindow(Adw.PreferencesWindow):
                 shortcut = meta.get("shortcut", "")
 
                 row = Adw.ActionRow(
-                    title=_(label_key),
-                    subtitle=_(tip_key) if tip_key else "",
+                    title=_escape_markup(_(label_key)),
+                    subtitle=_escape_markup(_(tip_key)) if tip_key else "",
                 )
 
                 prefix_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)

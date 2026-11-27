@@ -4862,6 +4862,127 @@ class TestEndToEndCustomizationCrossTabAndRichForms:
                 win.destroy()
 
 
+class TestPreferencesWindowLayoutAndLocaleSizing:
+    """Verify PreferencesWindow balanced sizing across long locales and safe Pango escaping."""
+
+    def test_escape_markup_handles_raw_and_pre_escaped_entities(self):
+        from word_sys_pdf_editor.preferences_dialog import _escape_markup
+
+        assert _escape_markup("Sprache & Ansicht") == "Sprache &amp; Ansicht"
+        assert _escape_markup("SyncTeX &amp; LaTeX") == "SyncTeX &amp; LaTeX"
+        assert _escape_markup("A < B & C > D") == "A &lt; B &amp; C &gt; D"
+        assert _escape_markup("") == ""
+        assert _escape_markup(None) == ""
+
+    def test_german_and_english_toolbar_page_layout_not_squeezed(self, tmp_path):
+        import re
+        from unittest.mock import patch
+        from gi.repository import Gtk
+        from word_sys_pdf_editor.i18n import get_language, set_language
+        from word_sys_pdf_editor.preferences_dialog import PreferencesWindow
+        from word_sys_pdf_editor.settings_manager import SettingsManager
+
+        orig_lang = get_language()
+        unescaped_amp_re = re.compile(r"&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)")
+
+        with patch("word_sys_pdf_editor.i18n._save_settings"):
+            try:
+                for lang_code in ("en", "de", "fr", "tr", "es", "it", "ru"):
+                    set_language(lang_code, restart=False)
+                    cfg_path = tmp_path / f"settings_{lang_code}.json"
+                    mgr = SettingsManager(config_file=cfg_path)
+                    prefs = PreferencesWindow(editor_window=None, settings_manager=mgr)
+                    try:
+                        # Reset button lives in the group header suffix rather than crowding the preset row
+                        assert prefs.toolbar_preset_group.get_header_suffix() is prefs.toolbar_reset_button
+                        assert prefs.toolbar_preset_row.get_activatable_widget() is prefs.toolbar_preset_dropdown
+
+                        # All dropdowns have separate compact button factory and full-label popup list_factory
+                        dropdowns = (
+                            prefs.language_dropdown,
+                            prefs.synctex_preset_dropdown,
+                            prefs.default_font_dropdown,
+                            prefs.hamburger_preset_dropdown,
+                            prefs.toolbar_preset_dropdown,
+                        )
+                        for dd in dropdowns:
+                            assert dd.get_factory() is not None
+                            assert dd.get_list_factory() is not None
+                            assert dd.get_factory() is not dd.get_list_factory()
+                            assert dd.get_hexpand() is False
+
+                        # Select the longest toolbar preset ("essential") and verify bounded horizontal size
+                        essential_idx = prefs._toolbar_preset_codes.index("essential")
+                        prefs.toolbar_preset_dropdown.set_selected(essential_idx)
+                        min_w, nat_w, _mb, _nb = prefs.toolbar_preset_dropdown.measure(
+                            Gtk.Orientation.HORIZONTAL, -1
+                        )
+                        assert min_w <= 280, f"{lang_code}: toolbar dropdown min width too wide ({min_w}px)"
+                        assert nat_w <= 320, f"{lang_code}: toolbar dropdown nat width too wide ({nat_w}px)"
+
+                        # SyncTeX command entry width stays bounded
+                        assert prefs.synctex_command_entry.get_width_chars() <= 24
+                        assert prefs.synctex_command_entry.get_max_width_chars() <= 26
+                        assert prefs.synctex_command_entry.get_hexpand() is False
+
+                        # Verify group titles parsed cleanly via Pango (unescaped '&' would blank the title to '')
+                        groups = (
+                            prefs.appearance_group,
+                            prefs.behavior_group,
+                            prefs.synctex_group,
+                            prefs.tool_switching_group,
+                            prefs.text_defaults_group,
+                            prefs.hamburger_preset_group,
+                            prefs.hamburger_doc_actions_group,
+                            prefs.hamburger_inline_toggles_group,
+                            prefs.toolbar_preset_group,
+                            prefs.toolbar_tools_group,
+                        )
+                        for grp in groups:
+                            title_val = grp.get_title() or ""
+                            assert title_val.strip() != "", (
+                                f"{lang_code}: PreferencesGroup title failed Pango parse and rendered empty"
+                            )
+                            assert "&amp;" not in title_val, (
+                                f"{lang_code}: double-escaped '&amp;' in PreferencesGroup title: {title_val!r}"
+                            )
+
+                        # Verify ActionRow titles have no unescaped '&' and subtitles did not blank out
+                        rows = (
+                            prefs.language_row,
+                            prefs.continuous_scroll_row,
+                            prefs.eco_mode_row,
+                            prefs.confirm_delete_row,
+                            prefs.ocr_overlay_row,
+                            prefs.auto_reload_row,
+                            prefs.synctex_enabled_row,
+                            prefs.synctex_preset_row,
+                            prefs.synctex_command_row,
+                            prefs.auto_switch_row,
+                            prefs.keep_drawing_row,
+                            prefs.default_font_row,
+                            prefs.default_font_size_row,
+                            prefs.hamburger_preset_row,
+                            prefs.toolbar_preset_row,
+                        ) + tuple(prefs.toolbar_tool_rows.values())
+                        for row in rows:
+                            row_title = row.get_title() or ""
+                            assert row_title.strip() != ""
+                            assert not unescaped_amp_re.search(row_title), (
+                                f"{lang_code}: unescaped '&' in ActionRow title: {row_title!r}"
+                            )
+                            row_sub = row.get_subtitle() or ""
+                            assert "&amp;" not in row_sub, (
+                                f"{lang_code}: double-escaped '&amp;' in ActionRow subtitle: {row_sub!r}"
+                            )
+                    finally:
+                        prefs._on_close_request(prefs)
+                        prefs.destroy()
+            finally:
+                set_language(orig_lang, restart=False)
+
+
+
 
 
 
